@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     # 每次发布 CHANGELOG.md 必须同步更新。
     app_version: str = "0.3.4"
 
+    # ==== 升级更新（依托 GitHub Releases）====
+    # update_repo：GitHub 仓库标识「owner/name」。空 = 未配置，
+    #   更新检查接口会如实返回 configured=false 并提示怎么配。
+    # update_proxy：容器访问 GitHub API 的 http 代理（如 http://10.10.10.252:1086），
+    #   直连可达就留空。只影响「检查更新」这一个出站请求。
+    update_repo: str = ""
+    update_proxy: str = ""
+    # 检查请求的超时秒数。GitHub API 未认证限额 60 次/小时/IP，
+    # 服务侧再做 10 分钟结果缓存，正常使用远碰不到限额。
+    update_timeout: float = 8.0
+    update_cache_seconds: float = 600.0
+
     # 数据目录：kb.db（元数据 + 全文索引 + 向量索引）就放在这里
     data_dir: str = "./data"
     database_url: str = "sqlite+aiosqlite:///./data/kb.db"

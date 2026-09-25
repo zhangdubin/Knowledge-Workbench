@@ -127,6 +127,11 @@ export const Api = {
   backupTargets: () => api.get('/api/system/settings/backup-targets'),
   probePath: (path) => api.post('/api/system/settings/probe', { path }),
 
+  // ============ 升级更新（GitHub Releases）============
+  // refresh=1 跳过服务端 10 分钟缓存（「重新检查」按钮用）
+  updateCheck: (refresh = false) => api.get('/api/system/update/check',
+    refresh ? { params: { refresh: 1 }, timeout: 20000 } : { timeout: 20000 }),
+
   // ============ 可视化驾驶舱 ============
   listDashboards: () => api.get('/api/dashboards'),
   createDashboard: (d) => api.post('/api/dashboards', d),

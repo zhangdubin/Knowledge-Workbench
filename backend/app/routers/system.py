@@ -560,3 +560,21 @@ async def probe_path(payload: PathIn,
         info["ok"] = False
     return info
 
+
+# ==================== 升级更新（GitHub Releases）====================
+#
+# 只做「检查」：有没有新版、改了什么、怎么升。升级本身（git fetch →
+# checkout tag → 重建镜像）只能发生在宿主机（容器里没有 docker），
+# 由 scripts/upgrade.sh 执行 —— 接口不越权代执行，见 services/update.py。
+
+@router.get("/update/check")
+async def update_check(refresh: int = 0,
+                       principal: Principal = Depends(require_feature("system_config"))):
+    """对比 GitHub 最新 Release 与当前版本
+
+    refresh=1 跳过服务端缓存（界面上「重新检查」按钮用）。
+    网络失败也返回 200 + ok=false + 人话错误，前端按字段渲染而不是吃报错弹窗。
+    """
+    from ..services import update as upd
+    return await upd.check_update(refresh=bool(refresh))
+

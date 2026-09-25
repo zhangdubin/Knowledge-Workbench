@@ -238,6 +238,86 @@
       </div>
     </div>
 
+    <!-- 系统更新：依托 GitHub Releases 检查新版本，升级动作在宿主机执行 -->
+    <div class="card">
+      <div class="card-title">
+        <span class="card-title-text">
+          <el-icon class="title-ico"><Refresh /></el-icon>系统更新
+        </span>
+        <div class="card-actions">
+          <el-button size="small" :loading="updateLoading" @click="checkUpdate(true)">
+            {{ updateLoading ? '检查中…' : '检查更新' }}
+          </el-button>
+        </div>
+      </div>
+
+      <!-- 未配置 / 出错：说人话，给出可操作的下一步 -->
+      <el-alert
+        v-if="updateInfo && !updateInfo.ok"
+        :title="updateInfo.error || '检查失败'"
+        type="info" :closable="false" class="update-alert"
+      />
+
+      <template v-else-if="updateInfo">
+        <div class="about-rows">
+          <div class="about-row">
+            <span class="about-label">当前版本</span>
+            <span class="about-value mono">v{{ updateInfo.current }}</span>
+          </div>
+          <div class="about-row">
+            <span class="about-label">最新版本</span>
+            <span class="about-value mono">
+              {{ updateInfo.latest || '—' }}
+              <el-tag v-if="updateInfo.has_update" type="danger" size="small" effect="dark" class="upd-tag">
+                有新版本
+              </el-tag>
+              <el-tag v-else-if="updateInfo.ok" type="success" size="small" class="upd-tag">
+                已是最新
+              </el-tag>
+            </span>
+          </div>
+          <div v-if="updateInfo.published_at" class="about-row">
+            <span class="about-label">发布时间</span>
+            <span class="about-value dim">{{ updateInfo.published_at.slice(0, 10) }}</span>
+          </div>
+        </div>
+
+        <!-- Release Notes -->
+        <div v-if="updateInfo.notes" class="update-notes">
+          <div class="update-notes-title">更新内容</div>
+          <MarkdownText :content="updateInfo.notes" class="update-notes-body" />
+        </div>
+
+        <!-- 升级指引：接口只负责检查，动作在宿主机 -->
+        <div v-if="updateInfo.has_update" class="update-howto">
+          <div class="update-howto-title">
+            升级方法：在宿主机项目目录执行
+            <el-button text size="small" @click="copyUpgradeCmd">
+              <el-icon><CopyDocument /></el-icon>复制命令
+            </el-button>
+          </div>
+          <code class="upd-cmd">./scripts/upgrade.sh</code>
+          <div class="dim update-howto-tip">
+            脚本会自动拉取最新 tag → 备份 .env → 切换版本 → 重建镜像 → 健康检查，失败自动回滚。
+            <a v-if="updateInfo.html_url" :href="updateInfo.html_url" target="_blank" class="upd-link">
+              在 GitHub 查看此版本 →
+            </a>
+          </div>
+        </div>
+      </template>
+
+      <div v-else class="about-rows">
+        <div class="about-row">
+          <span class="about-label">当前版本</span>
+          <span class="about-value mono">v{{ auth.sysVersion || '—' }}</span>
+        </div>
+        <div class="about-row">
+          <span class="about-label">版本说明</span>
+          <span class="about-value dim">点「检查更新」对比 GitHub 上的最新 Release</span>
+        </div>
+      </div>
+    </div>
+
     <!-- 关于系统：版本标识的「正式户口」——排障时让人一眼说清跑的是哪一版 -->
     <div class="card">
       <div class="card-title">
@@ -271,8 +351,27 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import PageTitle from '../../components/PageTitle.vue'
+import MarkdownText from '../../components/MarkdownText.vue'
 
 const auth = useAuthStore()
+
+// ---- 系统更新（GitHub Releases）----
+const updateLoading = ref(false)
+const updateInfo = ref(null)          // null = 还没检查过
+
+async function checkUpdate(refresh = false) {
+  updateLoading.value = true
+  try {
+    updateInfo.value = await Api.updateCheck(refresh)
+  } catch { /* 拦截器已提示 */ } finally {
+    updateLoading.value = false
+  }
+}
+
+function copyUpgradeCmd() {
+  navigator.clipboard?.writeText('./scripts/upgrade.sh')
+  ElMessage.success('已复制：./scripts/upgrade.sh')
+}
 
 const loading = ref(false)
 const saving = ref(false)
@@ -553,6 +652,47 @@ onMounted(load)
 .about-value { font-size: 14px; color: var(--el-text-color-primary); }
 .about-value.mono { font-family: var(--font-mono); font-weight: 600; }
 .about-value.dim { color: var(--el-text-color-secondary); font-size: 13px; }
+
+/* 系统更新 */
+.update-alert { margin-bottom: 4px; }
+.upd-tag { margin-left: 8px; font-weight: 600; }
+.update-notes {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+}
+.update-notes-title {
+  font-size: 12px; font-weight: 600;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 6px;
+}
+.update-notes-body { font-size: 13px; line-height: 1.6; }
+.update-howto {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--el-color-success-light-7);
+  border-radius: var(--radius);
+  background: var(--el-color-success-light-9);
+}
+.update-howto-title {
+  font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; gap: 6px;
+}
+.upd-cmd {
+  display: block;
+  margin-top: 8px;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+.update-howto-tip { margin-top: 6px; font-size: 12px; line-height: 1.6; }
+.upd-link { margin-left: 6px; }
 
 :deep(.row-blocked) { opacity: .75; }
 :deep(.row-good) { background: var(--el-color-success-light-9); }

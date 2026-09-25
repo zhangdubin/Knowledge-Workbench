@@ -25,6 +25,8 @@ PLATFORMS="${PLATFORMS:-linux/arm64,linux/amd64}"
 BUILDER="${BUILDER:-multiarch}"
 
 # docker buildx 的 builder 选 default 时走本机原生构建（无 QEMU，最快）
+# 注意 macOS 自带 bash 3.2：set -u 下空数组 "${BUILDER_ARG[@]}" 会报
+# unbound variable，必须用 ${arr[@]+...} 守卫
 BUILDER_ARG=()
 if [ "$BUILDER" != "default" ]; then
   BUILDER_ARG=(--builder "$BUILDER")
@@ -48,7 +50,7 @@ for platform in $(echo "$PLATFORMS" | tr ',' ' '); do
   tag="$(arch_tag "$platform")"
   for svc in backend frontend; do
     echo "────────  $svc  ($platform)  →  kb-workbench-$svc:$tag  ────────"
-    docker buildx build "${BUILDER_ARG[@]}" \
+    docker buildx build ${BUILDER_ARG[@]+"${BUILDER_ARG[@]}"} \
       --platform "$platform" \
       -t "kb-workbench-$svc:$tag" \
       --load \

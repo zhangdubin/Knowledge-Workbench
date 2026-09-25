@@ -1,0 +1,102 @@
+# ============================================================
+#  知识管理工作台 · 离线运行编排
+#
+#  与源码仓库里的 docker-compose.yml 的区别：
+#    这里用 image:（指向已经 import 到本机的镜像），没有 build:
+#    所以离线机器不需要联网、也不需要源码和 Node/Python 环境。
+#
+#  镜像标签说明：
+#    离线包里的镜像是按架构存的（kb-workbench-backend:amd64 / :arm64），
+#    install.sh 在导入之后会把当前架构的那一个再打上 :latest，
+#    本文件统一引用 :latest。
+#
+#  日常操作（在安装目录下）：
+#    docker compose up -d      启动
+#    docker compose down       停止
+#    docker compose logs -f    看日志
+# ============================================================
+name: kb-workbench
+
+services:
+  backend:
+    image: kb-workbench-backend:latest
+    # 容器名可被 .env 覆盖：同一台机器上想再跑一套互不干扰的实例
+    # （测试 / 预发）时，用 install.sh --instance <名> 就会写明前缀。
+    container_name: ${KB_BACKEND_CONTAINER:-kb-backend}
+    restart: unless-stopped
+    # 只写文件名的字符串形式。对象形式（path: / required:）要 Compose v2.24+，
+    # 老版本会直接报 "services.backend.env_file.0 must be a string" 起不来。
+    # .env 由 install.sh 生成（或手动 cp .env.example .env），一定存在。
+    env_file:
+      - .env
+    ports:
+      - "${KB_BACKEND_PORT:-8001}:8000"
+    volumes:
+      # 元数据 + 索引（kb.db）
+      - ${KB_DATA_DIR:-./data}:/app/data
+      # 文件原文（与 data 可以同盘，但应当和备份目录分属不同物理盘）
+      - ${KB_FILE_STORE_DIR:-./files}:/app/files
+      # 备份目录（宿主机路径 : 容器内路径）
+      - ${KB_BACKUP_DIR:-./backups}:/app/backups
+      # 第二块盘的挂载位：把另一块物理盘 / NAS 挂到这里，
+      # 「系统设置 → 备份目录」的下拉里就会直接出现它，点一下即可切换。
+      - ${KB_BACKUP_ALT_HOST_DIR:-./backups-alt}:/mnt/kb-backup
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/kb.db
+      - DATA_DIR=/app/data
+      - KB_FILE_STORE=${KB_FILE_STORE:-fs}
+      - KB_FILE_STORE_DIR=/app/files
+      # 兜底值；界面上「系统设置 → 备份目录」优先级更高、且立即生效
+      - KB_BACKUP_DIR=/app/backups
+      - BACKUP_KEEP=${KB_BACKUP_KEEP:-14}
+      # 声明 /mnt/kb-backup 在宿主机上是独立于数据盘的备份盘。
+      # Docker Desktop 下所有挂载都呈现为同一个伪设备，容器内无法自动
+      # 判断磁盘边界，只能这样人工声明，否则界面只会给「与数据同盘」的保守提醒。
+      - BACKUP_SEPARATE_MOUNTS=${BACKUP_SEPARATE_MOUNTS:-/mnt/kb-backup}
+      # 仅用于首次启动时把旧磁盘附件迁移进文档库
+      - LEGACY_UPLOAD_DIR=/app/data/uploads
+      - APP_ENV=production
+      - LARGE_FILE_WARN_MB=${LARGE_FILE_WARN_MB:-200}
+      - UPLOAD_MAX_MB=${UPLOAD_MAX_MB:-1024}
+      - SQLITE_CACHE_MB=${SQLITE_CACHE_MB:-64}
+      - SQLITE_MMAP_MB=${SQLITE_MMAP_MB:-256}
+      - KB_AUTH_ENABLED=${KB_AUTH_ENABLED:-true}
+      - KB_SESSION_DAYS=${KB_SESSION_DAYS:-14}
+      - KB_COOKIE_SECURE=${KB_COOKIE_SECURE:-false}
+      - KB_MAINTENANCE_ENABLED=${KB_MAINTENANCE_ENABLED:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    # 关停要留足时间：先停维护循环 → 释放连接 → PRAGMA optimize + WAL 截断。
+    # 库大时 10 秒不够，被 SIGKILL 就等于跳过关停维护。
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  frontend:
+    image: kb-workbench-frontend:latest
+    container_name: ${KB_FRONTEND_CONTAINER:-kb-frontend}
+    restart: unless-stopped
+    ports:
+      - "${KB_FRONTEND_PORT:-8082}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

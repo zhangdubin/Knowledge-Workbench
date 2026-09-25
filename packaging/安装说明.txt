@@ -1,0 +1,167 @@
+╔══════════════════════════════════════════════════════════════╗
+║        知识管理工作台 (KB Workbench) · 离线安装包            ║
+╚══════════════════════════════════════════════════════════════╝
+
+【这是什么】
+
+  一套可完全离线安装的知识管理 / 数据建型系统（前端 + 后端 + 全文检索）。
+  包里已经装好了全部 Docker 镜像，目标机器不需要联网，也不需要装
+  Python、Node.js 之类的开发环境。
+
+  同一个包可以直接用于下面所有平台，安装脚本会自动识别：
+
+      amd64  →  Intel / AMD 的 PC、绝大多数 x86 服务器、Windows
+      arm64  →  Apple Silicon 的 Mac（M 系列）、ARM 服务器
+
+      Linux、macOS、Windows 三种系统都在支持范围内。
+
+
+【安装前要准备什么】
+
+  目标机器需要已经装好并启动 Docker（只需一次）：
+
+      macOS    Docker Desktop
+               https://www.docker.com/products/docker-desktop/
+
+      Windows  Docker Desktop（安装时勾选 "Use WSL 2 based engine"）
+
+      Linux    curl -fsSL https://get.docker.com | sh
+
+  验证：终端里执行 docker info，能输出一大段信息就说明好了。
+  本离线包不含 Docker 本体，因为 Docker 的安装包要按系统单独下载；
+  如果目标机器还没有 Docker，请先按上面方式装好（这一步需要联网）。
+
+
+【怎么安装】
+
+  ── macOS / Linux ────────────────────────────────
+
+    先解压，然后进到本目录执行：
+
+        tar -xzf kb-workbench-offline-*.tar.gz
+        cd kb-workbench-offline-*
+        bash install.sh
+
+    macOS 也可以在访达里直接双击 install.command。
+
+    常用选项：
+
+        bash install.sh --dir /opt/kb-workbench      装到指定目录
+        bash install.sh --data-dir /data/kb           数据放到指定目录
+        bash install.sh --port 8082                  指定前端端口
+        bash install.sh --password 'MyPass@2026'     指定初始口令
+        bash install.sh --dry-run                    只体检、不改动
+
+    生产环境建议把「安装目录」和「数据目录」拆开，见下面【空间不够】一节。
+
+  ── Windows ──────────────────────────────────────
+
+    解压：右键用 7-Zip 解压，或在 PowerShell 里执行
+          tar -xzf kb-workbench-offline-*.tar.gz
+
+    然后双击 install.bat 即可。
+
+    或在 PowerShell 里：
+
+        powershell -ExecutionPolicy Bypass -File .\install.ps1
+
+  安装完成后，终端会打印访问地址和初始管理员口令，口令同时写在
+  安装目录下的「初始口令.txt」。首次登录会被强制要求修改口令。
+
+
+【包内结构】
+
+  install.sh / install.command    macOS、Linux 一键安装
+  install.ps1 / install.bat       Windows 一键安装
+  app/                            运行编排（docker-compose.yml、.env.example）
+  images/                         应用镜像（按 CPU 架构分成两个文件）
+  scripts/                        备份、恢复、搬运数据、健康检查、重置口令等运维脚本
+  source/                         源码快照（想自行重建镜像时才用得到）
+  manifest.json                   包内容清单与校验值
+
+
+【装完之后怎么用】
+
+  访问         http://localhost:8082
+
+  看日志       cd <安装目录> && docker compose logs -f
+  停止 / 启动  docker compose down / docker compose up -d
+  健康体检     bash scripts/healthcheck.sh
+  立即备份     bash scripts/backup.sh
+  重置口令     bash scripts/reset-admin-password.sh
+  搬数据       bash scripts/move-data.sh /data/kb-workbench
+  升级版本     拿到新版离线包，重复执行 install.sh 即可
+               （会自动保留原有 .env 和全部数据）
+
+  默认安装目录：macOS / Linux 是 ~/kb-workbench，Windows 是 %USERPROFILE%\kb-workbench
+
+
+【空间不够 / 想把安装目录换到别处】
+
+  先分清两件事 —— 这决定了你该搬什么：
+
+      安装目录   compose 文件 + 运维脚本，总共几百 KB，几乎不占空间
+      数据目录   data/（数据库）+ files/（文件原文）+ backups/（备份快照）
+                 这三个才是会长大的，其中文件原文和备份是大头
+
+  所以「安装目录所在分区空间不够」几乎总是数据的问题，搬数据就够了，
+  安装目录留在原地完全不用动。
+
+  ── 已经装好了，想把数据搬到大容量盘 ──────────────────
+
+      cd <安装目录>
+      bash scripts/move-data.sh /data/kb-workbench
+
+    脚本会：停服 → 搬 data/files/backups → 改 .env → 起服务 → 体检，
+    动手前先备份 .env（.env.bak-<时间>），任何一步失败自动回滚。
+
+    同盘搬迁用 mv（瞬时）；跨盘用 rsync 复制并逐项校验文件数与硬链接
+    （备份快照靠硬链接省空间，丢了这个会导致体积成倍膨胀，脚本会拦住）。
+    跨盘模式下 **原目录会保留**，脚本退出前会打印清理命令 —— 等确认
+    网页能正常打开、文件能下载之后，再执行它释放原空间。
+
+  ── 全新安装时就分开（推荐） ──────────────────────────
+
+      bash install.sh --dir /opt/kb-workbench --data-dir /data/kb-workbench
+
+  ── 把整个安装目录也换位置 ────────────────────────────
+
+      cd <安装目录>
+      docker compose down
+      mv <安装目录> /data/kb-workbench
+      cd /data/kb-workbench
+      bash scripts/move-data.sh /data/kb-workbench/data-root
+
+    注意：.env 里的四个路径是**绝对路径**，所以目录一移就必须同步改，
+    否则容器还会去读旧位置（旧位置可能已被系统清掉）。用上面的搬运
+    脚本改最稳妥；手工改的话要改这四行：
+
+        KB_DATA_DIR / KB_FILE_STORE_DIR / KB_BACKUP_DIR / KB_BACKUP_ALT_HOST_DIR
+
+    另外：升级安装（重复执行 install.sh）**不会**修改数据目录 ——
+    .env 里已有的路径优先级更高。这是有意的，避免升级时误把数据指向
+    空目录。要改就显式跑 move-data.sh。
+
+
+【一件要紧的事：把备份放到另一块盘】
+
+  默认的备份目录和数据目录在同一块盘上 —— 这只能防误删，防不了硬盘坏。
+  正式使用前建议：把另一块物理盘（或 NAS）挂到宿主机的任意目录，
+  然后在网页「系统设置 → 备份目录」里改成那个目录，点一下立即生效。
+
+  快照之间用硬链接共享没变动的文件，所以留 14 份并不会真的占 14 倍空间。
+
+
+【端口被占用怎么办】
+
+  编辑安装目录下的 .env，改 KB_FRONTEND_PORT / KB_BACKEND_PORT，
+  然后执行 docker compose up -d 重新拉起即可。
+
+
+【升级 / 迁移】
+
+  升级：解压新版离线包 → 在包目录执行 bash install.sh（指向原来的安装目录）
+        安装脚本发现目录里已有 .env，会自动走「升级」路径。
+
+  迁移到新机器：在新机器上装好，然后把旧机器的 data/ 、files/ 两个目录
+        整个拷过去替换即可（停止容器后操作）。

@@ -1,0 +1,88 @@
+name: kb-workbench
+
+services:
+  backend:
+    build: ./backend
+    container_name: kb-backend
+    restart: unless-stopped
+    # 本地 .env 覆盖默认值（可选）。所有可调项见 .env.example。
+    # 只写文件名的字符串形式。对象形式（path: / required:）要 Compose v2.24+，
+    # 老版本会直接报 "services.backend.env_file.0 must be a string" 起不来。
+    # .env 由 .env.example 复制而来，一定存在。
+    env_file:
+      - .env
+    ports:
+      - "8001:8000"
+    volumes:
+      # 元数据 + 索引（kb.db）。可用 KB_DATA_DIR 指到别的盘，
+      # 安装目录本身只有几百 KB，换盘只搬数据、不用重装。
+      - ${KB_DATA_DIR:-./data}:/app/data
+      # 文件原文（v0.3 起外置到文件系统）。与 data 同盘即可，
+      # 但应当和「备份目录」分属不同物理盘，否则单盘故障会同时带走两者。
+      - ${KB_FILE_STORE_DIR:-./files}:/app/files
+      # 备份目录：默认 ./backups。
+      # 同盘备份只防误删、不防磁盘故障 —— 生产请指向另一块物理盘或网络存储。
+      - ${KB_BACKUP_DIR:-./backups}:/app/backups
+      # 第二块盘的挂载位：只要把宿主机上另一块物理盘 / NAS 挂到这里，
+      # 「系统设置 → 备份目录」的下拉里就会直接出现它，点一下即可切换，
+      # 不用改 compose 结构、也不用重启容器。
+      - ${KB_BACKUP_ALT_HOST_DIR:-./backups-alt}:/mnt/kb-backup
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/kb.db
+      - DATA_DIR=/app/data
+      - KB_FILE_STORE=${KB_FILE_STORE:-fs}
+      - KB_FILE_STORE_DIR=/app/files
+      # 这一项只是「没在界面上设置过」时的兜底值。
+      # 界面上的「系统设置 → 备份目录」优先级更高，改完立即生效。
+      - KB_BACKUP_DIR=/app/backups
+      - BACKUP_KEEP=${KB_BACKUP_KEEP:-14}
+      # 声明 /mnt/kb-backup 在宿主机上是独立于数据盘的备份盘。
+      # Docker Desktop 下容器无法自动判断（所有挂载都是同一个伪设备），
+      # 所以要让系统知道，否则界面只能给「与数据同盘」的保守提醒。
+      - BACKUP_SEPARATE_MOUNTS=/mnt/kb-backup
+      # 仅用于首次启动时的存量迁移（把旧磁盘附件搬进文档库）
+      - LEGACY_UPLOAD_DIR=/app/data/uploads
+      - APP_ENV=production
+      # 单文件超过该体积时在上传结果里提示（不阻止上传）
+      - LARGE_FILE_WARN_MB=200
+      - UPLOAD_MAX_MB=${UPLOAD_MAX_MB:-1024}
+      # ==== SQLite 调优（详见 backend/app/config.py 注释）====
+      - SQLITE_CACHE_MB=${SQLITE_CACHE_MB:-64}
+      - SQLITE_MMAP_MB=${SQLITE_MMAP_MB:-256}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    # 关停顺序需要时间：要先停维护循环 → 释放连接 → PRAGMA optimize +
+    # WAL 截断。默认 10 秒常常不够（库大时更明显），被 SIGKILL 掉就
+    # 等于跳过了关停维护，下次启动要花时间恢复 WAL。
+    stop_grace_period: 60s
+    # 日志不轮转会一路涨到把磁盘写满 —— 容器场景下这是真实的故障源
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  frontend:
+    build: ./frontend
+    container_name: kb-frontend
+    restart: unless-stopped
+    ports:
+      - "8082:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

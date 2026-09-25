@@ -1,0 +1,4 @@
+# 备用备份盘（compose 里的第二挂载位，默认映射到这里）
+# 生产请把 KB_BACKUP_ALT_HOST_DIR 指向另一块物理盘或 NAS
+*
+!.gitignore

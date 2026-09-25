@@ -1,0 +1,8 @@
+# 宿主 node_modules 是 macOS 二进制，绝不能进 Linux 镜像
+node_modules
+dist
+.git
+.gitignore
+*.log
+.DS_Store
+.vite

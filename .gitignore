@@ -1,0 +1,44 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.env
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+.npm/
+.eslintcache
+.vite/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# 数据
+backend/data/kb.db
+backend/data/uploads/
+*.db
+*.sqlite
+*.sqlite3
+
+# 运行时数据：库文件、外置的文件原文、备份快照
+# 三者都含全部业务数据，绝不该进版本库
+data/
+files/
+backups/
+!backups/.gitignore
+
+# 离线安装包的组装工作区（含大体积镜像 tar，由脚本生成）
+dist-offline/

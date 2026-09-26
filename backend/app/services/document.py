@@ -715,6 +715,17 @@ async def list_documents(
         )).scalar() or 0
         items.append(item)
 
+    # 一次性补「关联定义」通道（按源/目标的文件 id 命中 doc_ids 归组）
+    try:
+        from . import relation as rel_svc
+        rel_map = await rel_svc.documents_relations(db, [d.id for d in docs])
+        for it in items:
+            it["relations"] = rel_map.get(it["id"], [])
+    except Exception as e:
+        log.warning("关联通道合并失败（不影响列表展示）：%s", e)
+        for it in items:
+            it.setdefault("relations", [])
+
     return {"items": items, "total": total, "page": page, "page_size": page_size,
             "counts": await stats(db)}
 

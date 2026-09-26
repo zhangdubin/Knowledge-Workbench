@@ -174,12 +174,12 @@
             <el-table-column label="文件" min-width="280">
               <template #default="{ row }">
                 <div class="file-cell">
-                  <span class="file-icon" :style="{ background: typeBg(row.content_type), color: typeColor(row.content_type) }">
+                  <span class="file-icon" :style="{ background: typeBg(row.mime), color: typeColor(row.mime) }">
                     <el-icon><component :is="typeIconOf(row)" /></el-icon>
                   </span>
                   <div class="file-info">
                     <span class="file-name">{{ row.filename }}</span>
-                    <span class="file-sub">{{ row.content_type || '未知类型' }}</span>
+                    <span class="file-sub">{{ row.mime || '未知类型' }}</span>
                   </div>
                 </div>
               </template>
@@ -189,17 +189,28 @@
                 <span class="cell-number">{{ formatSize(row.size) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="关联记录" width="220">
+            <el-table-column label="关联记录" width="260">
               <template #default="{ row }">
-                <template v-if="(row.links || []).length">
+                <template v-if="(row.links || []).length || (row.relations || []).length">
                   <a
                     v-for="l in row.links"
-                    :key="l.link_id"
+                    :key="'lk' + l.link_id"
                     class="cell-reference"
                     style="cursor:pointer;margin-right:6px"
+                    :title="l.field_key ? '字段上传：' + l.field_key : '附件'"
                     @click.stop="goRecord(l.record_id)"
                   >
                     {{ l.entity_type_icon || '' }}{{ l.record_label || '#' + l.record_id }}
+                  </a>
+                  <a
+                    v-for="r in row.relations"
+                    :key="'rl' + r.link_id"
+                    class="cell-reference"
+                    style="cursor:pointer;margin-right:6px"
+                    :title="r.relation || ''"
+                    @click.stop="goRelTarget(r)"
+                  >
+                    {{ r.other_icon || '' }}{{ r.other_label || '#' + r.other_id }}
                   </a>
                 </template>
                 <span v-else class="cell-empty">未关联</span>
@@ -269,9 +280,9 @@
             class="file-tile"
             @click="previewFile(f)"
           >
-            <div class="ft-thumb" :style="{ background: typeBg(f.content_type) }">
-              <img v-if="(f.content_type || '').startsWith('image/')" :src="f.url" :alt="f.filename" loading="lazy" />
-              <el-icon v-else :style="{ color: typeColor(f.content_type) }">
+            <div class="ft-thumb" :style="{ background: typeBg(f.mime) }">
+              <img v-if="(f.mime || '').startsWith('image/')" :src="f.url" :alt="f.filename" loading="lazy" />
+              <el-icon v-else :style="{ color: typeColor(f.mime) }">
                 <component :is="typeIconOf(f)" />
               </el-icon>
             </div>
@@ -327,7 +338,7 @@
             :class="{ open: expandedJson.has(f.id) }"
           >
             <div class="json-head" @click="toggleJson(f)">
-              <span class="file-icon sm" :style="{ background: typeBg(f.content_type), color: typeColor(f.content_type) }">
+              <span class="file-icon sm" :style="{ background: typeBg(f.mime), color: typeColor(f.mime) }">
                 <el-icon><component :is="typeIconOf(f)" /></el-icon>
               </span>
               <span class="json-name">{{ f.filename }}</span>
@@ -441,7 +452,7 @@
             <el-descriptions :column="2" border size="small">
               <el-descriptions-item label="文件名">{{ metaFile.filename }}</el-descriptions-item>
               <el-descriptions-item label="大小">{{ formatSize(metaFile.size) }}</el-descriptions-item>
-              <el-descriptions-item label="类型">{{ metaFile.content_type || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="类型">{{ metaFile.mime || '—' }}</el-descriptions-item>
               <el-descriptions-item label="上传时间">{{ formatTime(metaFile.created_at) }}</el-descriptions-item>
               <el-descriptions-item label="所属记录">
                 {{ metaFile.record_id ? `#${metaFile.record_id} (${metaFile.record_entity})` : '独立文件' }}
@@ -509,7 +520,7 @@
     >
       <template #header>
         <div class="dlg-head">
-          <span class="file-icon sm" :style="{ background: typeBg(previewFile_?.content_type), color: typeColor(previewFile_?.content_type) }">
+          <span class="file-icon sm" :style="{ background: typeBg(previewFile_?.mime), color: typeColor(previewFile_?.mime) }">
             <el-icon><component :is="previewFile_ ? typeIconOf(previewFile_) : 'Document'" /></el-icon>
           </span>
           <div class="dlg-head-text">
@@ -520,7 +531,7 @@
               </el-tag>
             </div>
             <div class="dlg-head-sub">
-              {{ previewFile_?.content_type || '未知类型' }} · {{ formatSize(previewFile_?.size) }} ·
+              {{ previewFile_?.mime || '未知类型' }} · {{ formatSize(previewFile_?.size) }} ·
               {{ formatTime(previewFile_?.created_at) }}
             </div>
           </div>
@@ -945,13 +956,13 @@ const filteredFiles = computed(() => {
 
   const isDoc = (f) => /\.(pdf|docx?|xlsx?|pptx?|txt|md|csv)$/i.test(f.filename || '')
   if (typeFilter.value === 'image') {
-    result = result.filter(f => f.kind === 'image' || (f.content_type || '').startsWith('image/'))
+    result = result.filter(f => f.kind === 'image' || (f.mime || '').startsWith('image/'))
   } else if (typeFilter.value === 'doc') {
     result = result.filter(f => f.kind === 'doc' || isDoc(f))
   } else if (typeFilter.value === 'other') {
     result = result.filter(f =>
       f.kind !== 'image' && f.kind !== 'doc' &&
-      !(f.content_type || '').startsWith('image/') && !isDoc(f)
+      !(f.mime || '').startsWith('image/') && !isDoc(f)
     )
   }
   return result
@@ -1105,6 +1116,17 @@ function goRecord(rid) {
   })
 }
 
+function goRelTarget(r) {
+  if (r.other_kind === 'record') {
+    goRecord(r.other_id)
+    return
+  }
+  // 文件端的另一端：在数据中心原地预览
+  const target = files.value.find(f => f.id === r.other_id)
+  if (target) previewFile(target)
+  else ElMessage.warning('文件不在当前列表')
+}
+
 function showMeta(row) {
   metaFile.value = row
   metaTab.value = 'tree'
@@ -1249,7 +1271,7 @@ function typeIconOf(row) {
     if (n.endsWith('.pptx') || n.endsWith('.ppt')) return 'DataBoard'
     return 'Document'
   }
-  return typeIcon(row?.content_type)
+  return typeIcon(row?.mime)
 }
 
 async function delFile(row) {

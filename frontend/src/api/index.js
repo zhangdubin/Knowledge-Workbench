@@ -70,7 +70,7 @@ export function previewModeOf(row) {
   if (row.mode) return row.mode
   const name = (row.filename || '').toLowerCase()
   const ext = name.includes('.') ? name.split('.').pop() : ''
-  const mime = (row.content_type || '').toLowerCase()
+  const mime = (row.mime || '').toLowerCase()
   if (EXT_MODE[ext]) return EXT_MODE[ext]
   if (IMG_EXT.includes(ext) || mime.startsWith('image/')) return 'image'
   if (VIDEO_EXT.includes(ext) || mime.startsWith('video/')) return 'video'

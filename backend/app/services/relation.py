@@ -257,12 +257,18 @@ async def delete_relation_record(db: AsyncSession, record_id: int) -> bool:
 
 # ---------- 查询：一条记录 / 一个文件的关系 ----------
 
-async def _resolve_other(db, rr: RelationRecord, rd: RelationDef, self_side: str) -> dict | None:
+async def _resolve_other(db, rr: RelationRecord, rd: RelationDef, self_side: str,
+                        *,
+                        src_rec=None, src_et=None, src_doc=None,
+                        tgt_rec=None, tgt_et=None, tgt_doc=None) -> dict | None:
     """返回「另一端」的统一描述
 
     self_side 表示「被查询的实体」位于定义的哪一端 —— 必须显式传入，
     不能由「是记录还是文件」推断：一条记录既可能是源端也可能是目标端，
     早先按 kind 推断会导致「入向」关联把本体当成另一端显示出来。
+
+    src_*/tgt_* 是预 join 出来的对象，由批量查询路径传入以避免 N+1；
+    未传时按需现查，保持单文件查询路径的独立可用性。
     """
     src_kind = rd.source_kind or "record"
     tgt_kind = rd.target_kind or "record"
@@ -279,8 +285,15 @@ async def _resolve_other(db, rr: RelationRecord, rd: RelationDef, self_side: str
         return None
 
     if other_kind == "record":
-        rec = await db.get(EntityRecord, other_id)
-        et = await db.get(EntityType, rec.entity_type_id) if rec else None
+        if self_side == "target":
+            rec = src_rec
+        else:
+            rec = tgt_rec
+        if rec is None:
+            rec = await db.get(EntityRecord, other_id)
+        et = (src_et if self_side == "target" else tgt_et)
+        if et is None and rec is not None:
+            et = await db.get(EntityType, rec.entity_type_id)
         return {
             "other_kind": "record",
             "other_id": other_id,
@@ -291,7 +304,12 @@ async def _resolve_other(db, rr: RelationRecord, rd: RelationDef, self_side: str
             "other_type_id": et.id if et else None,
             "other_meta": {},
         }
-    doc = await _live_document(db, other_id)
+    if self_side == "target":
+        doc = src_doc
+    else:
+        doc = tgt_doc
+    if doc is None:
+        doc = await _live_document(db, other_id)
     return {
         "other_kind": "document",
         "other_id": other_id,
@@ -425,6 +443,74 @@ async def documents_attached_to(db: AsyncSession, record_id: int) -> list[dict]:
         "id": d.id, "label": d.title or d.filename, "field_key": fk,
         "ext": d.ext or "", "size": d.size or 0, "kind": d.kind or "other",
     } for d, fk in rows]
+
+
+async def documents_relations(db: AsyncSession, doc_ids: list[int]) -> dict[int, list[dict]]:
+    """批量取一组文件的「关联定义」通道映射：{doc_id: [{link_id, relation, other_*, ...}]}
+
+    文件 ↔ 记录 / 文件 ↔ 文件 都通过 RelationRecord 表达，按 source/target 是否
+    命中本次 doc_ids 来归组。数据中心列表页一次返回 500 个文件时直接 N 次请求
+    `/api/relations/for-document/{id}` 会被限流压垮，批量一把查完最划算。
+
+    实现注意：源端/目标端各自要 join 实体表和文件表，而 entity_record /
+    entity_type / document 三张表都在源/目两处各出现一次，必须显式起别名
+    —— SQLAlchemy 不会对同名 join 自动区分，否则 WHERE 里就 ambiguous column。
+    """
+    from sqlalchemy.orm import aliased
+
+    if not doc_ids:
+        return {}
+
+    A_Rec = aliased(EntityRecord, name="src_rec")
+    A_Et = aliased(EntityType, name="src_et")
+    A_Doc = aliased(Document, name="src_doc")
+    B_Rec = aliased(EntityRecord, name="tgt_rec")
+    B_Et = aliased(EntityType, name="tgt_et")
+    B_Doc = aliased(Document, name="tgt_doc")
+
+    cond = (RelationRecord.source_document_id.in_(doc_ids)
+            | RelationRecord.target_document_id.in_(doc_ids))
+    rows = (await db.execute(
+        select(RelationRecord, RelationDef,
+               A_Rec, A_Et, A_Doc,
+               B_Rec, B_Et, B_Doc)
+        .join(RelationDef, RelationRecord.relation_def_id == RelationDef.id)
+        .join(A_Rec, A_Rec.id == RelationRecord.source_record_id, isouter=True)
+        .join(A_Et, A_Et.id == A_Rec.entity_type_id, isouter=True)
+        .join(A_Doc, A_Doc.id == RelationRecord.source_document_id, isouter=True)
+        .join(B_Rec, B_Rec.id == RelationRecord.target_record_id, isouter=True)
+        .join(B_Et, B_Et.id == B_Rec.entity_type_id, isouter=True)
+        .join(B_Doc, B_Doc.id == RelationRecord.target_document_id, isouter=True)
+        .where(cond)
+    )).all()
+
+    out: dict[int, list[dict]] = {i: [] for i in doc_ids}
+    doc_ids_set = set(doc_ids)
+    for r in rows:
+        rr, rd, src_rec, src_et, src_doc, tgt_rec, tgt_et, tgt_doc = r
+        if rr.source_document_id in doc_ids_set:
+            self_side = "source"
+            self_id = rr.source_document_id
+        elif rr.target_document_id in doc_ids_set:
+            self_side = "target"
+            self_id = rr.target_document_id
+        else:
+            continue
+        other = await _resolve_other(
+            db, rr, rd, self_side,
+            src_rec=src_rec, src_et=src_et, src_doc=src_doc,
+            tgt_rec=tgt_rec, tgt_et=tgt_et, tgt_doc=tgt_doc,
+        )
+        if not other:
+            continue
+        out.setdefault(self_id, []).append({
+            "link_id": rr.id,
+            "def_id": rd.id,
+            "relation": rd.name,
+            "direction": "out" if self_side == "source" else "in",
+            **other,
+        })
+    return out
 
 
 async def field_labels(db: AsyncSession, type_id: int) -> dict:

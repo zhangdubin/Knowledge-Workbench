@@ -27,6 +27,17 @@ api.interceptors.response.use(
   (resp) => resp.data,
   (err) => {
     const status = err.response?.status
+    // nginx 在大文件超 client_max_body_size 时直接返回 HTML 413 页面，
+    // 后端没参与；data 不是 JSON，.detail 会取到 undefined；这里给个具体提示
+    // 比 generic「请求失败」更省排查时间
+    if (status === 413) {
+      const isHtml = typeof err.response?.data === 'string'
+      const msg = isHtml
+        ? '文件超过 nginx 上传上限（请确认 nginx client_max_body_size 与后端 UPLOAD_MAX_MB 已对齐）'
+        : (err.response?.data?.detail || err.message || '文件过大')
+      ElMessage.error(msg)
+      return Promise.reject(err)
+    }
     const msg = err.response?.data?.detail || err.message || '请求失败'
     if (status === 401) {
       toLogin(msg)

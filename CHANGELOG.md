@@ -4,6 +4,46 @@
 `/api/health`、`/api/auth/status`、备份快照元数据、离线包文件名全部从这里取值。
 每次发版：改 `app_version` → 在本文件顶部加一节 → 重建镜像 → 重打离线包。
 
+## 0.3.5 — 2026-10-25
+
+### 数据中心的 Markdown 文件终于能读了
+
+- **`.md` 走独立排版档，不再当纯文本**
+  - `filepreview` 把 `.md` / `.markdown` 单独判成 `markdown` 档（必须在 `TEXT_EXTS` 之前判 —— `.md` 本来也在 `TEXT_EXTS` 里）。
+  - 前端 `EXT_MODE` 加 `md/markdown → markdown`，并把这两个后缀从 `TEXT_EXT` 里摘掉。
+  - 数据中心预览区新增「排版 / 源码」切换：排版走 `MarkdownText` 的 doc 变体，源码仍可看原始 Markdown。
+- **排版细节**
+  - 标题层级按 doc 变体从 h1 起算（聊天变体仍从 h3 起算，避免抢占页面标题层级）。
+  - 行宽限 74ch、行高 1.85，代码块 / 表格 / 引用块各自适配，标题带主色左边线。
+  - YAML frontmatter（Obsidian 风格 `---` 块）单独解析成键值面板，正文不再被裸的分隔线挡住。
+  - 全部走 `v-html`，所以样式必须放在全局 `main.css`（scoped 编译不作用于 v-html 节点）。
+- **安全**：沿用 `escape-first` 渲染，`javascript:` 链接会被降级为 `#`，XSS 用例已进单元测试。
+- **单元测试**：新增 `frontend/tests/markdown.test.mjs`（27 条断言），并入 `npm test`。
+
+### 页面权限终于在接口层生效（菜单挡得住，数据也挡得住）
+
+之前「数据中心」和「知识库」只是菜单里的两个入口，后端读接口只要求登录。
+于是「只给知识库」的角色换个 URL 就能把文件全读走 —— 菜单挡住的是界面，不是数据。
+这一轮把权限真正落到接口上。
+
+- **文件权限的判定规则**（新增 `services/document.py` 的 `can_read_document` / `ensure_readable`）
+  - 挂在某条记录上的文件 → 跟随那条记录的**模型权限**（否则「只有记录权限」的角色会连自己记录上的附件都打不开）。
+  - 独立文件（数据中心直接上传） → 要求 `library` **页面权限**。
+- **已加门禁的接口**
+  - 数据中心：`/api/documents` 列表、检索、统计，以及单文件的 `raw` / `download` / `content` / `meta` / `ask`。
+  - 附件旧接口（`/api/attachments/{id}/preview|download|extract`、`/all`）—— 它按 id 直接查 document，**本来是个绕过口**，现已一并加门禁。
+  - `/api/documents/{id}/ask` 之前完全绕过了 `ai` 功能位，现已补上。
+  - 全局搜索：没有 `library` 权限的人拿不到文件命中（笔记命中仍按模型权限给）。
+  - AI 问答上下文：检索到的文件与笔记按提问者权限裁剪 —— 否则 AI 会把用户看不到的内容原样复述出来。
+  - 知识库侧：`/api/knowledge/*`（原先一个权限校验都没有，写接口敞着）、笔记双链、笔记图谱。
+  - 全局图谱：没有 `library` 权限时不再输出文件节点。
+- **顺带修掉的文案与路径**
+  - 笔记新建弹窗原写「详情页可用…文件附件」，但笔记详情页并没有附件入口，已改。
+  - 数据中心页原写「文件原文存于数据库」，v0.3 起原文已外置到文件目录，已改；`storage` 字段也改为如实报告（`fs` / `db`）而不是写死 `sqlite-blob`。
+  - API 文档地址：README、安装脚本、`start.sh` 都写的是 `/api/docs`，而 FastAPI 挂在 `/docs`（点开是 404）。
+    现在把 FastAPI 的 `docs_url` / `openapi_url` 一起挪到 `/api/docs` 与 `/api/openapi.json` —— nginx 只反代 `/api/*`，openapi.json 也得跟着挪，否则通过 8082 访问时 Swagger 页面会加载不出接口清单。
+- **回归**：`scripts/v18-verify-permissions.cjs`（24 条断言）自建临时角色与账号、跑完自动清理。
+
 ## 0.3.4 — 2026-09-25
 
 ### 驾驶舱宽度自适应填满 + 科技感新组件

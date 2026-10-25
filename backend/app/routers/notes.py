@@ -29,14 +29,18 @@ async def sync_links(
 
 
 @router.get("/{record_id}/backlinks")
-async def backlinks(record_id: int, db: AsyncSession = Depends(get_db)):
+async def backlinks(record_id: int, db: AsyncSession = Depends(get_db),
+                    principal: Principal = Depends(current_principal)):
     """反向链接：哪些笔记引用了我"""
+    ensure_model(principal, "note", "read")
     return await svc.get_backlinks(db, record_id)
 
 
 @router.get("/{record_id}/outgoing")
-async def outgoing_links(record_id: int, db: AsyncSession = Depends(get_db)):
+async def outgoing_links(record_id: int, db: AsyncSession = Depends(get_db),
+                         principal: Principal = Depends(current_principal)):
     """正向链接：我引用了哪些笔记"""
+    ensure_model(principal, "note", "read")
     return await svc.get_outgoing_links(db, record_id)
 
 

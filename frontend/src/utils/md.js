@@ -127,8 +127,83 @@ function renderTable(rows) {
     (trs ? `<tbody>${trs}</tbody>` : '') + '</table></div>'
 }
 
-export function renderMarkdown(src, opts = {}) {
+/* ============================================================
+   YAML frontmatter（文档属性）
+   ------------------------------------------------------------
+   Obsidian 风格的 .md 开头常有一段 --- 包起来的 YAML：
+   title / tags / created / status 等。不处理的话它会被当成
+   正文 —— 两个 --- 变成两条分隔线，中间是一坨裸 YAML，很难读。
+
+   这里只解析最常见的两种形态：key: value，和 key: 后面跟
+   一串 "- item" 列表项（渲染成小标签）。认不出来的行原样保留，
+   绝不丢内容。
+   ============================================================ */
+
+/** 拆出 frontmatter：返回 { raw, body }，不是 frontmatter 则返回 null */
+export function splitFrontmatter(src) {
   const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n')
+  if (lines[0]?.trim() !== '---') return null
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') {
+      const block = lines.slice(1, i)
+      // 块里有空行 → 多半不是 frontmatter，而是正文里的分隔线碰巧在开头
+      if (!block.some(l => l.trim()) || block.some(l => !l.trim())) return null
+      return { raw: block.join('\n'), body: lines.slice(i + 1).join('\n') }
+    }
+    // 别的分隔线写法（*** / ___）出现，说明这压根不是 frontmatter
+    if (/^\s*(\*\*\*|___)\s*$/.test(lines[i])) return null
+  }
+  return null
+}
+
+/** frontmatter → 属性表 HTML */
+function renderFrontmatter(raw) {
+  const rows = []
+  let cur = null
+  for (const line of raw.split('\n')) {
+    const item = line.match(/^\s*-\s+(.*)$/)
+    if (item && cur) { cur.list.push(item[1].trim()); continue }
+    const kv = line.match(/^([^\s:#][^:#]*)\s*:\s*(.*)$/)
+    if (kv) {
+      cur = { key: kv[1].trim(), value: kv[2].trim(), list: [] }
+      rows.push(cur)
+      continue
+    }
+    // 认不出的行：挂到上一个键后面，别丢
+    if (line.trim() && cur) cur.value = (cur.value ? cur.value + ' ' : '') + line.trim()
+  }
+  if (!rows.length) return ''
+
+  const body = rows.map(r => {
+    const val = r.list.length
+      ? r.list.map(x => `<span class="md-fm-chip">${escAll(x)}</span>`).join('')
+      : `<span class="md-fm-val">${inlineMd(r.value)}</span>`
+    return `<div class="md-fm-row"><span class="md-fm-key">${escAll(r.key)}</span>${val}</div>`
+  }).join('')
+
+  return `<div class="md-frontmatter">${body}</div>`
+}
+
+export function renderMarkdown(src, opts = {}) {
+  // 标题层级的下压量。AI 气泡里 h1 太占地方，默认压到 h3 起（+2）；
+  // 文档正文要保留原始层级，调用方传 headingOffset: 0，
+  // 这样「# 一级标题 / ## 二级标题」在长文里仍能一眼分清主次。
+  const hOffset = opts.headingOffset ?? 2
+
+  // 文档正文（opts.frontmatter）才拆 frontmatter；
+  // AI 回答保持原样，免得把「---」误判成属性块。
+  let source = String(src ?? '')
+  let fmHtml = ''
+  if (opts.frontmatter) {
+    const fm = splitFrontmatter(source)
+    // 解析不出属性行就别拆 —— 否则那一段原文会被凭空吞掉
+    if (fm) {
+      const html = renderFrontmatter(fm.raw)
+      if (html) { source = fm.body; fmHtml = html }
+    }
+  }
+
+  const lines = source.replace(/\r\n?/g, '\n').split('\n')
   const out = []
   let i = 0
 
@@ -161,10 +236,10 @@ export function renderMarkdown(src, opts = {}) {
       continue
     }
 
-    // ---- 标题（h1/h2 一并压到 h3 起，气泡里不需要巨无霸标题）----
+    // ---- 标题（AI 气泡里 h1/h2 压到 h3 起；文档正文按 headingOffset 原样保留）----
     const h = line.match(/^(#{1,6})\s+(.+)$/)
     if (h) {
-      const lv = Math.min(h[1].length + 2, 6)
+      const lv = Math.min(Math.max(h[1].length + hOffset, 1), 6)
       out.push(`<h${lv}>${inlineMd(h[2])}</h${lv}>`)
       i++
       continue
@@ -220,5 +295,5 @@ export function renderMarkdown(src, opts = {}) {
     out.push(`<p>${buf.map(inlineMd).join('<br>')}</p>`)
   }
 
-  return out.join('')
+  return fmHtml + out.join('')
 }

@@ -15,12 +15,14 @@ from ..services import attachment as svc
 from ..services import document as doc_svc
 from ..services import filepreview as fp
 from ..services import jsontree as json_svc
-from ..services.auth import require_feature
+from ..services.auth import Principal, current_principal, ensure_model, require_feature, require_page
 
 router = APIRouter(prefix="/api/attachments", tags=["attachments"])
 
 _WRITE = [Depends(require_feature("file_write"))]
 _DELETE = [Depends(require_feature("file_delete"))]
+# 「所有附件」是数据中心的全局清单，没给数据中心页面权限的人不该看到
+_READ_PAGE = [Depends(require_page("library"))]
 
 
 def _serialize(doc: Document, record_id: int | None = None,
@@ -60,6 +62,22 @@ async def _link_of(db: AsyncSession, doc_id: int) -> tuple[int | None, str | Non
     return (row[0], row[1]) if row else (None, None)
 
 
+async def _need_readable(db: AsyncSession, principal: Principal, att_id: int) -> Document:
+    """取附件并过读权限闸门
+
+    这套 URL 是 v0.1 时代写死在记录 JSON 里的，一直保留。
+    但 get_attachment 只是按 id 查 document —— 也就是说
+    /api/attachments/{任意文件id}/preview 能取到数据中心的独立文件。
+    菜单能挡住的只是界面，接口必须自己挡，否则「只给知识库」的角色
+    换个 URL 就能把文件全读走。
+    """
+    doc = await svc.get_attachment(db, att_id)
+    if not doc:
+        raise HTTPException(404, "附件不存在")
+    await doc_svc.ensure_readable(db, principal, doc)
+    return doc
+
+
 @router.post("/upload", dependencies=_WRITE)
 async def upload(
     record_id: int = Form(...),
@@ -72,10 +90,9 @@ async def upload(
 
 
 @router.get("/{att_id}/download")
-async def download(att_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    doc = await svc.get_attachment(db, att_id)
-    if not doc:
-        raise HTTPException(404, "附件不存在")
+async def download(att_id: int, request: Request, db: AsyncSession = Depends(get_db),
+                   principal: Principal = Depends(current_principal)):
+    doc = await _need_readable(db, principal, att_id)
     try:
         return doc_svc.file_response(doc, inline=False,
                                      range_header=request.headers.get("range"))
@@ -84,15 +101,14 @@ async def download(att_id: int, request: Request, db: AsyncSession = Depends(get
 
 
 @router.get("/{att_id}/preview")
-async def preview(att_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+async def preview(att_id: int, request: Request, db: AsyncSession = Depends(get_db),
+                  principal: Principal = Depends(current_principal)):
     """内联预览：Content-Disposition=inline
 
     PDF / 图片 / 音视频能在 iframe、<img>、<video> 中直接渲染的关键。
     此前走 /download 收到 attachment 头，浏览器只会下载。
     """
-    doc = await svc.get_attachment(db, att_id)
-    if not doc:
-        raise HTTPException(404, "附件不存在")
+    doc = await _need_readable(db, principal, att_id)
     try:
         return doc_svc.file_response(doc, inline=True,
                                      range_header=request.headers.get("range"))
@@ -101,11 +117,10 @@ async def preview(att_id: int, request: Request, db: AsyncSession = Depends(get_
 
 
 @router.get("/{att_id}/extract")
-async def extract(att_id: int, db: AsyncSession = Depends(get_db)):
+async def extract(att_id: int, db: AsyncSession = Depends(get_db),
+                  principal: Principal = Depends(current_principal)):
     """服务端抽取文档内容（docx / xlsx / pptx / csv / 文本）"""
-    doc = await svc.get_attachment(db, att_id)
-    if not doc:
-        raise HTTPException(404, "附件不存在")
+    doc = await _need_readable(db, principal, att_id)
     mime = fp.resolve_mime(doc.filename, doc.mime)
     try:
         parsed = fp.extract_bytes(doc_svc.load_bytes(doc), doc.filename)
@@ -124,8 +139,18 @@ async def extract(att_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.get("/for-record/{record_id}")
 async def list_for_record(
-    record_id: int, field_key: str | None = None, db: AsyncSession = Depends(get_db)
+    record_id: int, field_key: str | None = None, db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(current_principal),
 ):
+    # 附件挂在谁身上就跟谁的模型权限走 —— 能看这条记录，才看得到它的附件
+    rec = await db.get(EntityRecord, record_id)
+    if not rec:
+        raise HTTPException(404, "记录不存在")
+    et = await db.get(EntityType, rec.entity_type_id)
+    if not et:
+        raise HTTPException(404, "数据模型不存在")
+    ensure_model(principal, et.key, "read")
+
     docs = await svc.list_attachments(db, record_id, field_key)
     out = []
     for d in docs:
@@ -150,7 +175,7 @@ def _tree_of(json_text: str) -> list[dict]:
         return []
 
 
-@router.get("/all")
+@router.get("/all", dependencies=_READ_PAGE)
 async def list_all(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),

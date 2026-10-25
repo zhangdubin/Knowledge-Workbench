@@ -189,13 +189,17 @@ async def title(payload: TitleIn) -> dict:
 
 
 @router.post("/ask", dependencies=_AI)
-async def ask(payload: AskIn, db: AsyncSession = Depends(get_db)) -> dict:
+async def ask(payload: AskIn, db: AsyncSession = Depends(get_db),
+              principal: Principal = Depends(current_principal)) -> dict:
     """AI 问答
 
     上下文来源按优先级：
       1. 前端显式传入的 context
       2. 显式指定的 document_ids
       3. 自动混合检索（关键词 + 向量）命中的文件与笔记
+
+    检索到的内容按提问者的权限裁剪：读不了的文件与没权限的笔记
+    不进上下文 —— 否则 AI 会把用户看不到的内容原样复述出来。
     """
     if not payload.question.strip():
         raise HTTPException(400, "问题为空")
@@ -206,7 +210,7 @@ async def ask(payload: AskIn, db: AsyncSession = Depends(get_db)) -> dict:
     if payload.document_ids or (payload.auto_retrieve and not context):
         try:
             picked = await doc_svc.build_ai_context(
-                db, payload.question, payload.document_ids
+                db, payload.question, payload.document_ids, principal=principal
             )
             context.extend(picked["chunks"])
             sources = picked["sources"]

@@ -100,6 +100,8 @@ TEXT_EXTS = {
 }
 OFFICE_EXTS = {".docx", ".xlsx", ".pptx"}
 LEGACY_OFFICE_EXTS = {".doc", ".xls", ".ppt"}
+# Markdown 单列一档：它当然也是纯文本，但值得按排版渲染，而不是原样贴代码块。
+MARKDOWN_EXTS = {".md", ".markdown"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg",
               ".ico", ".avif", ".heic", ".tif", ".tiff"}
 VIDEO_EXTS = {".mp4", ".webm", ".ogv", ".mov", ".m4v", ".mkv", ".avi"}
@@ -125,6 +127,9 @@ def preview_mode(filename: str, mime: str = "") -> str:
         return "office"
     if ext in LEGACY_OFFICE_EXTS:
         return "legacy-office"
+    # 必须在 TEXT_EXTS 之前判：.md 也在 TEXT_EXTS 里，但它要单独走排版渲染
+    if ext in MARKDOWN_EXTS:
+        return "markdown"
     if ext in TEXT_EXTS or m.startswith("text/") or "json" in m or "xml" in m:
         return "text"
     return "other"

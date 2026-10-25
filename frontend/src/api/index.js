@@ -67,12 +67,15 @@ const EXT_MODE = {
   xlsx: 'office', xls: 'legacy-office',
   pptx: 'office', ppt: 'legacy-office',
   csv: 'csv', tsv: 'csv',
+  // .md 单独一档：既是纯文本，又值得按 Markdown 排版渲染
+  md: 'markdown', markdown: 'markdown',
 }
 const IMG_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif', 'heic']
 const VIDEO_EXT = ['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mkv', 'avi']
 const AUDIO_EXT = ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'weba']
+// md / markdown 不在这里：它们走 EXT_MODE 的 markdown 档
 const TEXT_EXT = [
-  'txt', 'md', 'markdown', 'log', 'json', 'xml', 'yml', 'yaml', 'ini', 'conf',
+  'txt', 'log', 'json', 'xml', 'yml', 'yaml', 'ini', 'conf',
   'py', 'js', 'ts', 'sh', 'sql', 'css', 'html', 'htm', 'java', 'go', 'rs',
 ]
 

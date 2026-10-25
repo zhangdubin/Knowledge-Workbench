@@ -2,7 +2,7 @@
   <div class="page">
     <PageTitle
       title="数据中心"
-      subtitle="文件原文存于数据库 · 自动抽取正文并建立检索索引"
+      subtitle="文件原文外置存储 · 自动抽取正文并建立全文与向量检索索引"
       icon-key="Coin"
     >
       <el-button @click="openTrash">
@@ -36,7 +36,7 @@
           <div class="dz-hint">
             或
             <button class="link-btn" @click="fileInput?.click()">浏览本地文件</button>
-            · 支持任意类型 · 文件原文写入数据库 · 上传后自动抽取正文并建立检索索引
+            · 支持任意类型 · 文件原文外置存储 · 上传后自动抽取正文并建立检索索引
           </div>
         </div>
         <input
@@ -638,7 +638,29 @@
           <div class="preview-foot">共 {{ previewExtract.rows.length }} 行</div>
         </div>
 
-        <!-- 文本 / 代码 / Markdown -->
+        <!-- Markdown：按排版渲染（标题/列表/表格/代码块），可切回源码 -->
+        <div v-else-if="previewMode === 'markdown'" class="preview-markdown">
+          <div class="md-toolbar">
+            <el-segmented
+              v-model="mdView"
+              size="small"
+              :options="[
+                { label: '排版', value: 'render' },
+                { label: '源码', value: 'source' },
+              ]"
+            />
+            <span class="md-stat">{{ previewText.length }} 字符</span>
+          </div>
+          <div v-if="previewLoading" class="preview-loading">
+            <el-icon class="is-loading"><Loading /></el-icon> 读取中…
+          </div>
+          <div v-else-if="mdView === 'render'" class="md-paper">
+            <MarkdownText :content="previewText" variant="doc" />
+          </div>
+          <pre v-else class="code-block md-source">{{ previewText }}</pre>
+        </div>
+
+        <!-- 文本 / 代码 -->
         <div v-else-if="previewMode === 'text'" class="preview-text">
           <div v-if="previewLoading" class="preview-loading">
             <el-icon class="is-loading"><Loading /></el-icon> 读取中…
@@ -812,6 +834,7 @@ import JsonViewer from '../components/JsonViewer.vue'
 import PageTitle from '../components/PageTitle.vue'
 import AIAssistantDialog from '../components/AIAssistantDialog.vue'
 import RelationLinker from '../components/RelationLinker.vue'
+import MarkdownText from '../components/MarkdownText.vue'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -909,7 +932,7 @@ const playgroundText = ref(JSON.stringify({
     kind: 'doc',
     mime: 'application/pdf',
     size: 245760,
-    storage: 'sqlite-blob',
+    storage: 'fs',
     tags: ['季度', '归档'],
     text_length: 12840,
     extract_status: 'ok',
@@ -928,6 +951,8 @@ const previewText = ref('')
 const previewError = ref('')
 const previewLoading = ref(false)
 const activeSheet = ref('0')
+// Markdown 预览的视图切换：'render' 排版 | 'source' 源码
+const mdView = ref('render')
 
 const previewUrl = computed(() => fileUrls.preview(previewFile_.value))
 const downloadUrl = computed(() => fileUrls.download(previewFile_.value))
@@ -1214,11 +1239,14 @@ async function previewFile(row) {
   previewError.value = ''
   previewLoading.value = false
   activeSheet.value = '0'
+  mdView.value = 'render'
   previewOpen.value = true
 
   const mode = previewMode.value
-  // 需要服务端抽取的模式（Office / CSV / 文本）
-  if (['office', 'csv', 'text'].includes(mode)) {
+  // Markdown 也要正文：走服务端抽取拿到纯文本，再在前端排版
+  const wantsText = mode === 'text' || mode === 'markdown'
+  // 需要服务端抽取的模式（Office / CSV / 文本 / Markdown）
+  if (['office', 'csv', 'text', 'markdown'].includes(mode)) {
     previewLoading.value = true
     try {
       const data = await Api.documentContent(row.id)
@@ -1228,7 +1256,7 @@ async function previewFile(row) {
       } else {
         previewError.value = data?.error || ''
         // 文本类兜底：直接抓取内联内容
-        if (mode === 'text') {
+        if (wantsText) {
           try {
             const resp = await fetch(fileUrls.preview(row))
             previewText.value = await resp.text()
@@ -1239,7 +1267,7 @@ async function previewFile(row) {
       }
     } catch (e) {
       previewError.value = '解析失败：' + (e?.message || e)
-      if (mode === 'text') {
+      if (wantsText) {
         try {
           const resp = await fetch(fileUrls.preview(row))
           previewText.value = await resp.text()
@@ -1256,6 +1284,7 @@ function modeLabel(mode) {
   return {
     image: '图片预览', pdf: 'PDF 内联预览', video: '视频播放', audio: '音频播放',
     office: '文档解析', csv: '表格预览', text: '文本预览', 'legacy-office': '旧版格式',
+    markdown: 'Markdown 排版',
   }[mode] || ''
 }
 
@@ -1265,6 +1294,7 @@ function typeIconOf(row) {
   if (mode === 'video') return 'VideoCamera'
   if (mode === 'audio') return 'Headset'
   if (mode === 'csv') return 'Grid'
+  if (mode === 'markdown') return 'Tickets'
   if (mode === 'office' || mode === 'legacy-office') {
     const n = (row?.filename || '').toLowerCase()
     if (n.endsWith('.xlsx') || n.endsWith('.xls')) return 'Grid'
@@ -1311,7 +1341,7 @@ async function uploadFiles(fileList) {
     }
     uploading.value.push(item)
     try {
-      // 直接上传：文件原文写入数据库，不再需要先伪造一条笔记当容器
+      // 直接上传：文件独立成库，不再需要先伪造一条笔记当容器
       item.progress = 30
       const doc = await Api.uploadDocument(file, { embed: true })
       item.progress = 100
@@ -1640,6 +1670,32 @@ html.dark .json-head:hover { background: var(--bg-elevated); }
 .audio-name { font-weight: 600; }
 .preview-media audio { width: 100%; }
 .preview-text { background: var(--bg-subtle); border-radius: var(--radius); padding: var(--space-3); }
+
+/* ============ 预览：Markdown ============
+   .md-paper 是「纸面」：正文排版走全局 .md-body-doc，
+   这里只管容器（留白、边框、可滚动高度）。 */
+.preview-markdown { display: flex; flex-direction: column; }
+.md-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.md-stat { font-size: var(--text-xs); color: var(--text-tertiary); }
+.md-paper {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: var(--space-4) var(--space-5);
+  max-height: 64vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.md-source {
+  max-height: 64vh;
+  background: var(--bg-subtle);
+}
 .preview-loading {
   padding: 40px 24px;
   text-align: center;

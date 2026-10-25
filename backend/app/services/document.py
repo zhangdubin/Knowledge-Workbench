@@ -18,6 +18,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
+from fastapi import HTTPException
+
 from ..config import settings
 from ..models import (
     Document,
@@ -198,6 +200,45 @@ def file_response(doc: Document, *, inline: bool, range_header: str | None = Non
     return Response(content=doc.data, media_type=mime, headers=headers)
 
 
+# ---------- 读取权限 ----------
+
+async def _linked_model_key(db: AsyncSession, doc_id: int) -> str | None:
+    """文件挂着的记录属于哪个模型；没挂记录（或记录已删）返回 None"""
+    row = (await db.execute(
+        select(EntityType.key)
+        .join(EntityRecord, EntityRecord.entity_type_id == EntityType.id)
+        .join(DocumentLink, DocumentLink.record_id == EntityRecord.id)
+        .where(DocumentLink.document_id == doc_id)
+        .limit(1)
+    )).first()
+    return row[0] if row else None
+
+
+async def can_read_document(db: AsyncSession, principal, doc) -> bool:
+    """这个人能不能读这个文件
+
+    按文件的归属分两种：
+      - 挂在某条记录上的文件 → 跟随那条记录的模型权限
+      - 独立文件（数据中心的文件）→ 需要「数据中心」页面权限
+
+    分两种是有原因的。文件读接口若一律按「数据中心」判，
+    记录页里挂的附件预览就会 403（记录用户反而看不到自己的附件）；
+    若一律放行，那「只给知识库」的角色换个 URL 就能把文件全读走 ——
+    菜单挡住的是界面，不是数据。
+    """
+    if principal.is_super:
+        return True
+    key = await _linked_model_key(db, doc.id)
+    if key is None:
+        return principal.has_page("library")
+    return principal.can_model(key, "read")
+
+
+async def ensure_readable(db: AsyncSession, principal, doc) -> None:
+    """读文件前的权限闸门，不通过直接 403"""
+    if not await can_read_document(db, principal, doc):
+        raise HTTPException(403, "没有读取该文件的权限")
+
 
 # ---------- 分块 ----------
 
@@ -344,7 +385,9 @@ def meta_json(doc: Document, *, links: list[dict] | None = None) -> str:
             "kind": doc.kind or "other",
             "mime": fp.resolve_mime(doc.filename, doc.mime),
             "size": doc.size or 0,
-            "storage": "sqlite-blob",
+            # 如实反映原文放在哪：v0.3 起是外置文件目录（fs），
+            # 只有迁移前的老数据还留在库里的 BLOB（db）
+            "storage": doc.storage or "fs",
             "sha256": doc.sha256 or "",
             "tags": list(doc.tags or []),
             "summary": doc.summary or "",
@@ -954,13 +997,18 @@ def _snippet(doc: Document, query: str, width: int = 160) -> str:
 
 async def build_ai_context(db: AsyncSession, question: str,
                            document_ids: list[int] | None = None,
-                           max_docs: int = 5) -> dict:
+                           max_docs: int = 5,
+                           principal=None) -> dict:
     """为 AI 问答组装上下文
 
     返回 {"chunks": [...], "sources": [...]}：
     chunks 是真正喂给模型的内容，sources 是命中的来源（供前端展示
     「这句话是从哪份文件里找出来的」），两者分开是因为模型只需要文本，
     而人需要知道出处。
+
+    给了 principal 就按他的权限裁剪：读不了的文件不进上下文，
+    没有知识库权限的笔记也不进。否则 AI 回答会把用户看不到的
+    内容原样复述出来 —— 等于绕开了接口上的权限门。
     """
     chunks: list[str] = []
     sources: list[dict] = []
@@ -995,6 +1043,16 @@ async def build_ai_context(db: AsyncSession, question: str,
                 "matched_by": [hit_kind], "snippet": "",
             })
 
+    # 裁掉读不了的文件，来源列表也要跟着裁（否则前端会列出打不开的文件）
+    if principal is not None:
+        allowed = []
+        for d in docs:
+            if await can_read_document(db, principal, d):
+                allowed.append(d)
+            else:
+                sources = [s for s in sources if s.get("id") != d.id]
+        docs = allowed
+
     for d in docs:
         body = (d.extracted_text or d.summary or "").strip()
         if not body:
@@ -1003,10 +1061,11 @@ async def build_ai_context(db: AsyncSession, question: str,
 
     # 再补上知识库笔记（原有能力）
     try:
-        notes = await _search_notes(db, question, limit=3)
-        for n in notes:
-            chunks.append(n["chunk"])
-            sources.append(n["source"])
+        if principal is None or principal.has_page("notes"):
+            notes = await _search_notes(db, question, limit=3)
+            for n in notes:
+                chunks.append(n["chunk"])
+                sources.append(n["source"])
     except Exception:
         pass
 

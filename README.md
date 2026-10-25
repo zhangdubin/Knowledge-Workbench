@@ -348,11 +348,28 @@ backups/snap-20260924-220600/
 | 回收站 | `GET /api/recycle` · `POST /api/recycle/types/{id}/restore` · `DELETE /api/recycle/types/{id}` · `POST /api/recycle/records/{id}/restore` |
 | 关系管理 | `GET/POST/DELETE /api/relations/...` |
 | 附件 | `POST /api/attachments/upload`、`GET /api/attachments/{id}/download` |
+| 数据中心 | `GET /api/documents`（列表/检索）、`GET /api/documents/{id}/raw|download|content|meta` |
 | 全文搜索 | `GET /api/search?keyword=xx` |
 | AI 助理 | `POST /api/ai/agent`（工具调用）`POST /api/ai/ask`（RAG 问答）|
 | 关联图谱 | `GET /api/graph/record/{id}?depth=2`、`GET /api/graph/type/{id}` |
 
 完整 Swagger 文档：`http://localhost:8001/api/docs`
+
+### 🔒 接口层的权限判定
+
+菜单里的入口只是界面，**数据能不能读到由接口说了算**。除 `/api/auth/*` 与健康检查外，
+所有接口都要登录，并按角色权限逐条判定：
+
+| 资源 | 判定依据 |
+|------|----------|
+| 挂在某条记录上的文件 | 跟随那条记录的**模型权限**（有 `read` 即可预览） |
+| 独立文件（数据中心直接上传） | 需要 `library` **页面权限** |
+| 知识库笔记与关联 | `note` 模型的读写位 |
+| 全文搜索、AI 问答 | 命中的文件与笔记按提问者权限裁剪，读不到的不进上下文 |
+| 全局图谱 | 没有 `library` 权限时不输出文件节点 |
+
+换句话说：把某个角色的页面勾去掉，对应数据**在接口层也一并消失**，不是换个 URL 就能绕过去。
+回归脚本：`node scripts/v18-verify-permissions.cjs`。
 
 ## 📁 目录结构
 

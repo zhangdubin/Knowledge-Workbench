@@ -158,7 +158,7 @@
     >
       <div class="dialog-summary">
         <el-icon :size="18"><Document /></el-icon>
-        <span>创建后可在详情页使用 AI 辅助、双链关联与文件附件。</span>
+        <span>创建后可在详情页使用 AI 辅助与双链关联。</span>
       </div>
       <div class="form-section" style="margin-bottom:0">
         <div class="form-section-title">基本信息</div>

@@ -4,10 +4,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models import App
+from ..models import App, Document
 from ..services import graph as graph_svc
 from ..services import app as app_svc
 from ..services import app_template as tpl_svc
+from ..services import document as doc_svc
+from ..services.auth import Principal, current_principal, ensure_model
 
 router = APIRouter(prefix="/api/apps", tags=["apps"])
 
@@ -93,8 +95,10 @@ async def graph_for_notes(
     tag: str | None = Query(None),
     limit: int = Query(300, ge=10, le=1000),
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(current_principal),
 ):
     """笔记全局图谱：所有笔记 + 双链关联"""
+    ensure_model(principal, "note", "read")
     return await graph_svc.get_notes_graph(db, tag, limit)
 
 
@@ -102,8 +106,13 @@ async def graph_for_notes(
 async def graph_for_document(
     document_id: int, depth: int = Query(1, ge=1, le=3),
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(current_principal),
 ):
     """以数据中心文件为中心：它关联的记录、以及这些记录挂着的其它文件"""
+    doc = await db.get(Document, document_id)
+    if not doc:
+        raise HTTPException(404, "文件不存在")
+    await doc_svc.ensure_readable(db, principal, doc)
     return await graph_svc.get_document_graph(db, document_id, depth)
 
 
@@ -112,8 +121,12 @@ async def graph_global(
     limit: int = Query(300, ge=20, le=2000),
     include_documents: bool = True,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(current_principal),
 ):
     """全局关联网络：所有模型的记录 + 关系 + 参与关系的文件"""
+    # 文件节点跟着「数据中心」页面权限走：没权限的人不该在图谱里
+    # 看到文件（文件名与关联关系都在图上）
+    include_documents = include_documents and principal.has_page("library")
     return await graph_svc.get_global_graph(db, limit, include_documents)
 
 

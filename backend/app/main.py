@@ -84,6 +84,12 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     lifespan=lifespan,
+    # 文档挂在 /api 下，与 README / 安装脚本 / start.sh 里写的地址一致。
+    # openapi_url 也要跟着挪 —— 否则 Swagger 页面会去取 /openapi.json，
+    # 而 nginx 只反代 /api/*，通过 8082 访问时那个地址根本不存在。
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
 )
 
 # 中间件顺序：后 added 的先执行。CORS 必须在最外层，

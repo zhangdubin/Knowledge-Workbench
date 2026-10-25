@@ -1999,6 +1999,127 @@ html.dark {
 /* 第一列通常是被查询对象的名字，给它一点强调 */
 .md-body tbody td:first-child { color: var(--text-primary); }
 
+/* ============ Markdown 文档正文（.md-body-doc）============
+   数据中心预览 .md 文件时用（MarkdownText.vue 的 variant="doc"）。
+   和 .md-body 的差别：
+     - 保留 h1/h2 原始层级（chat 变体把标题压到 h3 起）
+     - 字号、行距按「读文档」放大，而不是「读气泡」
+     - 正文限宽，长行不在宽屏上拉得太散
+   选择器写成 .md-body.md-body-doc 是为了压过上面的 .md-body h3 等同权重规则，
+   不依赖样式表里的先后顺序。颜色仍走 token，深浅底都读得动。 */
+.md-body.md-body-doc {
+  font-size: 14.5px;
+  line-height: 1.85;
+  color: var(--text-primary);
+  max-width: 74ch;
+  margin: 0 auto;
+}
+
+.md-body.md-body-doc h1 {
+  margin: 0 0 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: -0.3px;
+}
+.md-body.md-body-doc h2 {
+  margin: 26px 0 10px;
+  padding-left: 10px;
+  border-left: 3px solid var(--primary);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+.md-body.md-body-doc h3 {
+  margin: 20px 0 8px;
+  font-size: 15.5px;
+  font-weight: 650;
+}
+.md-body.md-body-doc h4 {
+  margin: 16px 0 6px;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+.md-body.md-body-doc h5,
+.md-body.md-body-doc h6 {
+  margin: 14px 0 6px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+}
+
+.md-body.md-body-doc p { margin: 0 0 12px; }
+.md-body.md-body-doc ul,
+.md-body.md-body-doc ol { margin: 6px 0 13px; padding-left: 1.5em; }
+.md-body.md-body-doc li { margin: 5px 0; }
+.md-body.md-body-doc li::marker { color: var(--primary); font-weight: 600; }
+
+/* 引用块：文档里常用来放结论/提示，给它左侧色条 + 浅底 */
+.md-body.md-body-doc blockquote {
+  margin: 10px 0 14px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--primary);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.md-body.md-body-doc blockquote p:last-child { margin-bottom: 0; }
+
+.md-body.md-body-doc pre.md-pre {
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  line-height: 1.6;
+}
+.md-body.md-body-doc pre.md-pre code { font-size: 12.5px; }
+
+.md-body.md-body-doc .md-table-wrap { margin: 10px 0 14px; }
+.md-body.md-body-doc table { font-size: 13px; }
+.md-body.md-body-doc th,
+.md-body.md-body-doc td { padding: 7px 11px; }
+
+.md-body.md-body-doc hr { margin: 22px 0; }
+
+/* ============ 文档属性（YAML frontmatter）============
+   Obsidian 风格的 .md 开头常有 --- 包起来的 YAML。
+   不处理的话它会变成两条分隔线夹着一坨裸 YAML，
+   这里改成一张属性表：键名弱化、值正常、列表渲染成小标签。 */
+.md-frontmatter {
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+.md-fm-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.md-fm-key {
+  flex: 0 0 auto;
+  min-width: 72px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.md-fm-val { color: var(--text-primary); }
+.md-fm-chip {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 /* AI 助理抽屉：桌面端宽一点才放得下表格，手机端不许溢出屏幕 */
 .agent-drawer { max-width: 100vw; }
 @media (max-width: 640px) {

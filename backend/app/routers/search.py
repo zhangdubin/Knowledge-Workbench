@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..services import document as doc_svc
 from ..services import record as svc
+from ..services.auth import Principal, current_principal
 
 router = APIRouter(prefix="/api/search", tags=["search"])
 
@@ -18,6 +19,7 @@ async def search(
     keyword: str = Query("", min_length=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(current_principal),
 ):
     kw = (keyword or "").strip()
     if not kw:
@@ -26,11 +28,14 @@ async def search(
     records = await svc.search_all(db, kw, limit)
 
     documents = []
-    try:
-        res = await doc_svc.search_documents(db, kw, limit=min(limit, 30), mode="hybrid")
-        documents = res["items"]
-    except Exception:
-        documents = []
+    # 文件命中要跟着「数据中心」页面权限走：全局搜索能搜到文件是它的价值，
+    # 但没给数据中心权限的人不该在结果里读到文件的正文片段。
+    if principal.has_page("library"):
+        try:
+            res = await doc_svc.search_documents(db, kw, limit=min(limit, 30), mode="hybrid")
+            documents = res["items"]
+        except Exception:
+            documents = []
 
     return {
         "records": records,

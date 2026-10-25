@@ -16,7 +16,8 @@ from ..services import audit as audit_svc
 from ..services import document as svc
 from ..services import embedding as embed_svc
 from ..services import filepreview as fp
-from ..services.auth import require_feature
+from ..services import filestore
+from ..services.auth import Principal, current_principal, require_feature, require_page
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -24,6 +25,9 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 # 用不到模型级权限，但「能不能删」必须能单独授权。
 _WRITE = [Depends(require_feature("file_write"))]
 _DELETE = [Depends(require_feature("file_delete"))]
+# 列表类读接口（列表/统计/标签/检索）是数据中心的门面：
+# 没给「数据中心」页面权限的人不该在这里看到任何文件清单。
+_READ_PAGE = [Depends(require_page("library"))]
 
 
 # ---------- 入参模型 ----------
@@ -52,20 +56,21 @@ class ReindexIn(BaseModel):
 
 # ---------- 静态路径（必须在 /{doc_id} 之前） ----------
 
-@router.get("/stats")
+@router.get("/stats", dependencies=_READ_PAGE)
 async def stats(db: AsyncSession = Depends(get_db)):
     data = await svc.stats(db)
     data["vector"] = embed_svc.config_summary()
-    data["storage"] = "sqlite-blob"
+    # 如实报告原文放在哪：v0.3 起外置到文件目录，老数据仍在库内 BLOB
+    data["storage"] = filestore.status().get("mode") or "fs"
     return data
 
 
-@router.get("/tags")
+@router.get("/tags", dependencies=_READ_PAGE)
 async def tags(db: AsyncSession = Depends(get_db)):
     return {"items": await svc.all_tags(db)}
 
 
-@router.get("/search")
+@router.get("/search", dependencies=_READ_PAGE)
 async def search(
     q: str = Query("", description="检索词"),
     limit: int = Query(20, ge=1, le=100),
@@ -127,7 +132,7 @@ async def upload(
     return out
 
 
-@router.get("")
+@router.get("", dependencies=_READ_PAGE)
 async def list_documents(
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=500),
@@ -162,10 +167,22 @@ async def _need(db: AsyncSession, doc_id: int, *, include_deleted: bool = False,
     return doc
 
 
+async def _need_readable(db: AsyncSession, principal: Principal, doc_id: int, **kw):
+    """取文件并过一遍读权限闸门
+
+    单个文件的接口走这里而不是 _READ_PAGE：挂在记录上的文件
+    要跟着那条记录的模型权限走，否则记录用户预览自己的附件会被拦。
+    """
+    doc = await _need(db, doc_id, **kw)
+    await svc.ensure_readable(db, principal, doc)
+    return doc
+
+
 @router.get("/{doc_id}")
 async def detail(doc_id: int, with_text: bool = False,
-                 db: AsyncSession = Depends(get_db)):
-    doc = await _need(db, doc_id)
+                 db: AsyncSession = Depends(get_db),
+                 principal: Principal = Depends(current_principal)):
+    doc = await _need_readable(db, principal, doc_id)
     out = svc.serialize(doc, with_text=with_text,
                         links=await svc._links_of(db, doc_id))
     out["chunk_count"] = (await db.execute(
@@ -176,20 +193,22 @@ async def detail(doc_id: int, with_text: bool = False,
 
 
 @router.get("/{doc_id}/meta")
-async def meta(doc_id: int, db: AsyncSession = Depends(get_db)):
+async def meta(doc_id: int, db: AsyncSession = Depends(get_db),
+               principal: Principal = Depends(current_principal)):
     """该文件的结构化元数据（JSON 文本 + 节点树）
 
     单独开接口而不是塞进列表：列表要一次返回几百条，
     内联元数据树会让响应膨胀近 1MB，而用户只会展开其中一两个。
     """
-    doc = await _need(db, doc_id)
+    doc = await _need_readable(db, principal, doc_id)
     return svc.meta(doc, links=await svc._links_of(db, doc_id))
 
 
 @router.get("/{doc_id}/raw")
-async def raw(doc_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+async def raw(doc_id: int, request: Request, db: AsyncSession = Depends(get_db),
+               principal: Principal = Depends(current_principal)):
     """内联预览：外置文件走流式（支持 Range），库内 BLOB 直接回字节"""
-    doc = await _need(db, doc_id, with_data=True)
+    doc = await _need_readable(db, principal, doc_id, with_data=True)
     try:
         return svc.file_response(doc, inline=True,
                                  range_header=request.headers.get("range"))
@@ -198,8 +217,9 @@ async def raw(doc_id: int, request: Request, db: AsyncSession = Depends(get_db))
 
 
 @router.get("/{doc_id}/download")
-async def download(doc_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    doc = await _need(db, doc_id, with_data=True)
+async def download(doc_id: int, request: Request, db: AsyncSession = Depends(get_db),
+                   principal: Principal = Depends(current_principal)):
+    doc = await _need_readable(db, principal, doc_id, with_data=True)
     try:
         return svc.file_response(doc, inline=False,
                                  range_header=request.headers.get("range"))
@@ -208,9 +228,10 @@ async def download(doc_id: int, request: Request, db: AsyncSession = Depends(get
 
 
 @router.get("/{doc_id}/content")
-async def content(doc_id: int, full: bool = True, db: AsyncSession = Depends(get_db)):
+async def content(doc_id: int, full: bool = True, db: AsyncSession = Depends(get_db),
+                  principal: Principal = Depends(current_principal)):
     """抽取出的可渲染结构（docx/xlsx/pptx/csv/文本）"""
-    doc = await _need(db, doc_id, with_data=True)
+    doc = await _need_readable(db, principal, doc_id, with_data=True)
     mime = fp.resolve_mime(doc.filename, doc.mime)
     try:
         parsed = fp.extract_bytes(svc.load_bytes(doc), doc.filename)
@@ -292,11 +313,12 @@ async def resummarize(doc_id: int, db: AsyncSession = Depends(get_db)):
     return svc.serialize(doc)
 
 
-@router.post("/{doc_id}/ask")
-async def ask_document(doc_id: int, payload: AskIn, db: AsyncSession = Depends(get_db)):
+@router.post("/{doc_id}/ask", dependencies=[Depends(require_feature("ai"))])
+async def ask_document(doc_id: int, payload: AskIn, db: AsyncSession = Depends(get_db),
+                       principal: Principal = Depends(current_principal)):
     """针对单个文件提问"""
     from ..services import ai as ai_svc
-    doc = await _need(db, doc_id)
+    doc = await _need_readable(db, principal, doc_id)
     body = (doc.extracted_text or "").strip()
     if not body:
         raise HTTPException(400, "该文件没有可检索的正文")

@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # 发版规则（语义化）：主版本.次版本.修订号 ——
     #   修订号：修 bug、小改进；次版本：新功能；主版本：不兼容的库结构/接口变动。
     # 每次发布 CHANGELOG.md 必须同步更新。
-    app_version: str = "0.4.0"
+    app_version: str = "0.4.1"
 
     # ==== 升级更新（依托 GitHub Releases）====
     # update_repo：GitHub 仓库标识「owner/name」。空 = 未配置，

@@ -4,6 +4,51 @@
 `/api/health`、`/api/auth/status`、备份快照元数据、离线包文件名全部从这里取值。
 每次发版：改 `app_version` → 在本文件顶部加一节 → 重建镜像 → 重打离线包。
 
+## 0.4.1 — 2026-10-26
+
+### 修复：服务器上 nginx 崩溃重启循环（`host not found in upstream`）
+
+**现象**：部署到服务器后，前端容器起不来，日志反复刷
+
+```
+nginx: [emerg] host not found in upstream "backend" in /etc/nginx/conf.d/default.conf:44
+```
+
+且重启间隔越来越长（3 秒 → 5 秒 → 13 秒 → 27 秒 → 53 秒），
+是 `restart: unless-stopped` 的指数退避在起作用。
+
+**根因**：nginx 在**加载配置时**一次性把 upstream 主机名解析成 IP，
+解析不到就直接 `[emerg]` 退出进程。Docker Compose 里只要出现下面任一情况，
+前端容器就会陷入崩溃重启循环：
+
+- 后端容器还没起来（前端被单独拉起，或 `depends_on` 被绕开）
+- 后端容器被重建（IP 变了，但名字一样）
+- 后端临时停掉，Docker 顺手把前端也重启了
+- 容器被手工 `docker network connect` 挂到网络，
+  compose 注册的服务别名 `backend` 丢失（容器名 `kb-backend` 仍可解析）
+
+**修复**：把上游改成**延迟解析**（`resolver` + 变量形式 `proxy_pass`），
+解析动作从「启动时一次」变成「每次请求时按需做」：
+
+- nginx 启动不再依赖后端在不在 —— 后端晚起来能自动接上
+- 后端换 IP 后，nginx 在 `valid=10s` 周期内重新解析，不会一直 502
+- 后端临时不可用时前端照常出页面，接口返回明确的 JSON 错误
+  （`{"ok":false,"detail":"后端服务暂时不可用…"}`），
+  而不是 nginx 默认的 HTML 错误页（前端只认 JSON，拿到 HTML 只能显示「网络错误」）
+
+**顺带的两处加固**
+
+- compose 的 backend 服务显式声明网络别名 `backend`。
+  之前靠 compose 的隐式副作用注册，容器被手工 reconnect 到网络就会丢。
+- 上游地址可用环境变量 `KB_BACKEND_ADDR` 覆盖（默认 `backend:8000`），
+  前端与后端不在同一个 compose 网络时不必重新构建镜像。
+  nginx 配置改走官方镜像的 envsubst 模板机制（`/etc/nginx/templates/`），
+  只替换 `KB_` 前头的变量，`$host` / `$remote_addr` 这些 nginx 自己的变量不受影响。
+
+**验证**：`scripts/v27-verify-nginx-upstream.cjs`（16 项）——
+独立容器在后端不可解析时照样启动、后端停掉时页面仍 200 且接口返回 JSON 503、
+后端恢复与容器重建后接口自动回到 200、全程前端零重启。
+
 ## 0.4.0 — 2026-10-26
 
 ### 应用中心：用一句话把应用建出来

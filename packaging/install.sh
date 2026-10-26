@@ -426,6 +426,11 @@ KB_SESSION_DAYS=14
 KB_COOKIE_SECURE=false
 KB_MAINTENANCE_ENABLED=true
 LOG_LEVEL=INFO
+
+# ---- 前端反代的后端地址 ----
+# 默认 backend:8000 —— 同一个 compose 网络里后端的服务名。
+# 前端与后端不在同一个网络时才需要改（host:port）。
+KB_BACKEND_ADDR=backend:8000
 ENVEOF
   umask 022
   chmod 600 "$ENV_FILE"

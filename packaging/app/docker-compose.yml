@@ -74,6 +74,14 @@ services:
     # 关停要留足时间：先停维护循环 → 释放连接 → PRAGMA optimize + WAL 截断。
     # 库大时 10 秒不够，被 SIGKILL 就等于跳过关停维护。
     stop_grace_period: 60s
+    networks:
+      default:
+        aliases:
+          # 显式声明服务别名。compose 默认也会注册它，但那是隐式副作用：
+          # 容器被手工 reconnect 到网络、或用别的方式挂载时，别名会丢，
+          # 前端就会报 "host not found in upstream backend"。
+          # 写进服务定义里，它就是容器规格的一部分，不容易丢。
+          - backend
     logging:
       driver: json-file
       options:
@@ -86,6 +94,10 @@ services:
     restart: unless-stopped
     ports:
       - "${KB_FRONTEND_PORT:-8082}:80"
+    environment:
+      # 后端上游地址（host:port）。默认走同一个 compose 网络里的 backend 服务。
+      # 前端与后端不在同一个网络时，把它指到实际地址即可，不必重新构建镜像。
+      - KB_BACKEND_ADDR=${KB_BACKEND_ADDR:-backend:8000}
     depends_on:
       backend:
         condition: service_healthy

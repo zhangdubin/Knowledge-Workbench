@@ -379,6 +379,7 @@ backups/snap-20260924-220600/
 回归脚本：
 - `node scripts/v22-verify-permissions.cjs` —— 页面权限在接口层生效
 - `node scripts/v25-verify-access-paths.cjs` —— 搜索 / 图谱 / 关联 / 列表这四条聚合路径不泄露
+- `node scripts/v27-verify-nginx-upstream.cjs` —— 前端在后端不可用时不崩溃、能自动恢复
 
 ## 📁 目录结构
 
@@ -503,6 +504,80 @@ bash start.sh clean    # ⚠️ 删除所有数据
 
 > ⚠️ 若 `healthcheck.sh` 报「备份目录与数据目录在同一块盘上」，说明第 2–3 步
 > 还没做完。同盘备份只防误删、不防磁盘故障 —— 上生产前必须解决。
+
+## 🚨 服务器排障
+
+### 前端起不来：`host not found in upstream "backend"`
+
+这是**最常见**的一种部署故障。日志长这样，且重启间隔会越来越长
+（3 秒 → 5 秒 → 13 秒 → 27 秒 —— `restart: unless-stopped` 的指数退避）：
+
+```
+nginx: [emerg] host not found in upstream "backend" in /etc/nginx/conf.d/default.conf:44
+```
+
+**原因**：nginx 在**加载配置时**一次性把 upstream 主机名解析成 IP，
+解析不到就直接 `[emerg]` 退出进程。所以后端晚起来、被重建、临时停掉，
+前端都会跟着进崩溃重启循环。
+
+**先分清是「后端没起来」还是「名字解析不到」**：
+
+```bash
+# ① 后端容器在不在？健不健康？
+docker ps -a --filter name=kb-backend
+docker inspect -f '{{.State.Health.Status}}' kb-backend
+
+# ② 前端容器能不能解析到后端？（在容器里查，最准）
+docker exec kb-frontend nslookup backend 127.0.0.11
+
+# ③ 两个容器在不在同一个网络？
+docker network inspect kb-workbench_default --format '{{range .Containers}}{{.Name}} {{end}}'
+```
+
+按查到的现象处理：
+
+| 现象 | 处理 |
+|---|---|
+| 后端容器不存在 / 已退出 | `docker compose logs backend` 看退出原因，多半是数据目录权限或端口占用；修好后 `docker compose up -d` |
+| 后端在跑但 `nslookup backend` 报 NXDOMAIN | 两者不在同一网络，或 compose 的服务别名丢了。`docker compose up -d --force-recreate backend` 让 compose 重新注册别名 |
+| 后端在跑、`nslookup` 也正常 | 名字没问题，是**旧版 nginx 配置**（启动时解析）。升级到 v0.4.1 即可 |
+
+> 💡 容器名（`kb-backend`）由 Docker 始终注册，服务别名（`backend`）由 compose 注册。
+> 前者更稳 —— 容器被手工 `docker network connect` 挂到网络时，别名会丢、容器名不会。
+
+**把修复送上已经部署好的服务器**，按你的部署方式选一条：
+
+```bash
+# A. 服务器上有源码仓库（推荐）
+cd /opt/kb-workbench
+git pull
+docker compose up -d --build frontend     # 只重建前端镜像即可，后端不动
+docker compose logs frontend --tail 20    # 确认没有 [emerg]
+
+# B. 服务器跑的是离线包
+#    在能联网的机器上重新造包，把新的前端镜像导进去：
+./scripts/build-offline-images.sh
+./scripts/make-offline-package.sh
+#    目标机上重新导入镜像并重启前端
+docker load -i kb-workbench-frontend-amd64.tar
+docker compose up -d --force-recreate frontend
+```
+
+**v0.4.1 起这个故障不再致命**：上游改成延迟解析（`resolver` + 变量形式 `proxy_pass`），
+nginx 启动不再依赖后端在不在，后端晚起来或换 IP 都会自动接上；
+后端不可达时页面照常显示，接口返回明确的 JSON 错误而不是 nginx 的 HTML 错误页。
+
+**前端与后端不在同一个 compose 网络时**，用环境变量指过去，不用重新构建镜像：
+
+```bash
+# .env
+KB_BACKEND_ADDR=10.10.10.5:8000     # host:port
+```
+
+### 接口 503 且提示「后端服务暂时不可用」
+
+说明前端活着、后端连不上。按上面的三步查即可 ——
+这时前端**不会**崩溃重启，页面能正常打开，只是接口报错。
 
 ## 🌐 局域网访问
 

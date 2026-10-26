@@ -22,6 +22,7 @@ from ..models import (
     Document, DocumentLink, EntityRecord, EntityType,
     FieldDefinition, RelationDef, RelationRecord,
 )
+from . import access
 
 KINDS = ("record", "document")
 
@@ -366,21 +367,57 @@ async def _links(db: AsyncSession, *, record_id: int | None = None,
     return out
 
 
-async def get_related_records(db: AsyncSession, record_id: int) -> list[dict]:
-    return await _links(db, record_id=record_id)
+async def get_related_records(db: AsyncSession, record_id: int,
+                              principal=None) -> list[dict]:
+    links = await _links(db, record_id=record_id)
+    return await filter_links_by_access(db, principal, links)
 
 
-async def get_related_documents(db: AsyncSession, document_id: int) -> list[dict]:
-    return await _links(db, document_id=document_id)
+async def get_related_documents(db: AsyncSession, document_id: int,
+                                principal=None) -> list[dict]:
+    links = await _links(db, document_id=document_id)
+    return await filter_links_by_access(db, principal, links)
+
+
+async def filter_links_by_access(db: AsyncSession, principal,
+                                 links: list[dict]) -> list[dict]:
+    """把「对端读不到」的关联剔掉
+
+    关联是双向的：能看 A，不代表能看 A 关联的 B。
+    早先这一族接口既没校验本体、也没校验对端，于是
+    「能看到对端记录标题 + 文件名 + preview_url」——
+    等于给「记录权限」和「文件权限」开了个后门
+    （`/api/attachments/{id}/preview` 拦得住，这里却能拿到链接）。
+    """
+    if principal is None or principal.is_super:
+        return links
+    doc_ids = [l["other_id"] for l in links
+               if l.get("other_kind") == "document" and l.get("other_id")]
+    allowed = set(await access.filter_readable_documents(db, principal, doc_ids))
+
+    out: list[dict] = []
+    for l in links:
+        if l.get("other_kind") == "document":
+            if l.get("other_id") not in allowed:
+                continue
+        elif not access.can_read_record(principal, l.get("other_type_key")):
+            continue
+        out.append(l)
+    return out
 
 
 # ---------- 文件端的选择器：可选记录 / 可选文件 ----------
 
 async def pickable(db: AsyncSession, *, def_id: int, side: str,
-                   keyword: str = "", limit: int = 30) -> dict:
+                   keyword: str = "", limit: int = 30,
+                   principal=None) -> dict:
     """给「添加关联」弹窗用的候选列表
 
     只返回该端 kind 对应的东西，前端不需要知道后端怎么判断。
+
+    候选列表本身也是一次「批量暴露」：早先 document 分支直接把
+    全库文件倒出来（等于给了文件清单），record 分支也不看模型权限。
+    现在按读权限裁剪。
     """
     rd = await db.get(RelationDef, def_id)
     if not rd:
@@ -395,6 +432,10 @@ async def pickable(db: AsyncSession, *, def_id: int, side: str,
         docs = (await db.execute(
             q.order_by(Document.id.desc()).limit(limit)
         )).scalars().all()
+        if principal is not None:
+            allowed = set(await access.filter_readable_documents(
+                db, principal, [d.id for d in docs]))
+            docs = [d for d in docs if d.id in allowed]
         return {"kind": "document", "items": [{
             "id": d.id, "label": d.title or d.filename,
             "sub": f"{d.ext or ''} · {_fmt_size(d.size or 0)}",
@@ -408,6 +449,9 @@ async def pickable(db: AsyncSession, *, def_id: int, side: str,
     et = await db.get(EntityType, type_id) if type_id else None
     if not et:
         return {"kind": "record", "items": []}
+    # 目标模型读不到 → 一个候选都不给（这个端点的候选全是这个模型的记录）
+    if principal is not None and not access.can_read_record(principal, et.key):
+        return {"kind": "record", "items": [], "type": {"id": et.id, "name": et.name, "icon": et.icon}}
 
     # 记录没有独立的标题列，名称在各模型的 data 里（name/title/code），
     # 关键词匹配只能退化为「在整份 JSON 里找」，这里就按 Python 过滤。

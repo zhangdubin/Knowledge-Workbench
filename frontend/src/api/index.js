@@ -183,6 +183,12 @@ export const Api = {
   deleteApp: (id) => api.delete(`/api/apps/${id}`),
   listAppTemplates: () => api.get('/api/apps/templates'),
   createAppFromTemplate: (data) => api.post('/api/apps/from-template', data),
+  // 自然语言 → 应用规格草稿：只返回草稿，不落库（用户审阅改完再创建）
+  // 超时放宽：真实大模型可能要几十秒，mock 模式则瞬间返回
+  createAppFromPrompt: (prompt) =>
+    api.post('/api/apps/from-prompt', { prompt }, { timeout: 120000 }),
+  // 按草稿规格创建应用（AI 生成 → 用户改 → 创建），与模板创建共用同一段落库逻辑
+  createAppFromSpec: (data) => api.post('/api/apps/from-spec', data),
 
   // 知识关联（记录 ↔ 笔记）
   getKnowledgeNoteType: () => api.get('/api/knowledge/note-type'),

@@ -1,6 +1,6 @@
 // Markdown 渲染断言：数据中心预览 .md 的排版基础
 // 覆盖 utils/md.js 的两个对外能力：renderMarkdown / splitFrontmatter
-import { renderMarkdown, splitFrontmatter } from '../src/utils/md.js'
+import { renderMarkdown, splitFrontmatter, escapeHtml, highlightHtml } from '../src/utils/md.js'
 
 let failed = 0
 function assert(name, cond, detail = '') {
@@ -85,6 +85,78 @@ const has = (html, s) => html.includes(s)
   const src = '---\ntitle: A\n---\n\ntext'
   const html = renderMarkdown(src)
   assert('chat 变体不拆 frontmatter', !has(html, 'md-frontmatter'))
+}
+
+// ---------- 嵌套列表：按缩进分层，标记符换了也不该断 ----------
+{
+  // 无序里套有序：早先的实现遇到标记符变化就 break，
+  // 会拆成 `<ul>…</ul><ol>…</ol>` 两个并列列表
+  const src = '- 一级 A\n  1. 二级 1\n  2. 二级 2\n- 一级 B'
+  const html = renderMarkdown(src, { headingOffset: 0 })
+  assert('嵌套列表：ol 嵌在 ul 的 li 里',
+    has(html, '<ul><li>一级 A<ol>') && has(html, '</ol></li>'))
+  assert('嵌套列表：二级项带 lvl-2', has(html, 'class="lvl-2"'))
+  assert('嵌套列表：末项没被拆出去', has(html, '<li>一级 B</li>'))
+
+  // 有序里套无序
+  const src2 = '1. 一级 A\n   - 二级 X\n2. 一级 B'
+  const html2 = renderMarkdown(src2, { headingOffset: 0 })
+  assert('嵌套列表：ul 嵌在 ol 的 li 里',
+    has(html2, '<ol><li>一级 A<ul>') && has(html2, '</ul></li>'))
+  assert('嵌套列表：有序里的无序项带 lvl-2', has(html2, 'class="lvl-2"'))
+
+  // 同层换标记符 → 开新列表（Markdown 常规行为）
+  const src3 = '- 甲\n1. 乙'
+  const html3 = renderMarkdown(src3, { headingOffset: 0 })
+  assert('同层换标记符开新列表',
+    has(html3, '<ul><li>甲</li></ul><ol><li>乙</li></ol>'))
+
+  // 三层
+  const src4 = '- L1\n  - L2\n    - L3'
+  const html4 = renderMarkdown(src4, { headingOffset: 0 })
+  assert('三层嵌套出现 lvl-3', has(html4, 'class="lvl-3"'))
+}
+
+// ---------- 协议相对 URL 必须被拒 ----------
+{
+  const html = renderMarkdown('[点我](//evil.example.com/x)', { headingOffset: 0 })
+  assert('协议相对 URL 被拒（不跳外站）', !has(html, 'href="//evil.example.com/x"'))
+  assert('协议相对 URL 退化成 #', has(html, 'href="#"'))
+
+  const html2 = renderMarkdown('[站内](/docs/1)', { headingOffset: 0 })
+  assert('站内绝对路径仍然放行', has(html2, 'href="/docs/1"'))
+
+  const html3 = renderMarkdown('[外链](https://example.com/a)', { headingOffset: 0 })
+  assert('http(s) 仍然放行', has(html3, 'href="https://example.com/a"'))
+}
+
+// ---------- 搜索结果高亮：必须转义（P1-4 存型 XSS）----------
+{
+  const evil = '<img src=x onerror="window.__XSS_FIRED__=1">'
+  const html = highlightHtml(evil, 'img')
+  assert('高亮：原始标签被转义', !has(html, '<img'))
+  assert('高亮：命中段包在 mark 里', has(html, '<mark>img</mark>'))
+  assert('高亮：onerror 不会变成真属性', !has(html, 'onerror="window'))
+
+  // 普通高亮
+  const html2 = highlightHtml('zebra 手册', 'zebra')
+  assert('高亮：命中段被 mark 包住', has(html2, '<mark>zebra</mark>'))
+  assert('高亮：其余部分原样', has(html2, '手册'))
+
+  // 关键词里的 $ 不会被当成替换符
+  const html3 = highlightHtml('价格 $100', '$1')
+  assert('高亮：$1 不被当替换符', has(html3, '<mark>$1</mark>'))
+
+  // 没有关键词 → 全部转义
+  const html4 = highlightHtml(evil, '')
+  assert('高亮：无关键词时仍转义', !has(html4, '<img'))
+}
+
+// ---------- escapeHtml 本身 ----------
+{
+  assert('escapeHtml 转义尖括号', escapeHtml('<b>') === '&lt;b&gt;')
+  assert('escapeHtml 转义引号', escapeHtml('"x"') === '&quot;x&quot;')
+  assert('escapeHtml 处理 null', escapeHtml(null) === '')
 }
 
 console.log(failed ? `\n❌ ${failed} 项失败` : '\n✅ 全部通过')

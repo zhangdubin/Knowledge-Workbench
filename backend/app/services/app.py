@@ -4,6 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import App, EntityType, EntityRecord
 
+# 应用分组允许被修改的字段（白名单）
+# 为什么要白名单：key 是结构标识符，一改模型路由的 ?app= 就失配了；
+# 批量 setattr 还会把 id / created_at 一起写进去。
+APP_UPDATABLE = ("name", "icon", "description", "order")
+
+# 新建应用时允许写入的字段（其余键一律丢掉，免得 ORM 报未知字段）
+APP_CREATABLE = ("key", "name", "icon", "description", "order")
+
 
 async def list_apps(db: AsyncSession) -> list[dict]:
     """列出所有应用，含实体数与记录数"""
@@ -77,7 +85,9 @@ async def list_apps(db: AsyncSession) -> list[dict]:
 
 
 async def create_app(db: AsyncSession, payload: dict) -> App:
-    a = App(**payload)
+    # 只取认识的字段：App(**payload) 遇到多余键会直接 TypeError → 500
+    data = {k: payload[k] for k in APP_CREATABLE if k in payload}
+    a = App(**data)
     db.add(a)
     await db.commit()
     await db.refresh(a)
@@ -85,11 +95,17 @@ async def create_app(db: AsyncSession, payload: dict) -> App:
 
 
 async def update_app(db: AsyncSession, app_id: int, payload: dict) -> App | None:
+    """改应用分组
+
+    只认白名单里的字段：key 是结构标识符（模型路由按 ?app= 匹配），
+    改了会让既有模型「找不到应用」；id / created_at 更不该被前端带进来。
+    """
     a = await db.get(App, app_id)
     if not a:
         return None
-    for k, v in payload.items():
-        setattr(a, k, v)
+    for k in APP_UPDATABLE:
+        if k in payload and payload[k] is not None:
+            setattr(a, k, payload[k])
     await db.commit()
     await db.refresh(a)
     return a

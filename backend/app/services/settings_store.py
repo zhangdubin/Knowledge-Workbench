@@ -34,11 +34,13 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..config import settings
 
@@ -51,6 +53,9 @@ HASH_KEY = "admin_password_hash"
 
 GROUP_STORAGE = "存储与备份"
 GROUP_SECURITY = "安全"
+# 升级相关单独一组：它跟备份/安全都不是一回事，混在一起会让「哪些设置
+# 影响数据安全、哪些只是外部服务对接」变得说不清。
+GROUP_UPDATE = "升级与更新"
 
 # 默认弱口令：库里没人时用它建 admin。这个值在生产是不能接受的，
 # 所以界面上要显式提示「仍是默认口令」而不是静默放过。
@@ -90,6 +95,33 @@ EDITABLE: dict[str, dict] = {
             "「用户管理 → 重置密码」，那里改的才是真正生效的口令。"
             "这里存的是哈希（不落明文），好处是删库重建、或把配置迁到新机器时"
             "口令设置能跟着 data/ 目录一起走。"
+        ),
+    },
+    "update_repo": {
+        "kind": "repo",
+        "label": "升级仓库",
+        "group": GROUP_UPDATE,
+        "placeholder": "owner/name，例如 your-org/kb-workbench",
+        "help": (
+            "在线升级要检查的 GitHub 仓库，填「owner/name」"
+            "（组织或用户名 / 仓库名），例如 your-org/kb-workbench。"
+            "系统拿它去问 GitHub「最新的 Release 是什么」，再和当前版本号比大小 —— "
+            "它只负责**发现**新版本，真正升级仍在宿主机上执行 ./scripts/upgrade.sh。"
+            "留空 = 不做在线检查（页面会直接说「没配仓库」，而不是报一堆网络错误）。"
+            "必须是**公开**仓库：这里不带 GitHub Token，私有仓库查不到。"
+            "填错格式当场就拦下（界面上有行内提示），不会等到点「检查更新」才失败。"
+        ),
+    },
+    "update_proxy": {
+        "kind": "proxy",
+        "label": "出站代理",
+        "group": GROUP_UPDATE,
+        "placeholder": "http://10.0.0.5:1080（留空表示直连）",
+        "help": (
+            "容器访问 api.github.com 时用的 HTTP 代理地址，例如 http://10.0.0.5:1080。"
+            "内网机器直连不了 GitHub 时才需要填；能直连就留空。"
+            "只影响「检查更新」这一个出站请求，不影响其它功能。"
+            "留空 = 直连；填错当场提示，不会等到检查时才发现。"
         ),
     },
 }
@@ -134,6 +166,89 @@ def _coerce(key: str, raw: Any) -> Any:
         except (TypeError, ValueError):
             return spec.get("default", 0)
     return str(raw)
+
+
+# ============================================================ 升级配置（仓库 / 代理）
+#
+# 为什么校验规则放在这一层，而不是写在 update.py 里：
+# 同一份规则要用在两个地方 —— 界面保存时校验一遍，检查更新时再校验一遍
+# （环境变量 / .env 里的值绕过界面校验，是会绕过任何校验的）。
+# 规则一旦分成两份，就会出现「界面说填对了、检查时却报错」的怪现象，
+# 而这种不一致极难排查，所以只保留一份实现，两边都调它。
+
+# GitHub 的 owner 与仓库名只允许这些字符。
+# 不用 \w 是有原因的：它会把下划线和 Unicode 字母一起放行。
+_REPO_PART = r"[A-Za-z0-9._-]+"
+_REPO_RE = re.compile(rf"^{_REPO_PART}/{_REPO_PART}$")
+
+# 常见的三种等价写法：owner/name、owner/name/、以及直接粘过来的 GitHub 网址。
+# 粘贴网址是极常见的习惯，把「https://github.com/xxx/yyy」原样丢给 API
+# 只会得到一个莫名其妙的 404 —— 与其让人自己猜格式，不如在这里收拾干净。
+_REPO_PREFIXES = ("https://github.com/", "http://github.com/", "github.com/")
+
+
+def normalize_repo(raw: Any) -> tuple[str, str]:
+    """把用户填的仓库标识归一化成「owner/name」
+
+    返回 (归一化后的值, 错误说明)；错误说明为空表示通过。
+    空值是合法的 —— 它表示「不配置」，与「配错了」是两回事，
+    前端要能把这两种状态分开显示。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return "", ""
+    text = text.rstrip("/")
+    for prefix in _REPO_PREFIXES:
+        if text.lower().startswith(prefix):
+            text = text[len(prefix):].strip().rstrip("/")
+            break
+    if not text:
+        return "", "仓库标识不能只有斜杠"
+    if "/" not in text:
+        return "", ("格式应为「owner/name」（例如 your-org/kb-workbench），"
+                   "当前值里没有 / 分隔符")
+    if text.count("/") != 1:
+        return "", "格式应为「owner/name」，只能有一个 / 分隔符"
+    owner, name = text.split("/", 1)
+    if not owner or not name:
+        return "", "「/」两侧都要有内容（组织或用户名 / 仓库名）"
+    if not re.fullmatch(_REPO_PART, owner):
+        return "", "「owner」只能是字母、数字、. - _ 这几种字符"
+    if not re.fullmatch(_REPO_PART, name):
+        return "", "「仓库名」只能是字母、数字、. - _ 这几种字符"
+    return f"{owner}/{name}", ""
+
+
+def normalize_proxy(raw: Any) -> tuple[str, str]:
+    """校验出站代理地址。返回 (归一化后的值, 错误说明)
+
+    只认 http / https —— httpx 的代理走的就是这两种协议，
+    放行其它 scheme 只会得到一个更难懂的报错。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return "", ""
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return "", "代理地址无法解析，请照着 http://主机:端口 的样子填"
+    scheme = (parts.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return "", (f"代理地址必须以 http:// 或 https:// 开头"
+                   f"（当前是「{scheme or '无协议'}」）")
+    try:
+        host = parts.hostname
+        port = parts.port          # 端口非法时只有访问 .port 才会抛错
+    except ValueError:
+        return "", "代理端口不是合法数字"
+    if not host:
+        return "", "代理地址里缺少主机名，请写成 http://主机:端口"
+    if port is not None and not (0 < port < 65536):
+        return "", "代理端口超出合法范围"
+    if parts.path and parts.path != "/":
+        return "", "代理地址不需要带路径，只填 http://主机:端口"
+    # 去掉结尾斜杠：同一台代理写成两种样子时不该被当成两个配置
+    return text.rstrip("/"), ""
 
 
 def effective(key: str) -> tuple[Any, str]:
@@ -569,6 +684,7 @@ def describe() -> list[dict]:
             "group": spec["group"],
             "help": spec["help"],
             "kind": spec["kind"],
+            "placeholder": spec.get("placeholder", ""),
             "min": spec.get("min"),
             "max": spec.get("max"),
             "min_len": spec.get("min_len"),
@@ -611,6 +727,18 @@ def validate(key: str, value: Any) -> tuple[bool, Any, str, str]:
             return False, None, f"口令至少 {spec['min_len']} 位", ""
         if text.lower() in WEAK_DEFAULTS:
             warn = "这是常见弱口令，生产环境建议换成更复杂的口令"
+        return True, text, "", warn
+    if kind == "repo":
+        # 空 = 不做在线检查，这是合法状态，不是错误；
+        # 非空则必须是 owner/name，并顺带把结尾斜杠、网址写法收拾干净。
+        text, err = normalize_repo(value)
+        if err:
+            return False, None, err, ""
+        return True, text, "", warn
+    if kind == "proxy":
+        text, err = normalize_proxy(value)
+        if err:
+            return False, None, err, ""
         return True, text, "", warn
     # path
     text = str(value or "").strip()

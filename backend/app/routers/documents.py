@@ -143,11 +143,14 @@ async def list_documents(
     embed_status: str = "",
     include_deleted: bool = False,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(current_principal),
 ):
+    # principal 要传下去：列表与单文件必须用同一套「读得到」的判定，
+    # 否则会出现「列表里看得见、点进去 403」
     return await svc.list_documents(
         db, page=page, page_size=page_size, keyword=keyword, kind=kind,
         tag=tag, record_id=record_id, embed_status=embed_status,
-        include_deleted=include_deleted,
+        include_deleted=include_deleted, principal=principal,
     )
 
 

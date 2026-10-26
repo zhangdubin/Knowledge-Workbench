@@ -57,13 +57,19 @@ class Settings(BaseSettings):
     # 发版规则（语义化）：主版本.次版本.修订号 ——
     #   修订号：修 bug、小改进；次版本：新功能；主版本：不兼容的库结构/接口变动。
     # 每次发布 CHANGELOG.md 必须同步更新。
-    app_version: str = "0.3.5"
+    app_version: str = "0.4.0"
 
     # ==== 升级更新（依托 GitHub Releases）====
     # update_repo：GitHub 仓库标识「owner/name」。空 = 未配置，
     #   更新检查接口会如实返回 configured=false 并提示怎么配。
     # update_proxy：容器访问 GitHub API 的 http 代理（如 http://10.10.10.252:1086），
     #   直连可达就留空。只影响「检查更新」这一个出站请求。
+    #
+    # 这两项同样可以在「系统设置 → 升级与更新」里直接改，改完立即生效、
+    # 不用重启容器。生效优先级：界面上保存的值 > 环境变量 > 这里的默认值
+    # （机制见 services/settings_store.py）。
+    # 所以这里的同名项**继续保留**：老用户用 .env 配过的照旧有效，
+    # 新用户不必再去动 .env。
     update_repo: str = ""
     update_proxy: str = ""
     # 检查请求的超时秒数。GitHub API 未认证限额 60 次/小时/IP，

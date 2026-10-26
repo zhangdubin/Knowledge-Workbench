@@ -859,6 +859,9 @@ const counts = ref({ totalFiles: 0, images: 0, docs: 0, totalSize: 0, indexed: 0
 // 检索模式：keyword 走文件名/正文关键词，hybrid 关键词+语义融合，semantic 纯语义
 const searchMode = ref('keyword')
 const searchHits = ref(null)     // 混合/语义检索的命中结果（含 score / snippet）
+// 关键词模式走后端的结果：后端会连正文一起搜，
+// 客户端只按文件名/标题过滤是搜不到「正文里有、文件名里没有」的那些文件
+const keywordHits = ref(null)
 const searchInfo = ref(null)
 
 const activeTab = ref('files')
@@ -953,6 +956,9 @@ const previewLoading = ref(false)
 const activeSheet = ref('0')
 // Markdown 预览的视图切换：'render' 排版 | 'source' 源码
 const mdView = ref('render')
+// 预览请求令牌：自增，只有最后一次发起的请求才允许写预览状态
+// （防止慢请求后到，把上一个文件的正文盖到当前文件的标题下）
+let previewSeq = 0
 
 const previewUrl = computed(() => fileUrls.preview(previewFile_.value))
 const downloadUrl = computed(() => fileUrls.download(previewFile_.value))
@@ -963,15 +969,13 @@ const metaDialogTitle = computed(() => metaFile.value
 
 const filteredFiles = computed(() => {
   // 混合/语义模式下，结果集直接来自后端的检索命中（可能包含正文片段）
-  let result = searchHits.value || files.value
+  let result = searchHits.value || keywordHits.value || files.value
 
-  if (searchMode.value === 'keyword' && fileKeyword.value) {
-    const kw = fileKeyword.value.toLowerCase()
-    result = result.filter(f =>
-      (f.filename || '').toLowerCase().includes(kw) ||
-      (f.title || '').toLowerCase().includes(kw)
-    )
-  } else if (searchMode.value !== 'keyword' && fileKeyword.value && !searchHits.value) {
+  // 客户端过滤只在「还没把关键词交给后端」时生效。
+  // 一旦结果来自后端（关键词搜正文 / 混合检索），再按文件名+标题过滤一遍
+  // 会把「正文命中、文件名里没有关键词」的文件重新滤掉 —— 那正是
+  // 搜索框承诺「搜文件名或正文」的意义所在。
+  if (fileKeyword.value && !searchHits.value && !keywordHits.value) {
     const kw = fileKeyword.value.toLowerCase()
     result = result.filter(f =>
       (f.filename || '').toLowerCase().includes(kw) ||
@@ -1043,11 +1047,16 @@ async function purgeFile(row) {
 }
 
 // 筛选条件变化时回到第一页
-watch([fileKeyword, typeFilter, searchMode], () => { page.value = 1 })
+watch([fileKeyword, typeFilter, searchMode], () => {
+  page.value = 1
+  // 关键词被清空 → 关键词检索的结果作废，回到完整列表
+  if (!fileKeyword.value) keywordHits.value = null
+})
 
 async function loadFiles() {
   loading.value = true
   searchHits.value = null
+  keywordHits.value = null
   searchInfo.value = null
   try {
     const d = await Api.listDocuments({ page: 1, page_size: 500 })
@@ -1072,9 +1081,26 @@ async function loadFiles() {
 // 混合 / 语义检索：走服务端 FTS5 + 向量融合
 async function onSearchEnter() {
   const kw = (fileKeyword.value || '').trim()
-  if (searchMode.value === 'keyword' || !kw) {
+  if (!kw) {
     searchHits.value = null
-    searchInfo.value = null
+    keywordHits.value = null
+    return
+  }
+  if (searchMode.value === 'keyword') {
+    // 关键词模式：交给后端，正文（extracted_text）一起搜。
+    // 早先这里是直接 return 的，只剩客户端按文件名+标题过滤 ——
+    // 搜索框写着「搜索文件名或正文...」，正文却根本没参与搜索。
+    searchHits.value = null
+    loading.value = true
+    try {
+      const d = await Api.listDocuments({ page: 1, page_size: 500, keyword: kw })
+      keywordHits.value = d.items || []
+      if (!keywordHits.value.length) ElMessage.info('没有匹配的文件')
+    } catch (e) {
+      keywordHits.value = []
+    } finally {
+      loading.value = false
+    }
     return
   }
   loading.value = true
@@ -1242,6 +1268,12 @@ async function previewFile(row) {
   mdView.value = 'render'
   previewOpen.value = true
 
+  // 并发保护：预览是异步的，先点慢文件 A、马上点快文件 B，
+  // A 的响应后到时会把 A 的正文盖到 B 的标题下 —— 用户看到
+  // 「A 的内容挂在 B 的文件名下」，合同场景下会直接误读。
+  // 自增令牌：只有最后一次发起的请求才允许写状态。
+  const token = ++previewSeq
+
   const mode = previewMode.value
   // Markdown 也要正文：走服务端抽取拿到纯文本，再在前端排版
   const wantsText = mode === 'text' || mode === 'markdown'
@@ -1250,6 +1282,7 @@ async function previewFile(row) {
     previewLoading.value = true
     try {
       const data = await Api.documentContent(row.id)
+      if (token !== previewSeq) return
       if (data && data.ok) {
         previewExtract.value = data
         if (data.kind === 'text') previewText.value = data.text || ''
@@ -1259,22 +1292,28 @@ async function previewFile(row) {
         if (wantsText) {
           try {
             const resp = await fetch(fileUrls.preview(row))
-            previewText.value = await resp.text()
+            const text = await resp.text()
+            if (token !== previewSeq) return
+            previewText.value = text
           } catch (e) {
+            if (token !== previewSeq) return
             previewText.value = ''
           }
         }
       }
     } catch (e) {
+      if (token !== previewSeq) return
       previewError.value = '解析失败：' + (e?.message || e)
       if (wantsText) {
         try {
           const resp = await fetch(fileUrls.preview(row))
-          previewText.value = await resp.text()
+          const text = await resp.text()
+          if (token !== previewSeq) return
+          previewText.value = text
         } catch (err) { /* 忽略 */ }
       }
     } finally {
-      previewLoading.value = false
+      if (token === previewSeq) previewLoading.value = false
     }
   }
 }

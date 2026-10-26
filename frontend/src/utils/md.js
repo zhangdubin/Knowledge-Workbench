@@ -64,11 +64,93 @@ export function miniMarkdown(src) {
 const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 const escAll = s => String(s ?? '').replace(/[&<>"']/g, c => ESC_MAP[c])
 
+/**
+ * HTML 转义（对外公开）
+ *
+ * 任何「原文 → v-html」的路��都必须先过这一道。
+ * 之前只有 md.js 内部用 escAll，SearchView 的关键词高亮就因为找不到
+ * 可用的转义函数而直接把文件名拼进了 v-html —— 存成
+ * `<img src=x onerror=...>` 的文件名在搜索结果里就能执行脚本。
+ * 把它导出，就是为了让「要往 v-html 里塞字符串」这件事不再需要自己实现一遍。
+ */
+export const escapeHtml = escAll
+
 /** 只放行 http/https/mailto/锚点/站内路径，其余（如 javascript:）一律废弃 */
 function safeUrl(u) {
   const s = String(u || '').trim()
+  // 协议相对 URL（//evil.com/x）长得像站内绝对路径，其实会把浏览器
+  // 带到外站 —— 必须在放行 / 之前单独拦掉。
+  if (s.startsWith('//')) return '#'
   if (/^(https?:\/\/|mailto:|#|\/)/i.test(s)) return s
   return '#'
+}
+
+/**
+ * 把扁平的列表行还原成嵌套结构并渲染
+ *
+ * 缩进决定层级，标记符决定这一层渲染成 <ul> 还是 <ol>。
+ * 同一层里标记符换了（先 `-` 后 `1.`）按 Markdown 常规行为开一个新列表。
+ *
+ * 深层列表项会带上 lvl-2 / lvl-3 class：主样式里用它区分项目符号形状
+ * （圆点 / 方块），缩进本身由嵌套结构天然提供。
+ */
+function renderListTree(items) {
+  // ---- 1) 按缩进建树 ----
+  const root = { children: [] }
+  const stack = [{ indent: -1, children: root.children }]
+  for (const it of items) {
+    while (stack.length > 1 && it.indent <= stack[stack.length - 1].indent) stack.pop()
+    const node = { ...it, children: [] }
+    stack[stack.length - 1].children.push(node)
+    stack.push({ indent: it.indent, children: node.children })
+  }
+  // ---- 2) 渲染：同层按标记符分组 ----
+  const renderLevel = (nodes, depth) => {
+    let out = ''
+    let i = 0
+    while (i < nodes.length) {
+      const ordered = nodes[i].ordered
+      const group = []
+      while (i < nodes.length && nodes[i].ordered === ordered) { group.push(nodes[i]); i++ }
+      const tag = ordered ? 'ol' : 'ul'
+      out += `<${tag}>` + group.map(n => {
+        const cls = depth > 0 ? ` class="lvl-${Math.min(depth + 1, 3)}"` : ''
+        return `<li${cls}>${n.text}${n.children.length ? renderLevel(n.children, depth + 1) : ''}</li>`
+      }).join('') + `</${tag}>`
+    }
+    return out
+  }
+  return renderLevel(root.children, 0)
+}
+
+/**
+ * 关键词高亮：返回可直接交给 v-html 的 HTML
+ *
+ * 每一段都先转义再拼标签 —— 高亮的输入是「文件名 / 标题 / 摘要」，
+ * 这些都来自用户上传或录入。早先的实现直接把原文 replace 成
+ * '<mark>$1</mark>'，于是存成 `<img src=x onerror=...>` 的文件名
+ * 一搜就执行脚本（存型 XSS）。
+ *
+ * 用「切分」而不是「replace + 捕获组」，是为了避开 replace 里
+ * $1 / $& 被当成替换符的坑。
+ */
+export function highlightHtml(text, keyword) {
+  const src = String(text ?? '')
+  const needle = String(keyword ?? '').trim()
+  if (!needle) return escapeHtml(src)
+  const lowerSrc = src.toLowerCase()
+  const lowerNeedle = needle.toLowerCase()
+  let out = ''
+  let pos = 0
+  while (pos <= src.length) {
+    const hit = lowerSrc.indexOf(lowerNeedle, pos)
+    if (hit < 0) break
+    out += escapeHtml(src.slice(pos, hit))
+    out += `<mark>${escapeHtml(src.slice(hit, hit + needle.length))}</mark>`
+    pos = hit + needle.length
+  }
+  out += escapeHtml(src.slice(pos))
+  return out
 }
 
 /** 行内：`代码` **粗** *斜* ~~删~~ [文字](链接) */
@@ -271,20 +353,25 @@ export function renderMarkdown(src, opts = {}) {
       continue
     }
 
-    // ---- 列表（缩进 ≥ 2 空格算第二层，用 class 缩进，不折腾嵌套标签）----
+    // ---- 列表（按缩进分层）----
+    //
+    // 早先的实现遇到「标记符类型变了」就 break，把嵌套列表拆成了
+    // 兄弟列表（`-` 里套 `1.` 会断成两个并列列表）。标准 Markdown 允许
+    // 不同层级用不同标记，所以这里改成按**缩进**建树，标记符只决定
+    // 这一层渲染成 <ul> 还是 <ol>。
     if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
-      const ordered = /^\s*\d+[.)]\s/.test(line)
-      const tag = ordered ? 'ol' : 'ul'
-      const items = []
+      const raw = []
       while (i < lines.length) {
         const m = lines[i].match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/)
         if (!m) break
-        if (/^\s*\d+[.)]\s/.test(lines[i]) !== ordered && items.length) break
-        const lv = m[1].replace(/\t/g, '  ').length >= 2 ? 2 : 1
-        items.push(`<li${lv > 1 ? ' class="lvl-2"' : ''}>${inlineMd(m[3])}</li>`)
+        raw.push({
+          indent: m[1].replace(/\t/g, '  ').length,
+          ordered: /^\d+[.)]$/.test(m[2]),
+          text: inlineMd(m[3]),
+        })
         i++
       }
-      out.push(`<${tag}>${items.join('')}</${tag}>`)
+      out.push(renderListTree(raw))
       continue
     }
 

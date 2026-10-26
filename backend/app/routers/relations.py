@@ -7,8 +7,11 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..models import Document
 from ..schemas import RelationDefIn, RelationRecordIn
+from ..services import access
 from ..services import audit as audit_svc
+from ..services import document as document_svc
 from ..services import relation as svc
 from ..services.auth import Principal, current_principal, require_feature
 
@@ -59,7 +62,8 @@ async def pick_options(def_id: int, side: str = Query("target", pattern="^(sourc
                        db: AsyncSession = Depends(get_db),
                        principal: Principal = Depends(current_principal)):
     """「添加关联」弹窗的候选：按该端的 kind 返回记录或文件"""
-    return await svc.pickable(db, def_id=def_id, side=side, keyword=keyword, limit=limit)
+    return await svc.pickable(db, def_id=def_id, side=side, keyword=keyword,
+                              limit=limit, principal=principal)
 
 
 @router.post("/records")
@@ -79,20 +83,39 @@ async def delete_record(record_id: int, db: AsyncSession = Depends(get_db),
     return {"ok": True}
 
 
+async def _need_record(db: AsyncSession, principal: Principal, record_id: int):
+    """取记录的模型并校验读权限（读不到就 403）"""
+    key = await access.record_type_key(db, record_id)
+    if key is None:
+        raise HTTPException(404, "记录不存在")
+    if not access.can_read_record(principal, key):
+        raise HTTPException(403, f"对模型「{key}」没有读权限")
+    return key
+
+
 @router.get("/for-record/{record_id}")
 async def for_record(record_id: int, db: AsyncSession = Depends(get_db),
                      principal: Principal = Depends(current_principal)):
-    return await svc.get_related_records(db, record_id)
+    # 本体先过模型读权限：这条记录读不到，它的关系列表也没必要给
+    await _need_record(db, principal, record_id)
+    return await svc.get_related_records(db, record_id, principal=principal)
 
 
 @router.get("/for-document/{document_id}")
 async def for_document(document_id: int, db: AsyncSession = Depends(get_db),
                        principal: Principal = Depends(current_principal)):
-    return await svc.get_related_documents(db, document_id)
+    # 本体是文件：按文件自己的可读判定（独立文件归「数据中心」页面，
+    # 记录附件归那条记录的模型权限）
+    doc = await db.get(Document, document_id)
+    if not doc or doc.deleted_at is not None:
+        raise HTTPException(404, "文档不存在")
+    await document_svc.ensure_readable(db, principal, doc)
+    return await svc.get_related_documents(db, document_id, principal=principal)
 
 
 @router.get("/files-of-record/{record_id}")
 async def files_of_record(record_id: int, db: AsyncSession = Depends(get_db),
                           principal: Principal = Depends(current_principal)):
     """记录详情里的「挂载文件」：字段上传 + 附件两条通道合并展示"""
+    await _need_record(db, principal, record_id)
     return {"items": await svc.documents_attached_to(db, record_id)}

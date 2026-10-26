@@ -1899,7 +1899,10 @@ html.dark {
 .md-body ol { margin: 4px 0 9px; padding-left: 1.35em; }
 .md-body li { margin: 3px 0; }
 .md-body li::marker { color: var(--text-tertiary); }
-.md-body li.lvl-2 { margin-left: 1.15em; list-style: circle; }
+/* 嵌套列表现在是真的嵌套（<ul> 在 <li> 里），缩进由嵌套本身提供，
+   这里只用来区分项目符号形状。再加 margin-left 会把层级缩进叠两遍。 */
+.md-body li.lvl-2 { list-style: circle; }
+.md-body li.lvl-3 { list-style: square; }
 .md-body strong { font-weight: 600; }
 .md-body del { color: var(--text-tertiary); }
 .md-body em { font-style: italic; }
@@ -2124,4 +2127,40 @@ html.dark {
 .agent-drawer { max-width: 100vw; }
 @media (max-width: 640px) {
   .agent-drawer { width: 100% !important; }
+}
+
+/* ============ 笔记正文（.note-body）============
+   笔记正文是 v-html 渲染的（HTML 来自 utils/notes.js 的 renderNoteHtml），
+   v-html 出来的节点不带 scoped 属性，所以这里的样式必须是全局的。
+   排版底座复用 .md-body / .md-body-doc（标题层级、行距、表格、代码块），
+   这里只补笔记特有的东西：
+     - 双链 [[...]] 的样子（Obsidian 里双链是「带底色的词」）
+     - 正文限宽，长行不至于在宽屏上拉得太散
+   放在文件末尾是为了压过前面 .md-body-doc 的 max-width（同权重，后者胜）。 */
+.note-body {
+  max-width: 78ch;
+  margin: 0 auto;
+}
+
+/* 双链：不可下划线（Obsidian 的双链不是普通链接），靠底色 + 内描边区分 */
+.note-body .note-wikilink {
+  color: var(--primary);
+  text-decoration: none;
+  background: var(--primary-bg);
+  box-shadow: inset 0 0 0 1px var(--primary-ring);
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  font-weight: 500;
+  cursor: pointer;
+}
+.note-body .note-wikilink:hover {
+  background: var(--primary-bg-strong);
+  box-shadow: inset 0 0 0 1px var(--primary-light);
+}
+
+/* 未解析的双链（还没有对应笔记）：弱化一点，别抢正文的注意力 */
+.note-body .note-wikilink.is-missing {
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  box-shadow: inset 0 0 0 1px var(--border);
 }

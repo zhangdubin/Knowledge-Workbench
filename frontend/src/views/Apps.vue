@@ -74,7 +74,7 @@
     <el-dialog
       v-model="dialogOpen"
       :title="editingApp ? `编辑应用 · ${editingApp.name}` : '新建应用'"
-      width="720px"
+      :width="editingApp ? '720px' : '860px'"
       destroy-on-close
       class="kb-dialog"
       :close-on-click-modal="false"
@@ -82,18 +82,117 @@
       <div class="dialog-summary">
         <el-icon><Grid /></el-icon>
         <div>
-          应用是数据模型的分组容器。选择模板后，系统会自动生成该业务场景所需的
-          <b>数据模型、字段与关联关系</b>，创建完即可直接录数据。
+          应用是数据模型的分组容器。选模板后系统会自动生成该业务场景所需的
+          <b>数据模型、字段与关联关系</b>；也可以用一句话让 AI 先出草稿，确认后再建。
+        </div>
+      </div>
+
+      <!-- 新建入口切换：AI 生成 / 选模板（编辑时不需要） -->
+      <div v-if="!editingApp && canAi" class="entry-switch">
+        <el-radio-group v-model="createMode" size="small">
+          <el-radio-button label="ai">AI 生成</el-radio-button>
+          <el-radio-button label="template">选模板</el-radio-button>
+        </el-radio-group>
+      </div>
+
+      <!-- 自然语言入口（仅新建时） -->
+      <div v-if="!editingApp && canAi && createMode === 'ai'" class="ai-section">
+        <div class="ai-input-row">
+          <el-input
+            v-model="aiPrompt"
+            type="textarea"
+            :rows="2"
+            :disabled="aiLoading"
+            placeholder="用一句话描述你要的应用，AI 帮你生成数据模型"
+            @keyup.ctrl.enter="generateDraft"
+          />
+          <el-button type="primary" :loading="aiLoading" @click="generateDraft">
+            生成
+          </el-button>
+        </div>
+
+        <!-- AI 没配 / 解析失败等提示：说人话，不甩原始异常 -->
+        <el-alert
+          v-if="aiNotice"
+          :title="aiNotice"
+          type="info"
+          :closable="false"
+          show-icon
+          class="ai-alert"
+        />
+        <el-alert
+          v-if="aiWarnings.length"
+          :title="`已自动修正 ${aiWarnings.length} 处不合法的地方：${aiWarnings.slice(0, 2).join('；')}`"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="ai-alert"
+        />
+
+        <!-- 审阅步骤：模型 / 字段 / 关联清单 -->
+        <div v-if="aiDraft" class="ai-review">
+          <div class="ai-review-head">
+            <span>
+              AI 生成草稿：{{ aiDraft.types.length }} 个模型 ·
+              {{ draftFieldCount }} 个字段 · {{ aiDraft.relations.length }} 条关联
+              <span class="form-hint">应用名称与 Key 在下方修改</span>
+            </span>
+            <el-button text size="small" @click="aiDraft = null">放弃草稿</el-button>
+          </div>
+
+          <div v-for="t in aiDraft.types" :key="t.key" class="draft-type">
+            <div class="draft-type-head">
+              <el-input v-model="t.name" size="small" class="draft-type-name" />
+              <span class="draft-type-key">{{ t.key }}</span>
+              <el-button
+                type="danger" text size="small" @click="removeType(t)"
+              >删除模型</el-button>
+            </div>
+            <div class="draft-fields">
+              <div
+                v-for="(f, fi) in t.fields" :key="`${t.key}_${fi}`" class="draft-field"
+              >
+                <el-input v-model="f.name" size="small" placeholder="字段名" class="draft-f-name" />
+                <el-select v-model="f.type" size="small" class="draft-f-type">
+                  <el-option
+                    v-for="ft in FIELD_TYPE_OPTIONS" :key="ft" :label="ft" :value="ft"
+                  />
+                </el-select>
+                <el-input
+                  v-if="f.type === 'select' || f.type === 'multiselect'"
+                  v-model="f._choices" size="small" placeholder="选项，逗号分隔"
+                  class="draft-f-choices" @change="syncChoices(f)"
+                />
+                <el-checkbox v-model="f.required" size="small">必填</el-checkbox>
+                <el-button
+                  type="danger" text size="small" @click="t.fields.splice(fi, 1)"
+                >删</el-button>
+              </div>
+              <el-button text size="small" @click="addField(t)">+ 添加字段</el-button>
+            </div>
+          </div>
+
+          <div v-if="aiDraft.relations.length" class="draft-relations">
+            <span class="draft-rel-title">关联</span>
+            <el-tag
+              v-for="r in aiDraft.relations" :key="r.key"
+              closable size="small" class="draft-rel-tag"
+              @close="removeRelation(r)"
+            >{{ r.name }}</el-tag>
+          </div>
         </div>
       </div>
 
       <!-- 模板选择（仅新建时） -->
-      <div v-if="!editingApp" class="tpl-section">
+      <div v-if="!editingApp && (createMode === 'template' || !canAi)" class="tpl-section">
         <div class="form-section-title">
           选择模板
           <span v-if="tplMeta" class="tpl-meta">
             将生成 {{ tplMeta.type_count }} 个模型 · {{ tplMeta.field_count }} 个字段 · {{ tplMeta.relation_count }} 条关联
           </span>
+        </div>
+        <div v-if="!canAi" class="form-hint" style="margin-bottom:8px">
+          当前账号没有「AI」功能位，不能用一句话生成模型，可直接选模板创建
         </div>
         <div class="tpl-grid">
           <div
@@ -158,7 +257,7 @@
       <template #footer>
         <el-button @click="dialogOpen = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">
-          {{ editingApp ? '保存修改' : (form.template === 'blank' ? '创建应用' : '按模板创建') }}
+          {{ saveLabel }}
         </el-button>
       </template>
     </el-dialog>
@@ -172,9 +271,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Grid, Plus, Compass } from '@element-plus/icons-vue'
 import { Api } from '../api'
 import { appIcon, APP_ICON_CHOICES } from '../utils/icons'
+import { useAuthStore } from '../stores/auth'
 import PageTitle from '../components/PageTitle.vue'
 
 const router = useRouter()
+const auth = useAuthStore()
 const apps = ref([])
 const templates = ref([])
 const dialogOpen = ref(false)
@@ -184,11 +285,39 @@ const loading = ref(true)
 
 const ICON_CHOICES = APP_ICON_CHOICES
 
+// AI 相关状态：草稿只存在前端，确认之前一个字都不落库
+const createMode = ref('ai')
+const aiPrompt = ref('')
+const aiLoading = ref(false)
+const aiNotice = ref('')
+const aiWarnings = ref([])
+const aiDraft = ref(null)
+
+// 字段类型可选集：与后端 model_json.FIELD_TYPES 一致
+const FIELD_TYPE_OPTIONS = [
+  'text', 'textarea', 'richtext', 'number', 'date', 'datetime',
+  'select', 'multiselect', 'boolean', 'file', 'image', 'reference',
+]
+
+// 「ai」是独立授权位：没权限的人直接看不到 AI 入口，省得点了报 403
+const canAi = computed(() => auth.can('ai'))
+
 const form = reactive({
   key: '', name: '', icon: 'Grid', description: '', order: 0, template: 'blank',
 })
 
 const tplMeta = computed(() => templates.value.find(t => t.key === form.template) || null)
+
+const draftFieldCount = computed(() =>
+  (aiDraft.value?.types || []).reduce((n, t) => n + (t.fields?.length || 0), 0))
+
+// 按钮文案跟着当前入口走，别让用户以为点的是别的流程
+const saveLabel = computed(() => {
+  if (editingApp.value) return '保存修改'
+  if (createMode.value === 'ai' && aiDraft.value?.types?.length) return '按草稿创建'
+  if (form.template && form.template !== 'blank') return '按模板创建'
+  return '创建应用'
+})
 
 // 若 form.icon 是合法图标名就用它，否则按 key 推导
 function resolveIcon(app) {
@@ -221,17 +350,125 @@ function openCreate() {
     key: '', name: '', icon: 'Grid', description: '', order: apps.value.length,
     template: 'blank',
   })
+  // 每次新建都从干净状态开始，别把上一次的草稿带过来
+  createMode.value = canAi.value ? 'ai' : 'template'
+  aiPrompt.value = ''
+  aiNotice.value = ''
+  aiWarnings.value = []
+  aiDraft.value = null
   dialogOpen.value = true
 }
 
 // 选中模板时，把模板风格带进表单，减少输入
 function pickTemplate(t) {
   form.template = t.key
+  // 模板与 AI 草稿二选一：选了模板就丢掉草稿，免得保存时走错分支
+  aiDraft.value = null
   if (t.key === 'blank') return
   if (!form.name || templates.value.some(x => x.name === form.name)) form.name = t.name
   form.icon = ICON_CHOICES.includes(t.icon) ? t.icon : form.icon
   if (!form.description) form.description = t.description
   if (!form.key) form.key = t.key
+}
+
+// ============ AI 生成草稿 ============
+
+// 后端返回的草稿转成前端可编辑结构：
+// 选项数组在输入框里不好编辑，补一个 _choices 字符串字段来承载
+function prepareDraft(r) {
+  const types = (r.types || []).map(t => ({
+    key: t.key,
+    name: t.name,
+    icon: t.icon,
+    description: t.description || '',
+    fields: (t.fields || []).map(f => ({
+      key: f.key,
+      name: f.name,
+      type: f.type,
+      required: !!f.required,
+      options: { ...(f.options || {}) },
+      help_text: f.help_text || '',
+      _choices: ((f.options || {}).choices || []).join('、'),
+    })),
+  }))
+  return {
+    key: r.key || '',
+    name: r.name || '',
+    icon: r.icon || 'Grid',
+    description: r.description || '',
+    types,
+    relations: (r.relations || []).map(x => ({ ...x })),
+  }
+}
+
+async function generateDraft() {
+  const p = (aiPrompt.value || '').trim()
+  if (!p) {
+    ElMessage.warning('请先描述你要的应用')
+    return
+  }
+  aiLoading.value = true
+  aiNotice.value = ''
+  aiWarnings.value = []
+  try {
+    const r = await Api.createAppFromPrompt(p)
+    aiDraft.value = prepareDraft(r)
+    aiNotice.value = r.notice || ''
+    aiWarnings.value = r.warnings || []
+    // 草稿带出应用名 / key / 图标 / 说明，但都还能改
+    if (r.name) form.name = r.name
+    if (!form.key && r.key) form.key = r.key
+    if (ICON_CHOICES.includes(r.icon)) form.icon = r.icon
+    if (!form.description && r.description) form.description = r.description
+    form.template = 'blank'          // 草稿与模板二选一
+    if (!aiDraft.value.types.length) {
+      ElMessage.warning('这次没生成出可用的模型，换个说法再试一次，或改用「选模板」')
+    } else {
+      ElMessage.success(
+        `已生成 ${aiDraft.value.types.length} 个模型，确认无误后点「${saveLabel.value}」`
+      )
+    }
+  } catch (e) {
+    // 不把原始异常甩给用户：给一句能懂的话，并指个替代方案
+    const detail = e?.response?.data?.detail
+    aiNotice.value = detail
+      ? `生成失败：${detail}`
+      : '生成失败：AI 服务暂时不可用，可改用「选模板」创建，或稍后再试。'
+  } finally {
+    aiLoading.value = false
+  }
+}
+
+function removeType(t) {
+  if (!aiDraft.value) return
+  // 顺手去掉指向这个模型的关联，否则界面上的关联是死的
+  aiDraft.value.types = aiDraft.value.types.filter(x => x.key !== t.key)
+  aiDraft.value.relations = aiDraft.value.relations.filter(
+    r => r.source !== t.key && r.target !== t.key
+  )
+}
+
+function removeRelation(r) {
+  if (!aiDraft.value) return
+  aiDraft.value.relations = aiDraft.value.relations.filter(x => x !== r)
+}
+
+function addField(t) {
+  const used = new Set((t.fields || []).map(f => f.key))
+  let i = 1
+  while (used.has(`field_${i}`)) i++
+  t.fields.push({
+    key: `field_${i}`, name: '新字段', type: 'text', required: false,
+    options: {}, help_text: '', _choices: '',
+  })
+}
+
+function syncChoices(f) {
+  f.options = f.options || {}
+  f.options.choices = (f._choices || '')
+    .split(/[,，、]/)
+    .map(s => s.trim())
+    .filter(Boolean)
 }
 
 function openEdit(app) {
@@ -260,6 +497,11 @@ async function save() {
     ElMessage.warning('Key 只能用英文字母、数字、下划线，且以字母开头')
     return
   }
+  // Key 全局唯一：先在前端拦一道，别让用户白等一次请求
+  if (!editingApp.value && apps.value.some(a => a.key === form.key.trim())) {
+    ElMessage.warning(`应用 Key「${form.key.trim()}」已被占用，请换一个`)
+    return
+  }
   saving.value = true
   try {
     if (editingApp.value) {
@@ -272,6 +514,42 @@ async function save() {
       ElMessage.success('已保存')
       dialogOpen.value = false
       await load()
+    } else if (createMode.value === 'ai' && aiDraft.value?.types?.length) {
+      // 按草稿创建：规格与内置模板共用同一段落库逻辑
+      const r = await Api.createAppFromSpec({
+        key: form.key.trim(),
+        name: form.name.trim(),
+        icon: form.icon,
+        description: form.description,
+        order: form.order,
+        spec: {
+          key: form.key.trim(),
+          name: form.name.trim(),
+          icon: form.icon,
+          description: form.description,
+          types: aiDraft.value.types.map(t => ({
+            key: t.key,
+            name: t.name,
+            icon: t.icon,
+            description: t.description,
+            fields: t.fields.map(f => ({
+              key: f.key,
+              name: f.name,
+              type: f.type,
+              required: f.required,
+              options: f.options,
+              help_text: f.help_text,
+            })),
+          })),
+          relations: aiDraft.value.relations,
+        },
+      })
+      ElMessage.success(
+        `已按 AI 草稿创建：${r.types?.length || 0} 个模型 · ${r.relations?.length || 0} 条关联`
+      )
+      dialogOpen.value = false
+      await load()
+      router.push(`/apps/${r.app.key}`)
     } else if (form.template && form.template !== 'blank') {
       const r = await Api.createAppFromTemplate({ ...form })
       ElMessage.success(
@@ -457,6 +735,87 @@ onMounted(() => {
 }
 .tpl-tags { display: flex; flex-wrap: wrap; gap: 3px; }
 .tpl-tags :deep(.el-tag) { font-size: 10px; height: 18px; padding: 0 5px; }
+
+/* ============ AI 生成入口 ============ */
+/* 入口切换：AI 生成 / 选模板 */
+.entry-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.ai-section { margin-bottom: var(--space-5); }
+.ai-input-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.ai-input-row .el-textarea { flex: 1; }
+.ai-alert { margin-top: var(--space-3); }
+
+/* 审阅区 */
+.ai-review {
+  margin-top: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  padding: var(--space-3);
+  max-height: 360px;
+  overflow-y: auto;
+}
+.ai-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin-bottom: var(--space-3);
+}
+.ai-review-head .form-hint { margin-left: 8px; font-weight: 400; }
+
+.draft-type {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.draft-type-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.draft-type-name { max-width: 220px; }
+.draft-type-key {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.draft-fields { display: flex; flex-direction: column; gap: 6px; }
+.draft-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.draft-f-name { width: 150px; }
+.draft-f-type { width: 116px; }
+.draft-f-choices { flex: 1; min-width: 120px; }
+
+.draft-relations {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--border);
+}
+.draft-rel-title {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
 
 /* 图标选择器 */
 .icon-picker {

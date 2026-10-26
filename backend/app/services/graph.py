@@ -19,6 +19,7 @@ from ..models import (
     FieldDefinition, RelationDef, RelationRecord,
 )
 from .relation import label_of_document, label_of_record
+from . import access
 
 DEFAULT_NODE_LIMIT = 400
 
@@ -64,8 +65,13 @@ def _doc_node(doc: Document) -> dict:
 
 
 async def _record_ids_of_type(db: AsyncSession, type_id: int, limit: int) -> list[EntityRecord]:
+    # 回收站里的记录不该出现在图谱里：它已经被「删除」了，
+    # 在图上还能看到标签等于删除没生效
     return (await db.execute(
-        select(EntityRecord).where(EntityRecord.entity_type_id == type_id).limit(limit)
+        select(EntityRecord).where(
+            EntityRecord.entity_type_id == type_id,
+            EntityRecord.deleted_at.is_(None),
+        ).limit(limit)
     )).scalars().all()
 
 
@@ -144,7 +150,10 @@ async def _add_relation_edges(db: AsyncSession, col: _Collector,
     ets = {t.id: t for t in (await db.execute(select(EntityType))).scalars().all()}
     if rec_ids:
         for rec in (await db.execute(
-            select(EntityRecord).where(EntityRecord.id.in_(rec_ids))
+            select(EntityRecord).where(
+                EntityRecord.id.in_(rec_ids),
+                EntityRecord.deleted_at.is_(None),
+            )
         )).scalars().all():
             col.node(_record_node(rec, ets.get(rec.entity_type_id)))
     docs = await _load_documents(db, doc_ids)
@@ -190,7 +199,10 @@ async def _add_reference_edges(db: AsyncSession, col: _Collector,
 
     ets = {t.id: t for t in (await db.execute(select(EntityType))).scalars().all()}
     for rec in (await db.execute(
-        select(EntityRecord).where(EntityRecord.id.in_(wanted))
+        select(EntityRecord).where(
+            EntityRecord.id.in_(wanted),
+            EntityRecord.deleted_at.is_(None),
+        )
     )).scalars().all():
         col.node(_record_node(rec, ets.get(rec.entity_type_id)))
 
@@ -232,7 +244,43 @@ async def _add_attached_files(db: AsyncSession, col: _Collector,
 
 # ---------- 对外：三种视图 ----------
 
-async def get_record_graph(db: AsyncSession, record_id: int, depth: int = 2) -> dict:
+async def filter_graph_by_access(db: AsyncSession, principal, graph: dict) -> dict:
+    """把读不到的节点从图里摘掉，连同指向它们的边
+
+    为什么放在最后统一做：图是绕着关系展开的，边会在展开过程中
+    把「对端」的记录与文件也带进来。若在每个展开分支里各判一次，
+    必然有分支漏掉 —— 而漏掉的那一支就是一次泄露
+    （早先全局图谱只挡了文件节点，记录节点从来没管过）。
+
+    判定规则与文件/记录接口完全一致（services/access.py）：
+      - 记录节点 → 该模型的读权限
+      - 文件节点 → 该文件自己的可读判定（独立文件归「数据中心」页面，
+        记录附件归记录的模型权限）
+    """
+    if principal is None or principal.is_super:
+        return graph
+    nodes = graph.get("nodes") or []
+    doc_ids = [n["ref_id"] for n in nodes if n.get("kind") == "document"]
+    allowed_docs = set(await access.filter_readable_documents(db, principal, doc_ids))
+
+    kept: list[dict] = []
+    for n in nodes:
+        if n.get("kind") == "record":
+            if not access.can_read_record(principal, n.get("type")):
+                continue
+        elif n.get("kind") == "document":
+            if n.get("ref_id") not in allowed_docs:
+                continue
+        kept.append(n)
+
+    ids = {n["id"] for n in kept}
+    edges = [e for e in (graph.get("edges") or [])
+             if e.get("source") in ids and e.get("target") in ids]
+    return {**graph, "nodes": kept, "edges": edges}
+
+
+async def get_record_graph(db: AsyncSession, record_id: int, depth: int = 2,
+                           principal=None) -> dict:
     """以一条记录为中心展开（关系实例 + 外键 + 挂载文件），最多 depth 层"""
     col = _Collector()
     center = await db.get(EntityRecord, record_id)
@@ -251,7 +299,10 @@ async def get_record_graph(db: AsyncSession, record_id: int, depth: int = 2) -> 
         attached_docs = await _add_attached_files(db, col, frontier)
 
         recs = (await db.execute(
-            select(EntityRecord).where(EntityRecord.id.in_(frontier))
+            select(EntityRecord).where(
+                EntityRecord.id.in_(frontier),
+                EntityRecord.deleted_at.is_(None),
+            )
         )).scalars().all()
         next_ids |= await _add_reference_edges(db, col, recs)
 
@@ -263,10 +314,11 @@ async def get_record_graph(db: AsyncSession, record_id: int, depth: int = 2) -> 
         next_ids -= frontier
         frontier = next_ids
 
-    return col.out()
+    return await filter_graph_by_access(db, principal, col.out())
 
 
-async def get_document_graph(db: AsyncSession, document_id: int, depth: int = 1) -> dict:
+async def get_document_graph(db: AsyncSession, document_id: int, depth: int = 1,
+                             principal=None) -> dict:
     """以文件为中心：它关联的记录/文件，以及这些记录挂着的其它文件"""
     col = _Collector()
     doc = await db.get(Document, document_id)
@@ -286,7 +338,10 @@ async def get_document_graph(db: AsyncSession, document_id: int, depth: int = 1)
     if linked_records:
         ets = {t.id: t for t in (await db.execute(select(EntityType))).scalars().all()}
         for rec in (await db.execute(
-            select(EntityRecord).where(EntityRecord.id.in_(linked_records))
+            select(EntityRecord).where(
+                EntityRecord.id.in_(linked_records),
+                EntityRecord.deleted_at.is_(None),
+            )
         )).scalars().all():
             col.node(_record_node(rec, ets.get(rec.entity_type_id)))
         for l in links:
@@ -303,10 +358,11 @@ async def get_document_graph(db: AsyncSession, document_id: int, depth: int = 1)
             more2 = await _relation_rows_of(db, document_ids=nxt)
             await _add_relation_edges(db, col, more2)
 
-    return col.out()
+    return await filter_graph_by_access(db, principal, col.out())
 
 
-async def get_type_graph(db: AsyncSession, type_id: int, limit: int = 200) -> dict:
+async def get_type_graph(db: AsyncSession, type_id: int, limit: int = 200,
+                         principal=None) -> dict:
     """以一个实体类型为范围：该类型的记录 + 它们的关系（含文件端）"""
     col = _Collector(limit=max(limit, 50))
     et = await db.get(EntityType, type_id)
@@ -322,11 +378,12 @@ async def get_type_graph(db: AsyncSession, type_id: int, limit: int = 200) -> di
     await _add_relation_edges(db, col, rows)
     await _add_reference_edges(db, col, records)
     await _add_attached_files(db, col, rec_ids)
-    return col.out()
+    return await filter_graph_by_access(db, principal, col.out())
 
 
 async def get_global_graph(db: AsyncSession, limit: int = 300,
-                           include_documents: bool = True) -> dict:
+                           include_documents: bool = True,
+                           principal=None) -> dict:
     """全局：所有业务模型的记录 + 关系 + 文件
 
     这是「一屏看清业务网」的视图，节点上限卡在 limit。
@@ -371,7 +428,10 @@ async def get_global_graph(db: AsyncSession, limit: int = 300,
         col.node(_doc_node(doc))
     if want_recs:
         for rec in (await db.execute(
-            select(EntityRecord).where(EntityRecord.id.in_(want_recs))
+            select(EntityRecord).where(
+                EntityRecord.id.in_(want_recs),
+                EntityRecord.deleted_at.is_(None),
+            )
         )).scalars().all():
             # 对端也不应该是笔记：业务关联的「另一端」只能是业务记录或文件
             if note_type_id is not None and rec.entity_type_id == note_type_id:
@@ -386,10 +446,11 @@ async def get_global_graph(db: AsyncSession, limit: int = 300,
     await _add_reference_edges(db, col, all_recs)
     if include_documents:
         await _add_attached_files(db, col, rec_ids)
-    return col.out()
+    return await filter_graph_by_access(db, principal, col.out())
 
 
-async def search_nodes(db: AsyncSession, keyword: str, limit: int = 20) -> dict:
+async def search_nodes(db: AsyncSession, keyword: str, limit: int = 20,
+                       principal=None) -> dict:
     """图谱里的「搜索定位」：按名称找记录与文件，返回节点 id 供前端聚焦"""
     kw = (keyword or "").strip()
     if not kw:
@@ -399,10 +460,16 @@ async def search_nodes(db: AsyncSession, keyword: str, limit: int = 20) -> dict:
     ets = {t.id: t for t in (await db.execute(select(EntityType))).scalars().all()}
 
     recs = (await db.execute(
-        select(EntityRecord).where(EntityRecord.search_text.like(like)).limit(limit)
+        select(EntityRecord).where(
+            EntityRecord.search_text.like(like),
+            EntityRecord.deleted_at.is_(None),
+        ).limit(limit)
     )).scalars().all()
     for r in recs:
         n = _record_node(r, ets.get(r.entity_type_id))
+        # 记录节点按模型读权限筛
+        if principal is not None and not access.can_read_record(principal, n.get("type")):
+            continue
         out.append({"id": n["id"], "kind": "record", "ref_id": r.id, "type_id": n["type_id"],
                     "label": n["label"], "type_name": n["type_name"], "icon": n["icon"]})
 
@@ -412,6 +479,13 @@ async def search_nodes(db: AsyncSession, keyword: str, limit: int = 20) -> dict:
             Document.title.like(like) | Document.filename.like(like),
         ).limit(limit)
     )).scalars().all()
+    # 文件节点按文件自己的可读判定筛（独立文件归「数据中心」页面，
+    # 记录附件归记录的模型权限）—— 只看 has_page("library") 会把
+    # 「挂在你读不到的记录上」的文件放出来。
+    if principal is not None:
+        allowed = set(await access.filter_readable_documents(
+            db, principal, [d.id for d in docs]))
+        docs = [d for d in docs if d.id in allowed]
     for d in docs:
         n = _doc_node(d)
         out.append({"id": n["id"], "kind": "document", "ref_id": d.id, "type_id": None,
@@ -419,14 +493,26 @@ async def search_nodes(db: AsyncSession, keyword: str, limit: int = 20) -> dict:
     return {"items": out[:limit * 2]}
 
 
-async def get_stats(db: AsyncSession) -> dict:
-    """全局统计：实体数、记录数、关联数、文件数（均不含回收站）"""
+async def get_stats(db: AsyncSession, principal=None) -> dict:
+    """全局统计：实体数、记录数、关联数、文件数（均不含回收站）
+
+    计数是对全库的汇总，看一眼知道库里有多少东西不构成泄露；
+    但「最近更新」那一段是**具体记录的完整内容**，必须按模型权限裁 ——
+    否则只给知识库的人打开首页就能看到合同的金额与客户。
+    """
+    read_keys = access.readable_model_keys(principal) if principal is not None else None
+
     type_count = (await db.execute(
         select(func.count(EntityType.id)).where(EntityType.deleted_at.is_(None))
     )).scalar() or 0
-    rec_count = (await db.execute(
-        select(func.count(EntityRecord.id)).where(EntityRecord.deleted_at.is_(None))
-    )).scalar() or 0
+    rec_q = select(func.count(EntityRecord.id)).where(EntityRecord.deleted_at.is_(None))
+    if read_keys is not None:
+        rec_q = rec_q.where(
+            EntityRecord.entity_type_id.in_(
+                select(EntityType.id).where(EntityType.key.in_(read_keys))
+            )
+        )
+    rec_count = (await db.execute(rec_q)).scalar() or 0
     rel_count = (await db.execute(select(func.count(RelationRecord.id)))).scalar() or 0
     doc_count = (await db.execute(
         select(func.count(Document.id)).where(Document.deleted_at.is_(None))
@@ -453,6 +539,8 @@ async def get_stats(db: AsyncSession) -> dict:
         .order_by(EntityRecord.updated_at.desc())
         .limit(10)
     )
+    if read_keys is not None:
+        recent_q = recent_q.where(EntityType.key.in_(read_keys))
     recent = []
     for r, t in (await db.execute(recent_q)).all():
         recent.append({

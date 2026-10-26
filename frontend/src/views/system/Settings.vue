@@ -2,7 +2,7 @@
   <div class="page">
     <PageTitle
       title="系统设置"
-      subtitle="这里的改动立即生效，不需要重启容器 —— 备份目录、保留份数、初始管理员口令"
+      subtitle="这里的改动立即生效，不需要重启容器 —— 备份目录、保留份数、初始管理员口令、升级仓库"
       icon-key="Setting"
     >
       <el-button :loading="loading" @click="load">
@@ -48,7 +48,7 @@
       <div class="card-title">
         <span class="card-title-text">
           <el-icon class="title-ico">
-            <component :is="g.name === '安全' ? 'Lock' : 'Coin'" />
+            <component :is="groupIcon(g.name)" />
           </el-icon>{{ g.name }}
         </span>
       </div>
@@ -203,6 +203,22 @@
             <span class="dim">至少 {{ it.min_len }} 位</span>
           </div>
 
+          <!-- 升级仓库 / 出站代理：带占位提示 + 行内格式校验。
+               这类值有明确格式，等用户点「保存」再由后端报错太晚了 ——
+               当场提示一次，省掉一轮来回。 -->
+          <div v-else-if="it.kind === 'repo' || it.kind === 'proxy'" class="text-row">
+            <el-input
+              v-model="draft[it.key]"
+              :placeholder="it.placeholder || ''"
+              style="max-width: 420px"
+              @blur="markTouched(it.key)"
+            />
+            <span v-if="fieldError(it)" class="field-err">
+              <el-icon><WarningFilled /></el-icon>{{ fieldError(it) }}
+            </span>
+            <span v-else class="dim">{{ kindHint(it) }}</span>
+          </div>
+
           <el-input v-else v-model="draft[it.key]" style="max-width: 360px" />
         </div>
 
@@ -251,19 +267,43 @@
         </div>
       </div>
 
-      <!-- 未配置 / 出错：说人话，给出可操作的下一步 -->
-      <el-alert
-        v-if="updateInfo && !updateInfo.ok"
-        :title="updateInfo.error || '检查失败'"
-        type="info" :closable="false" class="update-alert"
-      />
+      <!-- 先说清「在查哪个仓库、这个值来自哪一层」：
+           否则出了错也不知道该去核对哪里，配置了却没生效更是无从查起 -->
+      <div class="about-rows">
+        <div class="about-row">
+          <span class="about-label">升级仓库</span>
+          <span class="about-value">
+            <span class="mono">{{ effectiveRepo || '未配置' }}</span>
+            <el-tag size="small" :type="srcTagType(repoSource)" effect="light" class="upd-tag">
+              来源：{{ srcLabel(repoSource) }}
+            </el-tag>
+          </span>
+        </div>
+        <div class="about-row">
+          <span class="about-label">出站代理</span>
+          <span class="about-value dim">
+            {{ proxyItem?.value ? '已配置' : '未配置（直连）' }}
+          </span>
+        </div>
+        <div class="about-row">
+          <span class="about-label">当前版本</span>
+          <span class="about-value mono">v{{ updateInfo?.current || auth.sysVersion || '—' }}</span>
+        </div>
+      </div>
 
-      <template v-else-if="updateInfo">
+      <!-- 未配置 / 出错：说人话，给出可操作的下一步。
+           按后端返回的 status 分类，而不是去猜 error 文案。 -->
+      <el-alert
+        v-if="updateAlert"
+        :title="updateAlert.title"
+        :type="updateAlert.type"
+        :closable="false" show-icon class="update-alert"
+      >
+        <div v-if="updateAlert.hint" class="update-hint">{{ updateAlert.hint }}</div>
+      </el-alert>
+
+      <template v-if="updateInfo && updateInfo.ok">
         <div class="about-rows">
-          <div class="about-row">
-            <span class="about-label">当前版本</span>
-            <span class="about-value mono">v{{ updateInfo.current }}</span>
-          </div>
           <div class="about-row">
             <span class="about-label">最新版本</span>
             <span class="about-value mono">
@@ -271,7 +311,7 @@
               <el-tag v-if="updateInfo.has_update" type="danger" size="small" effect="dark" class="upd-tag">
                 有新版本
               </el-tag>
-              <el-tag v-else-if="updateInfo.ok" type="success" size="small" class="upd-tag">
+              <el-tag v-else type="success" size="small" class="upd-tag">
                 已是最新
               </el-tag>
             </span>
@@ -306,11 +346,7 @@
         </div>
       </template>
 
-      <div v-else class="about-rows">
-        <div class="about-row">
-          <span class="about-label">当前版本</span>
-          <span class="about-value mono">v{{ auth.sysVersion || '—' }}</span>
-        </div>
+      <div v-else-if="!updateInfo" class="about-rows">
         <div class="about-row">
           <span class="about-label">版本说明</span>
           <span class="about-value dim">点「检查更新」对比 GitHub 上的最新 Release</span>
@@ -368,6 +404,54 @@ async function checkUpdate(refresh = false) {
   }
 }
 
+// 检查结果按 status 分类渲染，而不是去解析 error 文案 ——
+// 后端已经把人话写好了，这里只负责挑个合适的样式 + 补一句「下一步怎么办」
+const UPDATE_ALERT_META = {
+  not_configured: {
+    type: 'warning',
+    hint: '到上面的「升级与更新」分组里填「owner/name」，保存后立即生效，不用重启容器。',
+  },
+  invalid_config: {
+    type: 'error',
+    hint: '到「升级与更新」分组里改正后重新保存。',
+  },
+  repo_not_found: {
+    type: 'warning',
+    hint: '核对仓库名是否拼写正确；私有仓库目前不支持（这里不带 GitHub Token）。',
+  },
+  no_release: {
+    type: 'warning',
+    hint: '在该 GitHub 仓库上发布一个 Release 之后再检查。',
+  },
+  access_denied: {
+    type: 'warning',
+    hint: 'GitHub 未认证限额是 60 次/小时/IP，等一会儿再试。',
+  },
+  timeout: {
+    type: 'warning',
+    hint: '容器到 api.github.com 的链路不通：检查出网，或在「升级与更新」里配置出站代理。',
+  },
+  network_error: {
+    type: 'error',
+    hint: '容器连不上 api.github.com：检查 DNS/防火墙，或在「升级与更新」里配置出站代理。',
+  },
+  proxy_error: {
+    type: 'error',
+    hint: '配置的代理连不上：核对「出站代理」里的地址与端口，或清空改成直连。',
+  },
+}
+
+const updateAlert = computed(() => {
+  const info = updateInfo.value
+  if (!info || info.ok) return null
+  const meta = UPDATE_ALERT_META[info.status] || { type: 'error', hint: '' }
+  return {
+    type: meta.type,
+    title: info.error || '检查失败',
+    hint: meta.hint,
+  }
+})
+
 function copyUpgradeCmd() {
   navigator.clipboard?.writeText('./scripts/upgrade.sh')
   ElMessage.success('已复制：./scripts/upgrade.sh')
@@ -390,6 +474,20 @@ const guides = computed(() => targets.value?.guides || [])
 // 所以「有没有独立盘」是「自动判断 或 部署方显式声明」的合并结论
 const hasAlternate = computed(() => !!targets.value?.has_alternate_disk)
 
+// 「升级与更新」分组里的两项：更新卡片要显示当前生效的仓库与它的来源
+const repoItem = computed(() => items.value.find(i => i.key === 'update_repo') || null)
+const proxyItem = computed(() => items.value.find(i => i.key === 'update_proxy') || null)
+// 检查结果里的值比设置项更「新鲜」（它就是服务端此刻用的那个），
+// 但检查还没做过时只有设置项可用，所以两者取其一
+const effectiveRepo = computed(() => {
+  if (updateInfo.value && updateInfo.value.repo) return updateInfo.value.repo
+  return repoItem.value?.value || ''
+})
+const repoSource = computed(() => {
+  if (updateInfo.value && updateInfo.value.repo_source) return updateInfo.value.repo_source
+  return repoItem.value?.source || 'default'
+})
+
 const groups = computed(() => {
   const map = new Map()
   for (const it of items.value) {
@@ -404,6 +502,52 @@ function srcLabel(s) {
 }
 function srcTagType(s) {
   return { file: 'success', env: 'warning', default: 'info' }[s] || 'info'
+}
+
+// 每个分组给一个自己的图标：扫一眼就知道这一段管什么
+const GROUP_ICONS = { '存储与备份': 'Coin', '安全': 'Lock', '升级与更新': 'Upload' }
+function groupIcon(name) {
+  return GROUP_ICONS[name] || 'Setting'
+}
+
+// ---- 行内格式校验（与后端 settings_store 的规则保持一致）----
+// 为什么前端也要校验一遍：后端校验是最后一道防线，但那时用户已经
+// 点完保存、离开了输入框。当场提示一次能省掉一轮来回。
+// 前端的规则必须跟后端一致（后端是权威），所以这里只做同样形状的检查。
+const REPO_RE = /^(?:https?:\/\/)?(?:github\.com\/)?([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/
+
+function validateRepo(v) {
+  const t = String(v || '').trim().replace(/\/+$/, '')
+  if (!t) return ''
+  if (!REPO_RE.test(t)) return '格式应为「owner/name」，例如 your-org/kb-workbench'
+  return ''
+}
+function validateProxy(v) {
+  const t = String(v || '').trim()
+  if (!t) return ''
+  if (!/^https?:\/\//i.test(t)) return '代理地址必须以 http:// 或 https:// 开头'
+  let u
+  try {
+    u = new URL(t)
+  } catch {
+    return '代理地址无法解析，请照着 http://主机:端口 的样子填'
+  }
+  if (!u.hostname) return '代理地址里缺少主机名，请写成 http://主机:端口'
+  if (u.pathname && u.pathname !== '/') return '代理地址不需要带路径，只填 http://主机:端口'
+  return ''
+}
+// 已经碰过的字段才提示错误：正在打字时全程飘红是很烦人的
+const touched = reactive({})
+function markTouched(key) { touched[key] = true }
+function fieldError(it) {
+  if (it.kind === 'repo') return validateRepo(draft[it.key])
+  if (it.kind === 'proxy') return validateProxy(draft[it.key])
+  return ''
+}
+function kindHint(it) {
+  if (it.kind === 'repo') return '形如 owner/name；留空表示不做在线检查'
+  if (it.kind === 'proxy') return '形如 http://主机:端口；留空表示直连'
+  return ''
 }
 function fmtBytes(v) {
   if (v === null || v === undefined) return '—'
@@ -484,6 +628,17 @@ async function save() {
     if (isDirty(it)) payload[it.key] = draft[it.key]
   }
   if (!Object.keys(payload).length) return
+  // 先在本地过一遍格式：不合法的值发到后端也只是被拒，
+  // 不如当场把行内错误亮出来，省一次往返
+  for (const it of items.value) {
+    if (!isDirty(it)) continue
+    const err = fieldError(it)
+    if (err) {
+      touched[it.key] = true
+      ElMessage.error(`「${it.label}」${err}`)
+      return
+    }
+  }
   if (payload.backup_dir) {
     try {
       await ElMessageBox.confirm(
@@ -502,6 +657,11 @@ async function save() {
     probeResult.value = null
     ElMessage.success(`已保存：${(res.changed || []).join('、')}（立即生效，无需重启）`)
     try { targets.value = await Api.backupTargets() } catch (e) { /* 忽略 */ }
+    // 仓库改了，之前那份检查结果已经对不上号了 —— 顺手重新查一次，
+    // 让「保存即生效」在更新卡片上也能看见
+    if ((res.changed || []).includes('update_repo')) {
+      await checkUpdate(true)
+    }
   } catch (e) {
     // 校验失败的具体原因由拦截器弹出，这里保持页面状态不变，便于改正后重存
   } finally {
@@ -522,6 +682,8 @@ async function doReset(it) {
     fillDraft(false)
     ElMessage.success('已恢复默认')
     try { targets.value = await Api.backupTargets() } catch (e) { /* 忽略 */ }
+    // 仓库被恢复成环境变量/默认值后，原先那份检查结果同样作废
+    if (it.key === 'update_repo') await checkUpdate(true)
   } catch (e) { /* 拦截器已提示 */ }
 }
 
@@ -596,6 +758,11 @@ onMounted(load)
 
 .path-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .secret-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.text-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.field-err {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 13px; color: var(--el-color-danger);
+}
 
 .probe {
   display: flex; align-items: center; gap: 6px;
@@ -655,6 +822,7 @@ onMounted(load)
 
 /* 系统更新 */
 .update-alert { margin-bottom: 4px; }
+.update-hint { margin-top: 6px; font-size: 13px; line-height: 1.6; }
 .upd-tag { margin-left: 8px; font-weight: 600; }
 .update-notes {
   margin-top: 12px;

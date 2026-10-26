@@ -161,6 +161,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Api } from '../api'
 import { formatSize } from '../utils/format'
 import { entityIcon } from '../utils/icons'
+import { highlightHtml } from '../utils/md'
 import PageTitle from '../components/PageTitle.vue'
 
 const route = useRoute()
@@ -216,11 +217,17 @@ function go(r) {
   }
 }
 
+/**
+ * 关键词高亮。
+ *
+ * 返回的是要交给 v-html 的 HTML，所以每一段都必须先转义 ——
+ * 早先的实现直接把原文 replace 成 '<mark>$1</mark>'，于是「文件名带 HTML」
+ * 就能在搜索结果里执行脚本（存成 `<img src=x onerror=...>` 的文件名一搜就中招）。
+ *
+ * 真正的实现在 utils/md.js 的 highlightHtml（抽出去是为了能写单测）。
+ */
 function highlight(text) {
-  if (!text) return ''
-  const safeKw = kw.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const re = new RegExp(`(${safeKw})`, 'gi')
-  return text.replace(re, '<mark>$1</mark>')
+  return highlightHtml(text, kw.value)
 }
 
 async function search() {

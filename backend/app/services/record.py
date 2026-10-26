@@ -6,6 +6,7 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import EntityType, FieldDefinition, EntityRecord
+from . import access
 
 
 def build_search_text(fields: list[FieldDefinition], data: dict[str, Any]) -> str:
@@ -352,9 +353,18 @@ async def list_records(
 
 
 async def search_all(
-    db: AsyncSession, keyword: str, limit: int = 50
+    db: AsyncSession, keyword: str, limit: int = 50, principal=None
 ) -> list[dict]:
-    """跨实体类型的全文检索"""
+    """跨实体类型的全文检索
+
+    principal 传进来是为了按模型权限裁剪：全局搜索是唯一一条
+    「一次把各模型的记录整批返回」的聚合入口。早先它不带权限，
+    于是只有笔记读权限的人搜「合同」也能把合同金额、客户名翻出来 ——
+    而记录接口本身是拦得住的。这个聚合入口反而成了绕过口。
+
+    过滤在截断之前做：先取 50 条再过滤，能留下的可能只剩几条，
+    而用户明明还有更多命中。
+    """
     if not keyword:
         return []
     like = f"%{keyword}%"
@@ -365,8 +375,17 @@ async def search_all(
             EntityRecord.deleted_at.is_(None),
         )
         .order_by(EntityRecord.updated_at.desc())
-        .limit(limit)
     )
+    if principal is not None:
+        # 先把「读不到的模型」在 SQL 层剔掉，再取 limit 条
+        read_keys = access.readable_model_keys(principal)
+        if read_keys is not None:
+            q = q.where(
+                EntityRecord.entity_type_id.in_(
+                    select(EntityType.id).where(EntityType.key.in_(read_keys))
+                )
+            )
+    q = q.limit(limit)
     result = await db.execute(q)
     records = result.scalars().all()
 

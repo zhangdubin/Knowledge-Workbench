@@ -1,258 +1,316 @@
 <template>
-  <div class="note-editor">
-    <!-- 标题 -->
-    <div class="title-row">
-      <el-input
-        v-model="localTitle"
-        placeholder="笔记标题..."
-        size="large"
-        class="title-input"
-        @blur="emitChange"
+  <!--
+    Obsidian 风格的笔记编辑器
+    ---------------------------------------------------------------------------
+    两种用法：
+      mode="quick" —— 知识库列表页顶部的「随手记」内联编辑器：
+                      打开即聚焦标题栏，下面直接是正文，没有表单字段挡路。
+      mode="full"  —— 笔记详情页的整页编辑：标题行内可编辑，正文可切「源码 / 预览」。
+
+    键盘：
+      ⌘/Ctrl + Enter  保存
+      Esc             取消（先关掉双链候选，再退出编辑）
+      标题里回车      跳到正文
+  -->
+  <div class="composer" :class="`composer-${mode}`" @keydown="onKeydown">
+    <!-- 标题：Obsidian 里文件名就是第一行，所以标题框是主入口 -->
+    <div class="composer-title-row">
+      <el-icon class="composer-icon"><Notebook /></el-icon>
+      <input
+        ref="titleRef"
+        :value="localTitle"
+        class="composer-title"
+        type="text"
+        :placeholder="titlePlaceholder"
+        aria-label="笔记标题"
+        @input="onTitleInput"
+        @keydown.enter.prevent="focusBody"
       />
+      <span v-if="mode === 'full'" class="composer-mode-hint">标题行内可编辑</span>
     </div>
 
-    <!-- 标签 -->
-    <div class="meta-row">
-      <el-tag
-        v-for="t in localTags"
-        :key="t"
-        closable
-        type="info"
-        size="small"
-        @close="removeTag(t)"
-      >#{{ t }}</el-tag>
-      <el-input
-        v-if="tagInputVisible"
-        ref="tagInputRef"
-        v-model="tagInputValue"
-        size="small"
-        class="tag-input"
-        @keyup.enter="addTag"
-        @blur="addTag"
-      />
-      <el-button v-else size="small" plain @click="showTagInput">
-        <el-icon><Plus /></el-icon>标签
-      </el-button>
-    </div>
+    <!-- 标签：chips 输入器 -->
+    <TagInput
+      :model-value="localTags"
+      class="composer-tags"
+      :suggestions="tagSuggestions"
+      placeholder="添加标签（输入 # 选候选，, 确认）"
+      aria-label="笔记标签"
+      @update:model-value="onTagsChange"
+      @tag-click="emit('tag-click', $event)"
+    />
 
-    <!-- 内容编辑区 -->
-    <div class="content-row">
-      <div class="editor-wrap">
+    <!-- 正文：源码 / 预览 -->
+    <div class="composer-body" :class="{ 'is-preview': preview }">
+      <div v-if="mode === 'full'" class="composer-switch" role="tablist" aria-label="正文视图">
+        <button
+          type="button"
+          role="tab"
+          class="composer-switch-btn"
+          :class="{ 'is-on': !preview }"
+          :aria-selected="!preview"
+          @click="preview = false"
+        >源码</button>
+        <button
+          type="button"
+          role="tab"
+          class="composer-switch-btn"
+          :class="{ 'is-on': preview }"
+          :aria-selected="preview"
+          @click="preview = true"
+        >预览</button>
+      </div>
+
+      <div v-if="!preview" class="composer-editor-wrap">
         <textarea
-          ref="textareaRef"
-          v-model="localContent"
-          class="editor"
-          placeholder="开始书写... 使用 [[笔记标题]] 创建双向链接"
-          @input="onContentInput"
-          @keyup="onKeyUp"
-          @blur="emitChange"
+          ref="bodyRef"
+          :value="localContent"
+          class="composer-editor"
+          placeholder="开始书写… 用 [[笔记标题]] 建立双向链接"
+          aria-label="笔记正文"
+          spellcheck="false"
+          @input="onBodyInput"
+          @keydown="onBodyKeydown"
         ></textarea>
-        <!-- 高亮覆盖层 -->
-        <div ref="overlayRef" class="overlay" v-html="highlightedContent"></div>
-        <!-- 双链建议（绝对定位在 textarea 内的光标位置） -->
-        <div
-          v-if="suggestionVisible"
-          class="suggestion-popper"
-          :style="suggestionStyle"
-        >
-          <div
+        <!-- 双链高亮覆盖层（与 textarea 同字体同间距，逐字对齐） -->
+        <div class="composer-overlay" aria-hidden="true" v-html="highlightedContent"></div>
+
+        <!-- 双链候选：输入 [[ 时提示已有笔记 -->
+        <div v-if="suggestVisible" class="composer-suggest" role="listbox" aria-label="双链候选">
+          <button
             v-for="s in suggestions"
             :key="s.title"
-            class="suggestion-item"
+            type="button"
+            class="composer-suggest-item"
+            role="option"
+            :aria-selected="false"
             @mousedown.prevent="applySuggestion(s.title)"
           >
-            <span>{{ s.exists ? '📄' : '➕' }}</span>
-            <span>{{ s.title }}</span>
-            <span v-if="!s.exists" style="color:var(--text-tertiary);font-size:12px">（新建）</span>
-          </div>
-          <div v-if="!suggestions.length" class="suggestion-empty">
-            按 Enter 新建「{{ suggestionQuery }}」
+            <span class="composer-suggest-title">{{ s.title }}</span>
+            <span v-if="!s.exists" class="composer-suggest-new">新建</span>
+          </button>
+          <div v-if="!suggestions.length" class="composer-suggest-empty">
+            回车创建「{{ suggestQuery }}」
           </div>
         </div>
       </div>
 
-      <!-- 实时预览面板 -->
-      <div class="preview" v-html="renderedContent"></div>
+      <div v-else class="composer-preview md-body md-body-doc note-body">
+        <div v-if="localContent" v-html="renderedContent"></div>
+        <div v-else class="composer-preview-empty">（空笔记）</div>
+      </div>
     </div>
 
-    <div class="footer-hint">
-      💡 用 <code>[[标题]]</code> 创建双向链接，反向链接会自动建立
+    <!-- 正文里写了 #标签 时的提示：Obsidian 里行内标签就是属性 -->
+    <div v-if="inlineTags.length" class="composer-inline-tags">
+      <span class="composer-inline-label">正文中的标签</span>
+      <button
+        v-for="t in inlineTags"
+        :key="t"
+        type="button"
+        class="composer-inline-tag"
+        :title="`把 #${t} 设为标签`"
+        @click="addInlineTag(t)"
+      >#{{ t }}</button>
+    </div>
+
+    <!-- 底部：快捷键提示 + 保存/取消 -->
+    <div class="composer-foot">
+      <span class="composer-hint">
+        <kbd>⌘</kbd><kbd>↵</kbd> 保存
+        <span class="composer-hint-sep">·</span>
+        <kbd>Esc</kbd> 取消
+      </span>
+      <div class="composer-actions">
+        <el-button size="small" text @click="emit('cancel')">取消</el-button>
+        <el-button size="small" type="primary" @click="emit('save')">
+          {{ mode === 'quick' ? '保存笔记' : '保存' }}
+        </el-button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { Notebook } from '@element-plus/icons-vue'
 import { Api } from '../api'
+import TagInput from './TagInput.vue'
+import { extractHashtags, firstLineTitle, renderNoteHtml } from '../utils/notes'
 
 const props = defineProps({
   modelValue: { type: Object, default: () => ({}) },
-  recordId: { type: Number, default: null },
+  // quick = 列表页内联快速新建；full = 详情页整页编辑
+  mode: { type: String, default: 'quick' },
+  tagSuggestions: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['update:modelValue', 'change'])
+const emit = defineEmits(['update:modelValue', 'save', 'cancel', 'change', 'tag-click'])
 
 const localTitle = ref(props.modelValue.title || '')
 const localContent = ref(props.modelValue.content || '')
-const localTags = ref(props.modelValue.tags || [])
-const tagInputVisible = ref(false)
-const tagInputValue = ref('')
-const tagInputRef = ref(null)
+const localTags = ref([...(props.modelValue.tags || [])])
+const preview = ref(false)
 
-const textareaRef = ref(null)
-const overlayRef = ref(null)
+const titleRef = ref(null)
+const bodyRef = ref(null)
 
-// 双链建议
-const suggestionVisible = ref(false)
-const suggestionQuery = ref('')
-const suggestionStart = ref(0)
-const suggestionPos = ref({ top: 0, left: 0 })
+// 双链候选
+const suggestVisible = ref(false)
+const suggestQuery = ref('')
+const suggestStart = ref(0)
 const suggestions = ref([])
+const titleIndex = ref([])
 
-// 同步 props
-watch(() => props.modelValue, (v) => {
-  localTitle.value = v.title || ''
-  localContent.value = v.content || ''
-  localTags.value = v.tags || []
-}, { deep: true })
+// 标题为空时，用正文首行兜底（Obsidian 的文件名规则）
+const titlePlaceholder = computed(() => {
+  const derived = firstLineTitle(localContent.value)
+  return derived || '未命名笔记'
+})
 
-const suggestionStyle = computed(() => ({
-  top: suggestionPos.value.top + 'px',
-  left: suggestionPos.value.left + 'px',
-}))
+const renderedContent = computed(() => renderNoteHtml(localContent.value))
 
-function emitChange() {
-  emit('update:modelValue', {
-    title: localTitle.value,
-    content: localContent.value,
-    tags: localTags.value,
-    parent: props.modelValue.parent,
-  })
-  emit('change')
-}
+// 正文里出现但还没设成标签的 #标签
+const inlineTags = computed(() =>
+  extractHashtags(localContent.value).filter(
+    t => !localTags.value.some(x => x.toLowerCase() === t.toLowerCase())
+  )
+)
 
-// ============ 双链高亮 ============
 const highlightedContent = computed(() => {
   let html = escapeHtml(localContent.value || '')
-  html = html.replace(/\[\[([^\[\]\n]+?)\]\]/g, (_, title) => {
-    return `<span class="wikilink" data-title="${escapeAttr(title)}">[[${escapeHtml(title)}]]</span>`
+  html = html.replace(/\[\[([^\[\]\n]+?)\]\]/g, (_m, title) => {
+    return `<span class="composer-wikilink">[[${escapeHtml(title)}]]</span>`
   })
   html = html.replace(/\n/g, '<br/>')
   return html
 })
 
-const renderedContent = computed(() => {
-  let html = escapeHtml(localContent.value || '')
-  html = html.replace(/\[\[([^\[\]\n]+?)\]\]/g, (_, title) => {
-    return `<a class="wikilink-rendered" data-title="${escapeAttr(title)}" href="#/notes/by-title/${encodeURIComponent(title)}">${escapeHtml(title)}</a>`
+watch(() => props.modelValue, v => {
+  localTitle.value = v.title || ''
+  localContent.value = v.content || ''
+  localTags.value = [...(v.tags || [])]
+}, { deep: true })
+
+function emitChange() {
+  emit('update:modelValue', {
+    title: localTitle.value,
+    content: localContent.value,
+    tags: [...localTags.value],
   })
-  html = html
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-    .replace(/\n/g, '<br/>')
-  return html
-})
-
-function escapeHtml(s) {
-  return (s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
-function escapeAttr(s) {
-  return escapeHtml(s).replace(/"/g, '&quot;')
+  emit('change')
 }
 
-// ============ 标签 ============
-function showTagInput() {
-  tagInputVisible.value = true
-  nextTick(() => tagInputRef.value?.focus?.())
-}
-function addTag() {
-  const t = tagInputValue.value.trim()
-  if (t && !localTags.value.includes(t)) {
-    localTags.value = [...localTags.value, t]
-    emitChange()
-  }
-  tagInputValue.value = ''
-  tagInputVisible.value = false
-}
-function removeTag(t) {
-  localTags.value = localTags.value.filter(x => x !== t)
+// 标题、标签、正文都走「先改本地值、再同步给父组件」：
+// 直接用 v-model + @input 的组合时，两个处理器的执行顺序不够直观，
+// 容易出现「父组件拿到的是上一次的旧值」。
+function onTitleInput(e) {
+  localTitle.value = e.target.value
   emitChange()
 }
 
-// ============ 双链自动补全 ============
-async function onContentInput() {
-  const ta = textareaRef.value
+function onTagsChange(tags) {
+  localTags.value = tags
+  emitChange()
+}
+
+function focusBody() {
+  nextTick(() => bodyRef.value?.focus())
+}
+
+function addInlineTag(t) {
+  if (localTags.value.some(x => x.toLowerCase() === t.toLowerCase())) return
+  localTags.value = [...localTags.value, t]
+  emitChange()
+}
+
+// ============ 双键键位 ============
+function onKeydown(e) {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    e.preventDefault()
+    // 阻止继续冒泡：避免页面级快捷键再处理一次（比如重复保存）
+    e.stopPropagation()
+    emit('save')
+    return
+  }
+  if (e.key === 'Escape') {
+    // 先关候选，再取消编辑 —— 否则按一次 Esc 会把候选和编辑一起关掉
+    if (suggestVisible.value) {
+      suggestVisible.value = false
+      e.stopPropagation()
+      return
+    }
+    e.preventDefault()
+    e.stopPropagation()
+    emit('cancel')
+  }
+}
+
+function onBodyKeydown(e) {
+  if (e.key === 'Enter' && suggestVisible.value) {
+    e.preventDefault()
+    if (suggestions.value.length) applySuggestion(suggestions.value[0].title)
+    else applySuggestion(suggestQuery.value)
+  }
+}
+
+// ============ 双链候选 ============
+let noteTypePromise = null
+function getNoteTypeId() {
+  // 类型 id 不会变，缓存一次，省得每敲一个字符都问后端
+  if (!noteTypePromise) {
+    noteTypePromise = Api.getEntityTypeByKey('note').then(t => t.id).catch(() => null)
+  }
+  return noteTypePromise
+}
+
+async function loadTitleIndex() {
+  const typeId = await getNoteTypeId()
+  if (!typeId) return
+  try {
+    const res = await Api.listRecords(typeId, { page: 1, page_size: 200 })
+    titleIndex.value = (res.items || [])
+      .map(r => r.data?.title)
+      .filter(Boolean)
+  } catch (e) {
+    titleIndex.value = []
+  }
+}
+
+function onBodyInput(e) {
+  localContent.value = e.target.value
+  emitChange()
+  const ta = bodyRef.value
   if (!ta) return
   const pos = ta.selectionStart
   const text = localContent.value.slice(0, pos)
-
-  // 检测 [[... 模式
   const m = /\[\[([^\[\]\n]*)$/.exec(text)
   if (!m) {
-    suggestionVisible.value = false
+    suggestVisible.value = false
     return
   }
-  suggestionStart.value = pos - m[1].length - 2
-  suggestionQuery.value = m[1]
-
-  // 计算光标位置（粗略：从行号算 top，列号算 left）
-  const before = localContent.value.slice(0, suggestionStart.value)
-  const lines = before.split('\n')
-  const lineIdx = lines.length - 1
-  const col = lines[lineIdx].length
-  // 假设每行约 22px，行高 1.7 * 14 = 24px，字符宽约 8px
-  suggestionPos.value = {
-    top: 16 + (lineIdx + 1) * 24 + 4,
-    left: 16 + col * 8,
-  }
-  suggestionVisible.value = true
-
-  // 查询匹配笔记
-  try {
-    const noteType = await Api.getEntityTypeByKey('note')
-    const res = await Api.listRecords(noteType.id, {
-      keyword: m[1], page_size: 10,
-    })
-    suggestions.value = (res.items || []).map(r => ({
-      title: r.data.title,
-      exists: true,
-    }))
-  } catch (e) {
-    suggestions.value = []
-  }
-}
-
-function onKeyUp(e) {
-  // Enter 应用建议
-  if (e.key === 'Enter' && suggestionVisible.value) {
-    if (suggestions.value.length) {
-      applySuggestion(suggestions.value[0].title)
-    } else if (suggestionQuery.value) {
-      applySuggestion(suggestionQuery.value)
-    }
-    e.preventDefault()
-  }
-  // Esc 关闭建议
-  if (e.key === 'Escape') {
-    suggestionVisible.value = false
-  }
+  suggestStart.value = pos - m[1].length - 2
+  suggestQuery.value = m[1]
+  const q = m[1].toLowerCase()
+  const hit = titleIndex.value
+    .filter(t => !q || t.toLowerCase().includes(q))
+    .slice(0, 8)
+    .map(title => ({ title, exists: true }))
+  const exact = q && !titleIndex.value.some(t => t.toLowerCase() === q)
+  suggestions.value = exact
+    ? [...hit, { title: m[1], exists: false }]
+    : hit
+  suggestVisible.value = true
 }
 
 function applySuggestion(title) {
-  const ta = textareaRef.value
-  if (!ta) return
+  const ta = bodyRef.value
+  if (!ta || !title) return
   const pos = ta.selectionStart
-  const before = localContent.value.slice(0, suggestionStart.value)
+  const before = localContent.value.slice(0, suggestStart.value)
   const after = localContent.value.slice(pos)
   const insertion = `${title}]]`
   localContent.value = before + insertion + after
-  suggestionVisible.value = false
+  suggestVisible.value = false
   nextTick(() => {
     const newPos = before.length + insertion.length
     ta.setSelectionRange(newPos, newPos)
@@ -260,149 +318,259 @@ function applySuggestion(title) {
     emitChange()
   })
 }
+
+function escapeHtml(s) {
+  return (s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+onMounted(async () => {
+  await loadTitleIndex()
+  // 打开即聚焦标题：Obsidian 的「随手记」手感全靠这一点
+  if (props.mode === 'quick') nextTick(() => titleRef.value?.focus())
+})
 </script>
 
 <style scoped>
-.note-editor {
+.composer {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-.title-row {
-  display: flex;
-  align-items: center;
-}
-.title-input :deep(.el-input__wrapper) {
-  background: transparent;
-  box-shadow: none !important;
-  font-size: 24px;
-  font-weight: 600;
-}
-.title-input :deep(.el-input__inner) {
-  font-size: 24px;
-  font-weight: 600;
-}
-.meta-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.tag-input { width: 120px; }
-
-.content-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  min-height: 500px;
-}
-.editor-wrap {
-  position: relative;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  gap: 8px;
+  padding: 12px 14px 10px;
   background: var(--bg-card);
+  border: 1px solid var(--primary-ring);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
 }
-.editor, .overlay {
+
+/* 标题行 */
+.composer-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.composer-icon {
+  color: var(--primary);
+  flex-shrink: 0;
+}
+.composer-title {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  padding: 2px 0;
+}
+.composer-title::placeholder { color: var(--text-disabled); font-weight: 500; }
+.composer-mode-hint {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+/* 标签行 */
+.composer-tags {
+  padding-left: 2px;
+}
+
+/* 正文 */
+.composer-body {
+  position: relative;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  min-height: 180px;
+}
+.composer-full .composer-body { min-height: 420px; }
+
+.composer-switch {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 5;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+}
+.composer-switch-btn {
+  border: none;
+  background: transparent;
+  padding: 2px 10px;
+  border-radius: 3px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.composer-switch-btn.is-on {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-xs);
+}
+
+.composer-editor-wrap {
+  position: relative;
+  height: 100%;
+  min-height: inherit;
+}
+.composer-editor,
+.composer-overlay {
   position: absolute;
   inset: 0;
-  padding: 16px;
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-size: 14px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  overflow-y: auto;
   margin: 0;
-  border: 0;
+  padding: 12px 14px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+  border: none;
   outline: none;
+  box-sizing: border-box;
 }
-.editor {
+.composer-editor {
+  z-index: 2;
   background: transparent;
   color: transparent;
   caret-color: var(--text-primary);
   resize: none;
-  z-index: 2;
 }
-.overlay {
-  color: var(--text-primary);
+.composer-overlay {
   z-index: 1;
+  color: var(--text-primary);
   pointer-events: none;
 }
-.overlay :deep(.wikilink) {
+.composer-overlay :deep(.composer-wikilink) {
   color: var(--primary);
-  background: rgba(64, 158, 255, 0.08);
-  padding: 0 4px;
+  background: var(--primary-bg);
   border-radius: 3px;
-}
-.preview {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px;
-  background: var(--bg-card);
-  overflow-y: auto;
-  max-height: 600px;
-  line-height: 1.7;
-}
-.preview :deep(.wikilink-rendered) {
-  color: var(--primary);
-  text-decoration: none;
-  background: rgba(64, 158, 255, 0.08);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-.preview :deep(.wikilink-rendered):hover {
-  background: rgba(64, 158, 255, 0.16);
-}
-.preview :deep(h1) { font-size: 24px; margin: 16px 0 8px; }
-.preview :deep(h2) { font-size: 20px; margin: 14px 0 6px; }
-.preview :deep(h3) { font-size: 16px; margin: 12px 0 4px; }
-.preview :deep(code) {
-  background: var(--bg);
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-family: 'SF Mono', Menlo, monospace;
-  font-size: 13px;
+  padding: 0 3px;
 }
 
-.suggestion-popper {
-  position: absolute;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 4px;
-  max-height: 240px;
+.composer-preview {
+  padding: 12px 16px;
+  max-height: 620px;
   overflow-y: auto;
-  min-width: 240px;
-  z-index: 10;
 }
-.suggestion-item {
+.composer-preview-empty {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+/* 双链候选 */
+.composer-suggest {
+  position: absolute;
+  top: 26px;
+  left: 14px;
+  z-index: 30;
+  min-width: 200px;
+  max-width: 320px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+}
+.composer-suggest-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  border-radius: 4px;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 5px 8px;
+  border-radius: var(--radius-xs);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
   cursor: pointer;
-  font-size: 14px;
+  text-align: left;
 }
-.suggestion-item:hover {
-  background: var(--bg);
-}
-.suggestion-empty {
-  padding: 8px 12px;
+.composer-suggest-item:hover { background: var(--primary-bg); color: var(--primary-dark); }
+html.dark .composer-suggest-item:hover { color: var(--primary-light); }
+.composer-suggest-new {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
-  font-size: 13px;
+}
+.composer-suggest-empty {
+  padding: 6px 8px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
 }
 
-.footer-hint {
+/* 正文里的 #标签 */
+.composer-inline-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.composer-inline-label {
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
-  font-size: 13px;
-  padding: 4px 0;
 }
-.footer-hint code {
-  background: var(--bg);
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-family: 'SF Mono', Menlo, monospace;
+.composer-inline-tag {
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-xs);
+  padding: 1px 7px;
+  font-size: var(--text-xs);
+  cursor: pointer;
 }
+.composer-inline-tag:hover {
+  border-style: solid;
+  border-color: var(--primary);
+  color: var(--primary-dark);
+}
+
+/* 底部 */
+.composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.composer-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.composer-hint kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 16px;
+  min-width: 16px;
+  text-align: center;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+.composer-hint-sep { margin: 0 4px; }
+.composer-actions { display: flex; align-items: center; gap: 4px; }
+
+.composer-full {
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  background: transparent;
+}
+.composer-full .composer-title { font-size: 26px; }
 </style>

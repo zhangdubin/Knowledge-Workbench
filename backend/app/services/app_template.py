@@ -9,10 +9,13 @@ reference 字段用 "target_ref" 指向模板内的相对 key，落库时翻译�
 """
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import App, EntityType, FieldDefinition, RelationDef
+from .app_ai import normalize_spec
 
 
 def _f(key, name, type_, required=False, options=None, help_text=""):
@@ -552,16 +555,49 @@ def list_templates() -> list[dict]:
     return out
 
 
-async def create_app_from_template(db: AsyncSession, payload: dict) -> dict:
-    """按模板创建应用；同时创建模型、字段与关联定义"""
-    tpl_key = payload.get("template") or "blank"
+def get_template(tpl_key: str) -> dict:
+    """按模板 key 取模板定义
+
+    为什么要单独拆一个函数：创建应用有两条来源（内置模板 / AI 草稿），
+    但落库只能有一条路径。所以「查模板」与「按规格建库」必须分开，
+    否则模板与 AI 草稿会长出两套建表逻辑，后面必然对不上。
+    """
     tpl = TEMPLATES.get(tpl_key)
     if not tpl:
         raise ValueError(f"未知模板：{tpl_key}")
+    return tpl
+
+
+def _spec_of(tpl: dict) -> dict:
+    """把模板条目转成「规格」—— 规格就是模板条目去掉 key 之后的部分"""
+    return {
+        "name": tpl["name"],
+        "icon": tpl["icon"],
+        "description": tpl["description"],
+        "types": tpl["types"],
+        "relations": tpl["relations"],
+    }
+
+
+async def create_app_from_spec(db: AsyncSession, payload: dict, spec: dict) -> dict:
+    """按「规格」创建应用 —— 唯一的落库路径
+
+    spec 的形状与 TEMPLATES 的条目一致：
+      {name, icon, description, types: [{key,name,icon,description,fields:[...]}], relations: [...]}
+
+    内置模板与 AI 草稿都走这里：模板只是一份现成的规格，
+    AI 草稿是一份用户确认过的规格，两者的建表行为必须完全一致。
+    """
+    # 规格可能来自前端（AI 草稿由用户改过），属于不可信输入：
+    # 先清洗一遍，非法字段类型、指向不存在模型的引用都在这里拦下，
+    # 免得建到一半炸库
+    spec = normalize_spec(spec)
 
     app_key = (payload.get("key") or "").strip()
     if not app_key:
         raise ValueError("应用 Key 必填")
+    if not re.match(r"^[A-Za-z][A-Za-z0-9_]*$", app_key):
+        raise ValueError("应用 Key 只能用英文字母、数字、下划线，且以字母开头")
 
     existing = (
         await db.execute(select(App).where(App.key == app_key))
@@ -571,9 +607,9 @@ async def create_app_from_template(db: AsyncSession, payload: dict) -> dict:
 
     app = App(
         key=app_key,
-        name=(payload.get("name") or tpl["name"]).strip(),
-        icon=payload.get("icon") or tpl["icon"],
-        description=payload.get("description") or tpl["description"],
+        name=(payload.get("name") or spec.get("name") or "新建应用").strip(),
+        icon=payload.get("icon") or spec.get("icon") or "Grid",
+        description=payload.get("description") or spec.get("description") or "",
         order=int(payload.get("order") or 99),
     )
     db.add(app)
@@ -581,7 +617,7 @@ async def create_app_from_template(db: AsyncSession, payload: dict) -> dict:
 
     keymap: dict[str, int] = {}
     created_types = []
-    for i, t in enumerate(tpl["types"]):
+    for i, t in enumerate(spec["types"]):
         tkey = f"{app_key}_{t['key']}"
         et = EntityType(
             key=tkey, name=t["name"], icon=t["icon"],
@@ -603,7 +639,7 @@ async def create_app_from_template(db: AsyncSession, payload: dict) -> dict:
         created_types.append({"id": et.id, "key": tkey, "name": t["name"]})
 
     created_relations = []
-    for r in tpl["relations"]:
+    for r in spec["relations"]:
         if r["source"] not in keymap or r["target"] not in keymap:
             continue
         rd = RelationDef(
@@ -623,5 +659,31 @@ async def create_app_from_template(db: AsyncSession, payload: dict) -> dict:
         "app": {"id": app.id, "key": app.key, "name": app.name, "icon": app.icon},
         "types": created_types,
         "relations": created_relations,
-        "template": tpl_key,
+        "template": None,
     }
+
+
+async def create_app_from_template(db: AsyncSession, payload: dict) -> dict:
+    """按内置模板创建应用（兼容入口）
+
+    现在只是「查模板 → 交给 create_app_from_spec」两步，
+    落库逻辑只有一份，AI 草稿走的也是它。
+    """
+    tpl_key = payload.get("template") or "blank"
+    tpl = get_template(tpl_key)
+    result = await create_app_from_spec(db, payload, _spec_of(tpl))
+    result["template"] = tpl_key
+    return result
+
+
+async def create_app_from_draft(db: AsyncSession, payload: dict) -> dict:
+    """按前端确认后的规格草稿创建应用（AI 生成 → 用户改 → 创建）
+
+    与模板创建共用 create_app_from_spec，区别只是规格的来源。
+    """
+    spec = payload.get("spec")
+    if not isinstance(spec, dict):
+        raise ValueError("缺少应用规格（spec）")
+    result = await create_app_from_spec(db, payload, spec)
+    result["source"] = "spec"
+    return result

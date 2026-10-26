@@ -574,6 +574,14 @@ async def update_check(refresh: int = 0,
 
     refresh=1 跳过服务端缓存（界面上「重新检查」按钮用）。
     网络失败也返回 200 + ok=false + 人话错误，前端按字段渲染而不是吃报错弹窗。
+
+    返回结构在原有字段之上补充了 `status` 与 `repo_source`：
+      - status：not_configured（没配仓库）/ invalid_config（配了但格式不合法）/
+        up_to_date / update_available / repo_not_found / no_release /
+        access_denied / timeout / network_error / proxy_error
+      - repo_source：这个仓库的值来自哪一层（file=界面上改的 / env=环境变量 /
+        default=代码默认值）
+    前端按 status 区分渲染，不要去解析 error 文案。
     """
     from ..services import update as upd
     return await upd.check_update(refresh=bool(refresh))

@@ -14,7 +14,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import func, select, text
+from sqlalchemy import case, func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
@@ -33,6 +34,7 @@ from . import embedding as embed_svc
 from . import filepreview as fp
 from . import filestore
 from . import jsontree as json_svc
+from . import access
 
 log = logging.getLogger("kb.doc")
 
@@ -202,36 +204,15 @@ def file_response(doc: Document, *, inline: bool, range_header: str | None = Non
 
 # ---------- 读取权限 ----------
 
-async def _linked_model_key(db: AsyncSession, doc_id: int) -> str | None:
-    """文件挂着的记录属于哪个模型；没挂记录（或记录已删）返回 None"""
-    row = (await db.execute(
-        select(EntityType.key)
-        .join(EntityRecord, EntityRecord.entity_type_id == EntityType.id)
-        .join(DocumentLink, DocumentLink.record_id == EntityRecord.id)
-        .where(DocumentLink.document_id == doc_id)
-        .limit(1)
-    )).first()
-    return row[0] if row else None
-
-
 async def can_read_document(db: AsyncSession, principal, doc) -> bool:
     """这个人能不能读这个文件
 
-    按文件的归属分两种：
-      - 挂在某条记录上的文件 → 跟随那条记录的模型权限
-      - 独立文件（数据中心的文件）→ 需要「数据中心」页面权限
-
-    分两种是有原因的。文件读接口若一律按「数据中心」判，
-    记录页里挂的附件预览就会 403（记录用户反而看不到自己的附件）；
-    若一律放行，那「只给知识库」的角色换个 URL 就能把文件全读走 ——
-    菜单挡住的是界面，不是数据。
+    判定规则集中在 services/access.py（独立文件跟页面权限、
+    记录附件跟模型权限、一个文件挂多条记录时任一条可读即可）。
+    这里只做转发，别再写第二份 —— 之前两份口径不一致，
+    出现过「列表里看得见、点进去 403」。
     """
-    if principal.is_super:
-        return True
-    key = await _linked_model_key(db, doc.id)
-    if key is None:
-        return principal.has_page("library")
-    return principal.can_model(key, "read")
+    return await access.can_read_doc(db, principal, doc.id)
 
 
 async def ensure_readable(db: AsyncSession, principal, doc) -> None:
@@ -712,6 +693,7 @@ async def list_documents(
     record_id: int | None = None,
     embed_status: str = "",
     include_deleted: bool = False,
+    principal=None,
 ) -> dict:
     conds = []
     if not include_deleted:
@@ -741,6 +723,22 @@ async def list_documents(
     for c in conds:
         base = base.where(c)
 
+    # 列表也按「文件从哪儿来就归谁管」这条规则过滤：
+    # 挂在「读不到的模型」的记录上的文件，读不到它的记录就等于读不到它。
+    # 早先列表只看「数据中心」页面权限，于是出现「列表里看得见、点进去 403」。
+    read_keys = access.readable_model_keys(principal) if principal is not None else None
+    if read_keys is not None:
+        # 「一条关联都没有」的独立文件归「数据中心」页面管，不在这条规则内；
+        # 只有「有关联、且所有关联都读不到」的文件要被剔除。
+        unreadable = (
+            select(DocumentLink.document_id)
+            .join(EntityRecord, EntityRecord.id == DocumentLink.record_id)
+            .join(EntityType, EntityType.id == EntityRecord.entity_type_id)
+            .group_by(DocumentLink.document_id)
+            .having(func.sum(case((EntityType.key.in_(read_keys), 1), else_=0)) == 0)
+        )
+        base = base.where(Document.id.notin_(unreadable))
+
     total = (await db.execute(
         select(func.count()).select_from(base.subquery())
     )).scalar() or 0
@@ -752,7 +750,13 @@ async def list_documents(
 
     items = []
     for d in docs:
-        item = serialize(d, links=await _links_of(db, d.id))
+        links = await _links_of(db, d.id)
+        # 读不到的关联记录整条去掉：里面带着记录标题与模型名，
+        # 留着等于在列表里泄露「有个叫 XXX 的商机/合同」
+        if read_keys is not None:
+            links = [l for l in links
+                     if (l.get("entity_type_key") or "") in read_keys]
+        item = serialize(d, links=links)
         item["chunk_count"] = (await db.execute(
             select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == d.id)
         )).scalar() or 0
@@ -763,7 +767,21 @@ async def list_documents(
         from . import relation as rel_svc
         rel_map = await rel_svc.documents_relations(db, [d.id for d in docs])
         for it in items:
-            it["relations"] = rel_map.get(it["id"], [])
+            rels = rel_map.get(it["id"], [])
+            # 关联通道里对端是记录，标题同样要按模型权限筛
+            if read_keys is not None:
+                rels = [r for r in rels
+                        if r.get("other_kind") == "document"
+                        or (r.get("other_type_key") or "") in read_keys]
+                # 对端是文件时还要按文件自己的规则判（它可能挂在读不到的记录上）
+                other_doc_ids = [r["other_id"] for r in rels
+                                 if r.get("other_kind") == "document"]
+                allowed = set(await access.filter_readable_documents(
+                    db, principal, other_doc_ids))
+                rels = [r for r in rels
+                        if r.get("other_kind") != "document"
+                        or r.get("other_id") in allowed]
+            it["relations"] = rels
     except Exception as e:
         log.warning("关联通道合并失败（不影响列表展示）：%s", e)
         for it in items:
@@ -875,20 +893,50 @@ async def restore_document(db: AsyncSession, doc: Document) -> dict:
 
 async def link_document(db: AsyncSession, doc_id: int, record_id: int,
                         field_key: str | None = None, note: str = "") -> dict:
+    """给文件建一条到记录的关联（重复调用应幂等）
+
+    并发下「先查后插」会插出重复行：DB 的唯一约束
+    (document_id, record_id, field_key) 救不了 —— SQLite 的 UNIQUE 里
+    NULL 互不相等，field_key IS NULL 的行可以无限重复。
+    重复行一旦存在，下面 scalar_one_or_none() 会抛 MultipleResultsFound
+    → 未捕获 → 500，此后这个文件再也不能建这条关联。
+
+    所以这里做两件事：
+      1. 查的时候用 scalars().first()，多条重复行也只取第一条（止住 500）
+      2. 插入走 ON CONFLICT DO NOTHING，再查回 id（并发下幂等）
+    """
+    # field_key 归一为空串：UNIQUE 约束里 NULL 互不相等，空串不会
+    insert_key = field_key or ""
     existing = (await db.execute(
         select(DocumentLink).where(
             DocumentLink.document_id == doc_id,
             DocumentLink.record_id == record_id,
-            DocumentLink.field_key.is_(field_key) if field_key is None
-            else DocumentLink.field_key == field_key,
-        )
-    )).scalar_one_or_none()
+            # 用 coalesce 比较：历史行的 field_key 是 NULL，
+            # 新写的是空串，两边要当成同一个「不挂字段」
+            func.coalesce(DocumentLink.field_key, "") == insert_key,
+        ).limit(1)
+    )).scalars().first()
     if existing:
         return {"ok": True, "link_id": existing.id, "created": False}
+
     link = DocumentLink(document_id=doc_id, record_id=record_id,
-                        field_key=field_key, note=note)
+                        field_key=insert_key, note=note)
     db.add(link)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 并发下另一个请求先插进去了：回滚自己的事务，取回那一条
+        await db.rollback()
+        found = (await db.execute(
+            select(DocumentLink).where(
+                DocumentLink.document_id == doc_id,
+                DocumentLink.record_id == record_id,
+                func.coalesce(DocumentLink.field_key, "") == insert_key,
+            ).limit(1)
+        )).scalars().first()
+        if found:
+            return {"ok": True, "link_id": found.id, "created": False}
+        raise
     await db.refresh(link)
     return {"ok": True, "link_id": link.id, "created": True}
 

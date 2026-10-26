@@ -25,7 +25,7 @@ async def search(
     if not kw:
         return {"records": [], "documents": [], "total": 0, "keyword": ""}
 
-    records = await svc.search_all(db, kw, limit)
+    records = await svc.search_all(db, kw, limit, principal=principal)
 
     documents = []
     # 文件命中要跟着「数据中心」页面权限走：全局搜索能搜到文件是它的价值，

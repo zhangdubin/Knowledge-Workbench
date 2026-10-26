@@ -336,9 +336,9 @@
               <el-icon><CopyDocument /></el-icon>复制命令
             </el-button>
           </div>
-          <code class="upd-cmd">./scripts/upgrade.sh</code>
+          <code class="upd-cmd">{{ upgradeCmd }}</code>
           <div class="dim update-howto-tip">
-            脚本会自动拉取最新 tag → 备份 .env → 切换版本 → 重建镜像 → 健康检查，失败自动回滚。
+            {{ upgradeTip }}
             <a v-if="updateInfo.html_url" :href="updateInfo.html_url" target="_blank" class="upd-link">
               在 GitHub 查看此版本 →
             </a>
@@ -385,6 +385,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../../api'
+import { upgradeCommand, upgradeTip as upgradeTipText } from '../../utils/update'
 import { useAuthStore } from '../../stores/auth'
 import PageTitle from '../../components/PageTitle.vue'
 import MarkdownText from '../../components/MarkdownText.vue'
@@ -453,9 +454,14 @@ const updateAlert = computed(() => {
 })
 
 function copyUpgradeCmd() {
-  navigator.clipboard?.writeText('./scripts/upgrade.sh')
-  ElMessage.success('已复制：./scripts/upgrade.sh')
+  navigator.clipboard?.writeText(upgradeCmd.value)
+  ElMessage.success(`已复制：${upgradeCmd.value}`)
 }
+
+// 升级脚本是 v0.4.0 才进仓库的，旧版本的前端里没有这个文件。
+// 按当前版本给不同的命令，别让用户去跑一条不存在的脚本。
+const upgradeCmd = computed(() => upgradeCommand(updateInfo.value?.current, updateInfo.value?.latest))
+const upgradeTip = computed(() => upgradeTipText(updateInfo.value?.current))
 
 const loading = ref(false)
 const saving = ref(false)

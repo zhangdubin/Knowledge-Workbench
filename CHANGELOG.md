@@ -4,6 +4,44 @@
 `/api/health`、`/api/auth/status`、备份快照元数据、离线包文件名全部从这里取值。
 每次发版：改 `app_version` → 在本文件顶部加一节 → 重建镜像 → 重打离线包。
 
+## 0.4.2 — 2026-10-26
+
+### 修复：升级指引对旧版本给了一条跑不通的命令
+
+**现象**：v0.3.4 的服务器上打开「系统设置 → 升级与更新 → 检查更新」，
+提示里写着一行 `./scripts/upgrade.sh`，照着执行却是：
+
+```
+-ash: ./scripts/upgrade.sh: No such file or directory
+```
+
+**原因**：升级脚本是 v0.3.4 **之后**才进仓库的（commit `33694ef`），
+而「升级方法」那段文案是**写死在前端里的静态字符串**。
+于是每一个还在旧版本上的服务器 —— 恰恰是最需要正确指引的那批人 ——
+看到的都是一条自己代码里根本不存在的命令。
+
+**修复**：提示改成**按当前版本分支**：
+
+- 当前版本 ≥ v0.4.0（自带脚本）→ 仍给 `./scripts/upgrade.sh`
+- 当前版本 < v0.4.0 → 给任何版本都能跑的命令：
+  `git fetch origin --tags && git checkout <tag> && docker compose build && docker compose up -d`
+
+版本判断抽成纯函数 `frontend/src/utils/update.js`，
+配 25 条断言（`frontend/tests/update.test.mjs`，已并入 `npm test`）。
+
+**验证**：真实浏览器里用请求拦截分别模拟 `current=0.3.4` 与 `current=0.4.1`，
+两种场景下提示的命令与说明都正确。
+
+### 顺带补齐发布链路
+
+此前仓库只有 `v0.3.4` 一个 tag，升级脚本按 tag 选版本，
+在 v0.3.4 的服务器上只会提示「已经是 v0.3.4，无需升级」。
+
+- 补打 `v0.4.0`、`v0.4.1` 两个 tag（各自的 `app_version` 与 tag 一致，
+  升级脚本的健康检查比对的就是这两个）
+- 补建对应的 GitHub Release —— 应用内「检查更新」查的是 `/releases/latest`，
+  没有 Release 就永远提示「已是最新」
+
 ## 0.4.1 — 2026-10-26
 
 ### 修复：服务器上 nginx 崩溃重启循环（`host not found in upstream`）

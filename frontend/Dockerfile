@@ -33,4 +33,10 @@ ENV KB_BACKEND_ADDR=backend:8000
 # 一并替换会把它们清空。
 ENV NGINX_ENVSUBST_FILTER=^KB_
 
+# 健康检查同样写进镜像（见 backend/Dockerfile 里的说明）：
+# 编排文件换版本而容器没重建时，健康检查不会丢。
+# /healthz 由 nginx 直接回答，不碰后端，所以后端挂了它照样健康。
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1/healthz || exit 1
+
 EXPOSE 80

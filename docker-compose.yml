@@ -22,8 +22,17 @@ services:
     #       只在可信环境开启。
     build:
       context: ./backend
-      args:
-        INSTALL_UPGRADE_TOOLS: ${KB_INSTALL_UPGRADE_TOOLS:-0}
+      # 要「一键升级」的源码部署，把 target 改成 tools 即可：
+      #   target: tools
+      # 并补上命名构建上下文（预置 docker CLI / compose 的构建缓存目录）：
+      #   additional_contexts:
+      #     dockercache: ./backend/.docker-cache
+      # 不配也能构建 —— tools stage 会在构建时联网下载那两个二进制，
+      # 只是慢很多（受限网络下实测几 KB/s）。
+      #
+      # 为什么默认不装 git / docker CLI：绝大多数部署只用「检查更新」，
+      # 那时根本不需要在容器里跑它们，白涨几十 MB 不值当。
+      target: base
     container_name: kb-backend
     restart: unless-stopped
     # 本地 .env 覆盖默认值（可选）。所有可调项见 .env.example。

@@ -1,5 +1,10 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim
+
+# ==== 公共基础：Python + 依赖 ====
+#
+# 拆成 stage 是有原因的 —— 见下面 tools 那段的说明。
+FROM python:3.12-slim AS deps
+
 
 WORKDIR /app
 
@@ -10,6 +15,55 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 COPY requirements.txt .
 RUN pip install --no-cache-dir --only-binary=:all: -r requirements.txt
 
+
+# 数据目录
+RUN mkdir -p /app/data/uploads
+
+EXPOSE 8000
+
+# 健康检查写进**镜像**，不只写在 compose 的 healthcheck 里。
+#
+# 原因：compose 的 healthcheck 是编排文件的一项。宿主上的编排文件换了版本、
+# 容器又没跟着重建，两者就对不上 —— compose 会报
+#   "container kb-backend has no healthcheck configured"
+# 连带把依赖它 service_healthy 的前端卡住，整个栈起不来。
+#
+# 写进镜像，容器从镜像创建出来就自带健康检查，
+# 无论宿主上的编排文件是哪个版本都不会丢。
+# compose 里显式写的 healthcheck 会覆盖这一条（值一致，无副作用）。
+HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=5 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status==200 else 1)"
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# ==== 带工具的变体（离线包部署想开「一键升级」时用）====
+#
+# 为什么单独一个 stage：
+#   这一段依赖**命名构建上下文** dockercache，构建时这样传：
+#     docker buildx build --target tools \
+#       --build-context dockercache=./backend/.docker-cache \
+#       -t kb-workbench-backend:tools-<arch> ./backend
+#   而普通构建（docker compose build / docker build）不会传它 ——
+#   放在同一个 stage 里的话，BuildKit 会把 dockercache 当成镜像名去 registry 找，
+#   于是变成「去 registry 找一个叫 dockercache 的镜像」，403，构建直接失败
+#   （这个坑真踩过：改完 Dockerfile 才发现本地 docker compose build 挂了）。
+#   拆成独立 stage 之后，普通构建根本不会碰到这个上下文。
+#
+# 默认产物是最后一个 stage（base，不带工具），所以 `docker build .` 照常可用。
+FROM deps AS tools
+
+# 装 git / docker CLI 的开关。默认 1（这个 stage 本来就是给「要工具」用的）。
+ARG INSTALL_UPGRADE_TOOLS=1
+# 是否额外装 git。**默认不装**，这是有意的：
+# 离线包部署的自动升级全程用不到 git，而 git 只能从 apt 装，
+# 会连带拖进 perl 全家桶（一百多 MB），在慢速网络上还特别容易失败。
+# 源码部署那条路（git fetch/checkout）需要时再 INSTALL_GIT=1 一起构建。
+ARG INSTALL_GIT=0
+# docker CLI 的静态二进制版本（不需要 apt）
+ARG DOCKER_CLI_VERSION=27.3.1
+# docker compose 插件的版本（插件形态，独立下载）
+ARG DOCKER_COMPOSE_VERSION=2.29.7
+
 # ==== 可选：装 git + docker CLI（只有「一键升级」用得上）====
 #
 # 为什么默认关闭（ARG 默认 0）：
@@ -17,28 +71,6 @@ RUN pip install --no-cache-dir --only-binary=:all: -r requirements.txt
 # 而这两个东西不便宜：git 连 perl 一块约 40MB，docker 静态二进制约 50MB，
 # 白涨镜像体积、拖慢每一次构建。只有真的要「一键升级」时才值得付这个代价。
 #
-# 开启方式（见 docker-compose.yml 里 backend.build.args 的注释）：
-#   INSTALL_UPGRADE_TOOLS=1
-# 同时必须在编排文件里把**项目目录**与 **docker.sock** 挂进后端容器 ——
-# 少任何一样，「一键升级」接口都会如实报出缺什么，不会假装能升。
-ARG INSTALL_UPGRADE_TOOLS=0
-# 是否额外装 git。**默认不装**，这是有意的：
-#
-#   离线包部署的自动升级路径是「下载镜像包 → docker load → compose up -d」，
-#   全程用不到 git。而 git 只能从 apt 装，会连带拖进 perl 全家桶
-#   （压缩 23MB、装完 122MB），还得先下 9.6MB 的 Packages 索引 ——
-#   实测在慢速网络上这一步要跑十几分钟，还经常因为源抖动直接失败。
-#   把 git 拆出来之后，「带工具镜像」的构建就只剩两个静态二进制
-#   （docker CLI + compose 插件，都从 CDN 直下），又快又稳。
-#
-#   只有**源码部署**的自动升级路径（git fetch → checkout → build）才需要 git，
-#   那时用 INSTALL_GIT=1 一起构建。
-ARG INSTALL_GIT=0
-# docker CLI 静态二进制版本（不需要本地守护进程，只跟 docker.sock 说话）
-ARG DOCKER_CLI_VERSION=27.3.1
-# compose v2 插件版本。compose 是**插件**，不在上面的 tarball 里，
-# 必须单独下载并放进 CLI 的插件目录，否则 `docker compose` 找不到它。
-ARG DOCKER_COMPOSE_VERSION=2.29.7
 
 # 用 build secret 挂载预置的二进制，**不产生镜像层**。
 #
@@ -236,22 +268,11 @@ RUN set -eux; \
 # 代码
 COPY . .
 
-# 数据目录
-RUN mkdir -p /app/data/uploads
-
-EXPOSE 8000
-
-# 健康检查写进**镜像**，不只写在 compose 的 healthcheck 里。
+# ==== 默认产物（不带工具）====
 #
-# 原因：compose 的 healthcheck 是编排文件的一项。宿主上的编排文件换了版本、
-# 容器又没跟着重建，两者就对不上 —— compose 会报
-#   "container kb-backend has no healthcheck configured"
-# 连带把依赖它 service_healthy 的前端卡住，整个栈起不来。
-#
-# 写进镜像，容器从镜像创建出来就自带健康检查，
-# 无论宿主上的编排文件是哪个版本都不会丢。
-# compose 里显式写的 healthcheck 会覆盖这一条（值一致，无副作用）。
-HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=5 \
-    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status==200 else 1)"
+# 大多数部署只用「检查更新」，那时根本不需要在容器里跑 git / docker，
+# 白涨几十 MB 体积、拖慢每一次构建，不值当。
+FROM deps AS base
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 代码
+COPY . .

@@ -21,7 +21,7 @@
 #
 # 「带工具」变体（tools-only）：
 #   kb-workbench-backend:tools-<arch>
-#   = 同一个 Dockerfile，但构建参数 INSTALL_UPGRADE_TOOLS=1，
+#   = 同一个 Dockerfile，但构建目标换成 tools stage（--target tools），
 #     里面多装了 git / docker CLI / docker compose v2 插件。
 #   用途：给「一键升级」用。默认镜像不带这些工具（不给所有用户白涨 90MB），
 #   想要一键升级的机器才换这个镜像。
@@ -72,7 +72,7 @@ echo "▶️  构建离线镜像"
 echo "   平台: $PLATFORMS"
 echo "   构建器: $BUILDER"
 if [ "$TOOLS_ONLY" = "1" ]; then
-  echo "   变体: 仅「带工具」的后端镜像（INSTALL_UPGRADE_TOOLS=1）"
+  echo "   变体: 仅「带工具」的后端镜像（--target tools）"
 fi
 echo ""
 
@@ -135,6 +135,7 @@ if [ "$TOOLS_ONLY" = "1" ]; then
     # （build secret 有 500KiB 上限，装不下这两个二进制；COPY 又会进镜像层）。
     docker buildx build ${BUILDER_ARG[@]+"${BUILDER_ARG[@]}"} \
       --build-context "dockercache=./backend/.docker-cache" \
+      --target tools \
       --platform "$platform" \
       --build-arg INSTALL_UPGRADE_TOOLS=1 \
       --build-arg INSTALL_GIT="$WITH_GIT" \
@@ -155,8 +156,14 @@ for platform in $(echo "$PLATFORMS" | tr ',' ' '); do
   tag="$(arch_tag "$platform")"
   for svc in backend frontend; do
     echo "────────  $svc  ($platform)  →  kb-workbench-$svc:$tag  ────────"
+    # 普通构建**不传**命名上下文：base stage 根本不用它，
+    # 传了只是白费工夫（而且前端那个上下文根本不是 backend/.docker-cache）。
+    # 显式写 --target base：万一以后有人在 Dockerfile 末尾加了别的 stage，
+    # 默认目标就变了，这里得稳住。
+    target_arg=""
+    [ "$svc" = "backend" ] && target_arg="--target base"
     docker buildx build ${BUILDER_ARG[@]+"${BUILDER_ARG[@]}"} \
-      --build-context "dockercache=./backend/.docker-cache" \
+      ${target_arg} \
       --platform "$platform" \
       -t "kb-workbench-$svc:$tag" \
       --load \

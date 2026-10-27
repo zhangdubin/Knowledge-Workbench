@@ -418,6 +418,54 @@ async def _local_tags(pdir: Path) -> list[str]:
     return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
 
+def _detect_mode() -> tuple[str, Any, str, str, bool]:
+    """判断这套部署是「源码部署」还是「离线包部署」
+
+    返回 (mode, 项目目录, 目录来源, 编排文件路径, 编排文件里有没有 build: 段)。
+
+    有 .git + 编排文件带 build: → 源码部署（可以自己拉代码重建）；
+    否则 → 离线包部署（只能靠新离线包替换镜像）。
+
+    这个判断同时决定「一键升级能不能做」和「该给用户哪种升级指引」，
+    所以抽成函数让早退分支也能用 —— 不然「仓库没配」时会把源码部署
+    误报成离线包部署，然后叫用户去下载离线包（明明 git pull 就行）。
+    """
+    pdir, dir_source = _find_project_dir()
+    compose_file = _compose_file(pdir) if pdir else None
+    compose_path = str(compose_file) if compose_file else ""
+
+    has_build = False
+    if compose_file:
+        try:
+            has_build = _has_build_section(compose_file.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            has_build = False
+
+    is_git_deploy = bool(pdir and (pdir / ".git").exists() and has_build)
+    return (MODE_GIT if is_git_deploy else MODE_OFFLINE), pdir, dir_source, compose_path, has_build
+
+
+def _manual_for(mode: str, target: str = "") -> list[str]:
+    """按部署形态给手动命令（宿主机执行）
+
+    离线包部署的机器上没有 git，给 git 那套只会得到 command not found；
+    源码部署的机器上给 install.sh 也是错的（包里根本没有这个脚本）。
+    """
+    if mode == MODE_OFFLINE:
+        return [
+            "# 离线包部署：下载新版离线安装包并解压，然后执行",
+            "bash install.sh -d <安装目录>",
+        ]
+    return [
+        "# 在**宿主机**的项目目录里执行（不是容器内）",
+        "cd <项目目录>",
+        "git fetch origin --tags --force",
+        f"git checkout {target}" if target else "git checkout <目标版本>",
+        "docker compose build",
+        "docker compose up -d --remove-orphans",
+    ]
+
+
 async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
     """可行性判定 + 步骤清单 + 手动命令
 
@@ -435,6 +483,11 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
     update_error = ""
     has_update = False
 
+    # 部署模式要先定下来：后面的早退分支（仓库没配、目标版本不合法）
+    # 也要知道「这是源码部署还是离线包部署」，否则会给错指引 ——
+    # 源码部署没配仓库，不该被告诉「去下载离线包」。
+    mode = _detect_mode()[0]
+
     if not target:
         # 没指定目标版本时，去问一次更新检查（服务端有 10 分钟缓存）
         info = await upd.check_update()
@@ -443,11 +496,12 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
         if not info.get("ok") and not target:
             return {
                 "ok": False, "error": update_error or "无法确定目标版本",
-                "mode": MODE_OFFLINE, "feasible": False,
+                "mode": mode, "feasible": False,
                 "current": current, "current_display": f"v{current}",
                 "target": "", "has_update": False,
                 "blockers": [], "warnings": [], "dirty_files": [],
-                "steps": [], "manual_commands": [], "notes": [],
+                "steps": [], "manual_commands": _manual_for(mode),
+                "notes": ["没配仓库时给不出「有哪些新版本」，但升级路径本身仍然是确定的。"],
                 "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
     else:
@@ -455,11 +509,12 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
         if not _TAG_RE.match(target):
             return {
                 "ok": False, "error": f"目标版本「{target}」格式不合法",
-                "mode": MODE_OFFLINE, "feasible": False,
+                "mode": mode, "feasible": False,
                 "current": current, "current_display": f"v{current}",
                 "target": "", "has_update": False,
                 "blockers": [], "warnings": [], "dirty_files": [],
-                "steps": [], "manual_commands": [], "notes": [],
+                "steps": [], "manual_commands": _manual_for(mode),
+                "notes": [],
                 "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
 
@@ -472,23 +527,10 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
     # 免得界面上「已是最新」和「有新版本」两处说法打架。
     has_update = bool(target) and upd.is_newer(target, current)
 
-    pdir, dir_source = _find_project_dir()
-    compose_file = _compose_file(pdir) if pdir else None
-    compose_path = str(compose_file) if compose_file else ""
-
-    # --- 编排文件里有没有 build: 段 ---
-    has_build = False
-    if compose_file:
-        try:
-            has_build = _has_build_section(compose_file.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            has_build = False
-
-    # --- 部署模式 ---
-    # 有 .git + 有 build: → 源码部署；否则 → 离线包部署。
-    # 这个判断同时决定「一键升级能不能做」和「该给用户哪种升级指引」。
-    is_git_deploy = bool(pdir and (pdir / ".git").exists() and has_build)
-    mode = MODE_GIT if is_git_deploy else MODE_OFFLINE
+    # 部署模式、项目目录、编排文件、有没有 build: 段 —— 一次算清，
+    # 早退分支与主流程共用同一个判断，不会各算各的。
+    mode, pdir, dir_source, compose_path, has_build = _detect_mode()
+    compose_file = Path(compose_path) if compose_path else None
 
     # --- 1. 项目目录 ---
     if pdir is None:
@@ -601,19 +643,7 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
         notes.append("第 4 步会重建后端容器，接口会短暂中断几秒到几十秒，浏览器会自动等待。")
 
     # --- 手动命令（宿主机执行）---
-    manual = [
-        "# 在**宿主机**的项目目录里执行（不是容器内）",
-        "cd <项目目录>",
-        "git fetch origin --tags --force",
-        f"git checkout {target}" if target else "git checkout <目标版本>",
-        "docker compose build",
-        "docker compose up -d --remove-orphans",
-    ]
-    if mode == MODE_OFFLINE:
-        manual = [
-            "# 离线包部署：下载新版离线安装包并解压，然后执行",
-            "bash install.sh -d <安装目录>",
-        ]
+    manual = _manual_for(mode, target)
 
     steps = [dict(d) for d in STAGE_DEFS]
     for s in steps:

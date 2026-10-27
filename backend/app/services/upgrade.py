@@ -7,12 +7,34 @@
 往里塞「起后台进程、重建容器」这类逻辑会把它搅浑；而且两者生命周期不同 ——
 查是一次性的请求，做是一个跨分钟的后台作业。
 
+**两种部署形态，两条自动升级路径**
+
+| 形态 | 判据 | 步骤 |
+| --- | --- | --- |
+| 源码部署 `git` | 部署目录里有 `.git` | fetch → checkout → build → restart |
+| 离线包部署 `offline` | 部署目录里有编排文件但**没有** `.git` | fetch-release → download → load → restart |
+
+为什么必须分开：离线包安装的机器上**没有 git、没有源码**，
+编排文件里只有 `image:`（预构建镜像）。对它跑 `git fetch` 只会得到
+"git: command not found" —— 而这恰恰是用户最需要正确指引的时刻。
+离线包的正路是：从 Release 下载镜像包 → `docker load` 导入 →
+把架构标签提升成 `:latest`（编排文件引用的就是 `:latest`）→ `docker compose up -d`。
+
 **执行流程与它的坑**
+
+源码部署：
 
     1. git fetch origin --tags --force      快
     2. git checkout <tag>                   快
     3. docker compose build                 慢（但这段时间后端容器还活着）
     4. docker compose up -d --remove-orphans 快（会重建后端容器）
+
+离线包部署：
+
+    1. 查 GitHub Release，找镜像资产        快
+    2. 下载镜像包到临时目录                  慢（几百 MB）
+    3. docker load -i + docker tag → :latest 中
+    4. docker compose up -d                 快（会重建后端容器）
 
 第 4 步是整套流程里唯一「会把自己杀掉」的一步：正在跑的这个后端进程
 就是 `kb-backend` 容器里的进程，`docker compose up -d` 重建容器时它会被
@@ -28,16 +50,17 @@
 
 **可行性判定**（任一不满足就退回「手动模式」，并说清缺什么）
 
-  - 项目目录里有 .git —— 离线包安装没有版本库，本来就该走离线包升级
-  - 容器内能执行 git
-  - 容器内能执行 docker（/var/run/docker.sock 存在 + docker 可执行）
-  - 编排文件里有 build: 段 —— 离线包的编排文件全是 image:，没有它就重建不了
+  - 源码部署：项目目录里有 .git + 容器内能执行 git + 能执行 docker
+    （/var/run/docker.sock 存在 + docker 可执行）+ 编排文件里有 build: 段
+  - 离线包部署：能找到安装目录 + 容器内能执行 docker / compose +
+    docker.sock 存在 + 目标版本的 Release 里挂着镜像资产
+    （离线包的编排文件全是 image:，**没有** build: 段才对 —— 那才是它的常态）
 
 **安全**
 
   - 需要 system_config 功能位（superuser 自动放行），见 routers/system.py
-  - 工作区不干净直接拒绝，并列出脏文件：升级会 checkout 覆盖工作区，
-    本地改动会被冲掉，而且冲掉之后用户根本不知道少了什么
+  - 源码部署时工作区不干净直接拒绝，并列出脏文件：升级会 checkout 覆盖
+    工作区，本地改动会被冲掉，而且冲掉之后用户根本不知道少了什么
   - 同一时刻只允许一个升级作业：重复调用返回当前作业，而不是再起一个
     （两个作业抢同一个目录，第二个 checkout 会把第一个的构建产物搞乱）
   - 全程写审计日志
@@ -50,13 +73,17 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from ..config import settings
 from . import audit as audit_svc
+from . import settings_store as ss
 from . import update as upd
 
 log = logging.getLogger("kb.upgrade")
@@ -79,16 +106,25 @@ ST_SUCCEEDED = "succeeded"
 ST_FAILED = "failed"
 
 # 部署模式（与前端 utils/update.js 的 DEPLOY_MODE 对应）
-MODE_GIT = "git"                # 源码部署：有 .git + 编排文件带 build:
-MODE_OFFLINE = "offline"        # 离线包部署：只能靠新离线包替换镜像
+MODE_GIT = "git"                # 源码部署：有 .git，能自己拉代码重建
+MODE_OFFLINE = "offline"        # 离线包部署：靠新离线包 / Release 镜像资产升级
 
 # 目标版本号的白名单。目标会直接进 `git checkout <tag>`，
 # 哪怕不用 shell 也得防住「--upload-pack=...」这类被当成选项的输入。
 _TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
-# 步骤定义。顺序即执行顺序，note 里写清每一步「快还是慢」「会不会断连接」——
-# 用户看着日志滚动时需要知道该等多久，而不是以为卡死了。
-STAGE_DEFS = [
+# 架构别名：docker 守护进程报的是 Go 的架构名（x86_64 / aarch64），
+# 而镜像包与镜像标签用的是 docker 官方名（amd64 / arm64）。
+# 认错了就会去下另一个架构的包 —— 那是最难查的一类故障：
+# 拉下来才发现架构不对，白等几百 MB。
+_ARCH_ALIASES = {
+    "x86_64": "amd64", "amd64": "amd64", "x64": "amd64",
+    "aarch64": "arm64", "arm64": "arm64", "armv8l": "arm64",
+}
+
+# 源码部署的步骤。顺序即执行顺序，note 里写清每一步「快还是慢」
+# 「会不会断连接」—— 用户看着日志滚动时需要知道该等多久，而不是以为卡死了。
+GIT_STAGE_DEFS = [
     {"key": "fetch", "title": "拉取远端 tag",
      "command": "git fetch origin --tags --force",
      "note": "快：从 GitHub 拉下所有版本标签"},
@@ -101,6 +137,22 @@ STAGE_DEFS = [
     {"key": "restart", "title": "重启服务",
      "command": "docker compose up -d --remove-orphans",
      "note": "快：会重建后端容器，接口随即中断 —— 浏览器会自动等待"},
+]
+
+# 离线包部署的步骤
+OFFLINE_STAGE_DEFS = [
+    {"key": "fetch-release", "title": "查询 Release 镜像资产",
+     "command": "GET /repos/<owner>/<repo>/releases/tags/<tag>",
+     "note": "快：在 GitHub 上找这一版的镜像包"},
+    {"key": "download", "title": "下载镜像包",
+     "command": "下载 kb-workbench-images-<arch>.tar.gz 到临时目录",
+     "note": "慢：几百 MB，走配置的出站代理"},
+    {"key": "load", "title": "导入镜像并提升标签",
+     "command": "docker load -i <包> && docker tag kb-workbench-backend:<arch> kb-workbench-backend:latest",
+     "note": "中：编排文件引用的是 :latest，必须把架构标签提升成 latest"},
+    {"key": "restart", "title": "重启服务",
+     "command": "docker compose up -d",
+     "note": "快：会用上新镜像重建容器，接口随即中断 —— 浏览器会自动等待"},
 ]
 
 # 内存里的日志最多留这么多行。docker compose build 的输出可以上千行，
@@ -144,36 +196,38 @@ async def _run(cmd: list[str], cwd: Path | None = None, timeout: float = 30) -> 
     return proc.returncode or 0, (out or b"").decode("utf-8", errors="replace")
 
 
-def _env_project_dir() -> str:
-    """环境变量里配的项目目录（容器内路径）
+def _env_dir() -> tuple[str, str]:
+    """环境变量里配的部署目录（容器内路径）
 
-    为什么用环境变量而不是自动猜：项目目录在宿主上的位置千差万别，
-    猜出来的路径可能指向另一个项目的仓库，猜错比不猜更糟。
+    源码部署用 KB_PROJECT_DIR，离线包安装用 KB_INSTALL_DIR —— 两个都认，
+    免得用户为了换个名字去改镜像。
     """
-    for key in ("KB_PROJECT_DIR", "KB_UPGRADE_PROJECT_DIR", "PROJECT_DIR"):
+    for key in ("KB_INSTALL_DIR", "KB_PROJECT_DIR", "KB_UPGRADE_PROJECT_DIR", "PROJECT_DIR"):
         v = (os.environ.get(key) or "").strip()
         if v:
-            return v
-    return ""
+            return v, key
+    return "", ""
 
 
-def _find_project_dir() -> tuple[Path | None, str]:
-    """定位项目目录（宿主项目目录在容器里的挂载点）
+def _find_root() -> tuple[Path | None, bool, str]:
+    """定位部署根目录（里面放着编排文件的那个目录）
 
-    返回 (目录, 来源说明)。找不到时目录为 None —— 调用方要把它当成
-    「不可行」处理，而不是随便挑一个目录去 checkout。
+    返回 (目录, 有没有 .git, 来源说明)。
+    找不到时目录为 None —— 调用方要把它当成「不可行」处理，
+    而不是随便挑一个目录去 checkout / compose up。
     """
-    env = _env_project_dir()
+    env, env_key = _env_dir()
     if env:
         p = Path(env).expanduser()
-        if p.is_dir():
-            return p, "环境变量 KB_PROJECT_DIR"
-        return None, "环境变量 KB_PROJECT_DIR 指向的目录不存在"
+        if not p.is_dir():
+            return None, False, f"环境变量 {env_key} 指向的目录不存在"
+        return p, (p / ".git").exists(), f"环境变量 {env_key}"
 
-    # 自动探测：常见挂载点 + 从当前目录向上找（.git 与编排文件都在才算）
+    # 自动探测：常见挂载点 + 从当前目录向上找。
+    # 先找带 .git 的（源码部署），再找不带 .git 的（离线包安装）。
     candidates: list[Path] = [
-        Path("/app/project"), Path("/project"), Path("/workspace"),
-        Path("/host/project"), Path("/mnt/project"), Path("/srv/kb-workbench"),
+        Path("/app/install"), Path("/app/project"), Path("/install"), Path("/project"),
+        Path("/workspace"), Path("/host/install"), Path("/host/project"), Path("/mnt/install"),
     ]
     try:
         here = Path.cwd().resolve()
@@ -181,15 +235,27 @@ def _find_project_dir() -> tuple[Path | None, str]:
         candidates.extend(here.parents)
     except OSError:
         pass
+
+    git_hit: Path | None = None
+    offline_hit: Path | None = None
     for c in candidates:
         try:
             if not c.is_dir():
                 continue
-            if (c / ".git").exists() and any((c / f).exists() for f in COMPOSE_FILES):
-                return c, "自动探测"
+            if not any((c / f).exists() for f in COMPOSE_FILES):
+                continue
+            if (c / ".git").exists():
+                if git_hit is None:
+                    git_hit = c
+            elif offline_hit is None:
+                offline_hit = c
         except OSError:
             continue
-    return None, "未找到"
+    if git_hit is not None:
+        return git_hit, True, "自动探测"
+    if offline_hit is not None:
+        return offline_hit, False, "自动探测"
+    return None, False, "未找到"
 
 
 def _compose_file(pdir: Path) -> Path | None:
@@ -205,7 +271,7 @@ def _has_build_section(text: str) -> bool:
     """编排文件里有没有 build: 段
 
     离线包安装的编排文件全是 image:（用预构建镜像，没有源码可构建），
-    没有 build: 段就没法「拉新代码 → 重建镜像」—— 这类安装只能换离线包。
+    没有 build: 段就没法「拉新代码 → 重建镜像」—— 那类安装只能换镜像包。
 
     优先用 YAML 解析（注释、缩进都认）；解析不了再退回逐行扫，
     因为线上编排文件偶尔带 compose 特有的语法，YAML 解析器可能不认。
@@ -247,6 +313,121 @@ async def _detect_compose_cmd() -> tuple[list[str], str]:
     return [], ""
 
 
+def _norm_arch(raw: str) -> str:
+    """docker 官方架构名（amd64 / arm64）"""
+    v = (raw or "").strip().lower()
+    return _ARCH_ALIASES.get(v, v)
+
+
+async def _host_arch(docker: str | None) -> tuple[str, str]:
+    """**宿主机**的架构（docker 守护进程所在那台机器的）
+
+    为什么不能看容器自己的架构：容器可能被模拟执行（Apple Silicon 上跑
+    x86 镜像就是 qemu 模拟），这时容器里 uname 报的是 x86_64，
+    而宿主机其实是 arm64 —— 照着容器架构去下包，下回来的镜像宿主机跑不了。
+    守护进程自己报的架构才是宿主机的。
+
+    返回 (docker 官方架构名, 原始值)。
+    """
+    if docker:
+        rc, out = await _run([docker, "info", "--format", "{{.Architecture}}"], timeout=25)
+        raw = out.strip().splitlines()[0].strip() if out.strip() else ""
+        if rc == 0 and raw:
+            return _norm_arch(raw), raw
+    return "", ""
+
+
+# ==================== GitHub Release 资产 ====================
+
+async def _release_assets(tag: str) -> tuple[list[dict[str, Any]], str]:
+    """目标版本在 GitHub Release 上的资产列表
+
+    复用 `services/update.py` 里已有的仓库配置、代理与 HTTP 客户端参数 ——
+    同一份仓库、同一份代理，不另起一套，免得两边行为不一致
+    （比如用户在界面上改了代理，这边却还在直连）。
+
+    返回 (资产列表, 错误说明)。错误时列表为空。
+    """
+    cfg = upd.effective_config()
+    repo_raw = (cfg.get("update_repo") or "").strip()
+    if not repo_raw:
+        return [], "未配置升级仓库：到「系统设置 → 升级与更新」填入 owner/name 并保存。"
+    repo, err = ss.normalize_repo(repo_raw)
+    if err:
+        return [], f"升级仓库配置不合法：{err}"
+
+    proxy = (cfg.get("update_proxy") or "").strip()
+    # 直接用 update.py 的客户端参数（超时、UA、代理），不重写
+    kwargs = upd._client_kwargs(proxy)
+    url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
+    try:
+        async with httpx.AsyncClient(**kwargs) as cli:
+            r = await cli.get(url)
+    except httpx.ProxyError:
+        return [], f"连不上配置的代理 {proxy} —— 核对「系统设置 → 升级与更新」里的代理地址。"
+    except httpx.ConnectError:
+        return [], "连不上 api.github.com：容器没有出网（DNS 或防火墙拦截）。"
+    except httpx.TimeoutException:
+        return [], "访问 GitHub 超时：容器到 api.github.com 的链路不通。"
+    except httpx.HTTPError:
+        return [], "访问 GitHub 失败：网络请求没成功。"
+    except Exception:
+        return [], "访问 GitHub 失败：请求过程中出现意外错误。"
+
+    if r.status_code == 404:
+        return [], f"GitHub 上找不到 {tag} 这个 Release（仓库 {repo}）。"
+    if r.status_code in (401, 403):
+        return [], f"GitHub 拒绝了这次访问（{r.status_code}）：可能是未认证限额用完了，或仓库是私有的。"
+    if r.status_code >= 400:
+        return [], f"GitHub 返回了 {r.status_code}。"
+
+    try:
+        data = r.json()
+    except Exception:
+        return [], "GitHub 返回的内容不是预期的 JSON。"
+
+    assets: list[dict[str, Any]] = []
+    for a in (data.get("assets") or []):
+        if not isinstance(a, dict):
+            continue
+        assets.append({
+            "name": str(a.get("name") or ""),
+            "size": int(a.get("size") or 0),
+            "url": str(a.get("browser_download_url") or ""),
+        })
+    return assets, ""
+
+
+def _pick_asset(assets: list[dict[str, Any]], arch: str) -> dict[str, Any] | None:
+    """从 Release 资产里挑出本机架构的镜像包
+
+    架构已知时**只认架构对得上的那个**：架构不对的包就算只有一个也不给 ——
+    下错了要等几百 MB 才发现，跑起来还是 "exec format error"，
+    比现在就报一句「这个版本没有 arm64 的包」糟糕得多。
+    架构拿不到时（没有 docker CLI / socket）才退而求其次：
+    只有一个候选就认它。
+    """
+    if not assets:
+        return None
+    cands = [a for a in assets
+             if str(a.get("name") or "").startswith("kb-workbench-images-")
+             and str(a.get("name") or "").endswith((".tar.gz", ".tgz"))]
+    if arch:
+        exact = f"kb-workbench-images-{arch}.tar.gz"
+        for a in cands:
+            if a.get("name") == exact:
+                return a
+        # 命名带额外后缀的变体（如 kb-workbench-images-linux-amd64.tar.gz）
+        for a in cands:
+            name = str(a.get("name") or "")
+            if f"-{arch}" in name or f"_{arch}" in name:
+                return a
+        return None
+    if len(cands) == 1:
+        return cands[0]
+    return None
+
+
 # ==================== 升级作业 ====================
 
 class UpgradeJob:
@@ -261,14 +442,15 @@ class UpgradeJob:
     前端看到它就应该转入「等待服务恢复」模式，而不是弹错误。
     """
 
-    def __init__(self, job_id: str, target: str, current: str, project_dir: str,
-                 compose_cmd: str, who: str):
+    def __init__(self, job_id: str, target: str, current: str, root: str,
+                 compose_cmd: str, who: str, mode: str, stage_defs: list[dict[str, Any]]):
         self.job_id = job_id
         self.target = target
         self.current = current
-        self.project_dir = project_dir
+        self.root = root
         self.compose_cmd = compose_cmd
         self.who = who
+        self.mode = mode
         self.status = ST_PENDING
         self.stage = ""
         self.error = ""
@@ -281,7 +463,7 @@ class UpgradeJob:
         self.steps = [
             {"key": d["key"], "title": d["title"], "command": d["command"],
              "note": d["note"], "status": "pending"}
-            for d in STAGE_DEFS
+            for d in stage_defs
         ]
         self._last_flush = 0.0
 
@@ -315,7 +497,8 @@ class UpgradeJob:
             "stage_title": next((s["title"] for s in self.steps if s["key"] == self.stage), ""),
             "target": self.target,
             "current": self.current,
-            "project_dir": self.project_dir,
+            "mode": self.mode,
+            "root": self.root,
             "compose_cmd": self.compose_cmd,
             "steps": [dict(s) for s in self.steps],
             "log": "\n".join(self.log_lines),
@@ -418,39 +601,23 @@ async def _local_tags(pdir: Path) -> list[str]:
     return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
 
-def _detect_mode() -> tuple[str, Any, str, str, bool]:
-    """判断这套部署是「源码部署」还是「离线包部署」
+def _enable_commands(mode: str) -> list[str]:
+    """「在宿主机上执行这几行就能开启自动升级」
 
-    返回 (mode, 项目目录, 目录来源, 编排文件路径, 编排文件里有没有 build: 段)。
-
-    有 .git + 编排文件带 build: → 源码部署（可以自己拉代码重建）；
-    否则 → 离线包部署（只能靠新离线包替换镜像）。
-
-    这个判断同时决定「一键升级能不能做」和「该给用户哪种升级指引」，
-    所以抽成函数让早退分支也能用 —— 不然「仓库没配」时会把源码部署
-    误报成离线包部署，然后叫用户去下载离线包（明明 git pull 就行）。
+    注意里面用的是 `<安装目录>` 占位符而不是容器内路径：
+    这些命令是给**宿主机**上的用户执行的，容器内的路径（如 /app/install）
+    在宿主机上根本不存在，直接给路径等于给一条跑不通的命令。
     """
-    pdir, dir_source = _find_project_dir()
-    compose_file = _compose_file(pdir) if pdir else None
-    compose_path = str(compose_file) if compose_file else ""
-
-    has_build = False
-    if compose_file:
-        try:
-            has_build = _has_build_section(compose_file.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            has_build = False
-
-    is_git_deploy = bool(pdir and (pdir / ".git").exists() and has_build)
-    return (MODE_GIT if is_git_deploy else MODE_OFFLINE), pdir, dir_source, compose_path, has_build
+    cmds = ["bash scripts/enable-one-click-upgrade.sh --dir <安装目录>"]
+    if mode == MODE_GIT:
+        # 源码部署还要把 git / docker 工具装进后端镜像
+        cmds.append("KB_INSTALL_UPGRADE_TOOLS=1 docker compose build backend")
+    cmds.append("cd <安装目录> && docker compose up -d backend")
+    return cmds
 
 
-def _manual_for(mode: str, target: str = "") -> list[str]:
-    """按部署形态给手动命令（宿主机执行）
-
-    离线包部署的机器上没有 git，给 git 那套只会得到 command not found；
-    源码部署的机器上给 install.sh 也是错的（包里根本没有这个脚本）。
-    """
+def _manual_commands(mode: str, target: str) -> list[str]:
+    """手动升级的命令（在宿主机上执行）"""
     if mode == MODE_OFFLINE:
         return [
             "# 离线包部署：下载新版离线安装包并解压，然后执行",
@@ -466,12 +633,54 @@ def _manual_for(mode: str, target: str = "") -> list[str]:
     ]
 
 
+def _human_size(n: int) -> str:
+    """字节数 → 人看的体积（小文件也别说成 0MB）"""
+    n = int(n or 0)
+    if n >= 1048576:
+        return f"{n // 1048576}MB"
+    if n >= 1024:
+        return f"{n // 1024}KB"
+    return f"{n}B"
+
+
+def _empty_plan(current: str, error: str, mode: str = MODE_OFFLINE,
+                root: Path | None = None, source: str = "未找到") -> dict[str, Any]:
+    """连目标版本都定不出来时的计划（前端据此显示错误）
+
+    即便目标定不出来，部署形态也要报上去：前端要靠 mode 决定
+    「给 git 命令」还是「给离线包指引」。
+    """
+    return {
+        "ok": False, "error": error,
+        "mode": mode, "feasible": False, "auto_upgrade_supported": root is not None,
+        "current": current, "current_display": f"v{current}",
+        "target": "", "has_update": False,
+        "project_dir": str(root) if root else "",
+        "install_dir": str(root) if root else "",
+        "project_dir_source": source,
+        "compose_file": "", "compose_cmd": "", "compose_cmd_args": [], "arch": "",
+        "blockers": [], "warnings": [], "dirty_files": [],
+        "steps": [], "manual_commands": [], "enable_commands": [],
+        "release_assets": [], "notes": [],
+        "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
     """可行性判定 + 步骤清单 + 手动命令
 
-    返回的 `mode` 告诉前端这套部署是「源码部署」还是「离线包部署」：
-    有 .git + 编排文件带 build: → git 模式（可以自己拉代码重建）；
-    否则 → offline 模式（只能靠新离线包替换镜像，引导文案完全不同）。
+    返回里有两个容易混的字段，界面上要分开渲染：
+
+      auto_upgrade_supported —— **这种部署形态**有没有自动升级的路可走。
+        源码部署有（git fetch/checkout/build），离线包部署现在也有了
+        （下载镜像包 → docker load → compose up）。
+        它为 False 只剩一种情况：连部署形态都判不出来（既没有源码目录，
+        也没有带编排文件的安装目录）。
+      feasible —— **这台机器此刻**能不能升：工具齐不齐、目录找不找得到、
+        目标版本的镜像资产在不在。缺什么都在 blockers 里逐条说明。
+
+    `mode` 告诉前端这套部署是「源码部署」还是「离线包部署」：
+    有 .git → git 模式；只有编排文件 → offline 模式。
     """
     now = time.monotonic()
     if not force and _plan_cache.get("target") == target:
@@ -481,12 +690,12 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
     current = settings.app_version
     target = (target or "").strip()
     update_error = ""
-    has_update = False
 
-    # 部署模式要先定下来：后面的早退分支（仓库没配、目标版本不合法）
-    # 也要知道「这是源码部署还是离线包部署」，否则会给错指引 ——
-    # 源码部署没配仓库，不该被告诉「去下载离线包」。
-    mode = _detect_mode()[0]
+    # ---- 部署形态（先判形态，再定目标）----
+    # 顺序有讲究：形态跟目标版本无关，而前端要的恰恰是「即使查不到目标，
+    # 也要告诉我这套部署是源码还是离线包」—— 两种形态的升级指引完全不同。
+    root, has_git, dir_source = _find_root()
+    mode = MODE_GIT if has_git else MODE_OFFLINE
 
     if not target:
         # 没指定目标版本时，去问一次更新检查（服务端有 10 分钟缓存）
@@ -494,184 +703,212 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
         target = (info.get("latest") or "").strip()
         update_error = info.get("error") or ""
         if not info.get("ok") and not target:
-            return {
-                "ok": False, "error": update_error or "无法确定目标版本",
-                "mode": mode, "feasible": False,
-                "current": current, "current_display": f"v{current}",
-                "target": "", "has_update": False,
-                "blockers": [], "warnings": [], "dirty_files": [],
-                "steps": [], "manual_commands": _manual_for(mode),
-                "notes": ["没配仓库时给不出「有哪些新版本」，但升级路径本身仍然是确定的。"],
-                "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }
+            return _empty_plan(current, update_error or "无法确定目标版本",
+                               mode=mode, root=root, source=dir_source)
     else:
         # 目标必须长得像版本号：它会直接进 `git checkout <tag>`
         if not _TAG_RE.match(target):
-            return {
-                "ok": False, "error": f"目标版本「{target}」格式不合法",
-                "mode": mode, "feasible": False,
-                "current": current, "current_display": f"v{current}",
-                "target": "", "has_update": False,
-                "blockers": [], "warnings": [], "dirty_files": [],
-                "steps": [], "manual_commands": _manual_for(mode),
-                "notes": [],
-                "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }
+            return _empty_plan(current, f"目标版本「{target}」格式不合法",
+                               mode=mode, root=root, source=dir_source)
 
     blockers: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
     dirty: list[str] = []
     notes: list[str] = []
+    release_assets: list[dict[str, Any]] = []
 
     # 目标版本是否真的比当前版本新。用与更新检查同一套比较逻辑，
     # 免得界面上「已是最新」和「有新版本」两处说法打架。
     has_update = bool(target) and upd.is_newer(target, current)
 
-    # 部署模式、项目目录、编排文件、有没有 build: 段 —— 一次算清，
-    # 早退分支与主流程共用同一个判断，不会各算各的。
-    mode, pdir, dir_source, compose_path, has_build = _detect_mode()
-    compose_file = Path(compose_path) if compose_path else None
+    compose_file = _compose_file(root) if root else None
+    compose_path = str(compose_file) if compose_file else ""
 
-    # --- 1. 项目目录 ---
-    if pdir is None:
-        blockers.append(_blocker(
-            "project_dir_missing",
-            "找不到项目目录",
-            f"容器里找不到带 .git 与编排文件的项目目录（{dir_source}）。"
-            "一键升级需要操作宿主机的项目目录。",
-            "在编排文件里把项目目录挂进后端容器并设置环境变量 "
-            "KB_PROJECT_DIR（例：- .:/app/project 与 - KB_PROJECT_DIR=/app/project）。",
-        ))
-    elif not (pdir / ".git").exists():
-        blockers.append(_blocker(
-            "no_git_dir",
-            "项目目录里没有 .git",
-            f"{pdir} 不是 git 仓库。离线包安装本来就没有版本库，"
-            "这类安装只能靠新离线包替换镜像。",
-            "改用离线包升级：下载新版离线安装包 → 解压 → bash install.sh -d <安装目录>。",
-        ))
+    has_build = False
+    if compose_file:
+        try:
+            has_build = _has_build_section(compose_file.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            has_build = False
 
-    # --- 2. git 可执行 ---
+    # ---- 工具探测（两种模式都需要）----
     git_bin = shutil.which("git")
-    if not git_bin:
-        blockers.append(_blocker(
-            "no_git",
-            "容器里没有 git",
-            "后端镜像里没有 git 命令，无法拉取 tag、无法切换版本。",
-            "构建后端镜像时把 INSTALL_UPGRADE_TOOLS 改成 1 重建镜像"
-            "（docker-compose.yml 里已写好用法），或改用离线包升级。",
-        ))
-
-    # --- 3. docker 可执行 + socket ---
     docker_bin = shutil.which("docker")
+    compose_cmd, compose_label = await _detect_compose_cmd()
+    has_socket = Path(DOCKER_SOCK).exists()
+    arch, _arch_raw = await _host_arch(docker_bin)
+
+    if root is None:
+        if mode == MODE_GIT:
+            blockers.append(_blocker(
+                "project_dir_missing",
+                "找不到项目目录",
+                f"容器里找不到带 .git 与编排文件的项目目录（{dir_source}）。"
+                "一键升级需要操作宿主机的项目目录。",
+                "在编排文件里把项目目录挂进后端容器并设置环境变量 "
+                "KB_PROJECT_DIR（例：- .:/app/project 与 - KB_PROJECT_DIR=/app/project）。",
+            ))
+        else:
+            blockers.append(_blocker(
+                "install_dir_missing",
+                "找不到安装目录",
+                f"容器里找不到带编排文件的安装目录（{dir_source}）。"
+                "离线包升级要在安装目录里执行 docker compose up -d，"
+                "容器里看不到安装目录就没法继续。",
+                "在编排文件的后端服务里加两行："
+                "- <安装目录>:/app/install 与 - KB_INSTALL_DIR=/app/install；"
+                "或者在宿主机上执行 bash scripts/enable-one-click-upgrade.sh --dir <安装目录>。",
+            ))
+
     if not docker_bin:
         blockers.append(_blocker(
             "no_docker_cli",
-            "容器里没有 docker 命令",
-            "后端镜像里没有 docker CLI，无法重建镜像、无法重启容器。",
-            "构建后端镜像时把 INSTALL_UPGRADE_TOOLS 改成 1 重建镜像"
-            "（docker-compose.yml 里已写好用法），或改用离线包升级。",
+            "后端镜像里没装 docker 命令",
+            "后端容器里没有 docker CLI，无法导入镜像、无法重建容器、无法重启服务。",
+            "需要换用带工具的后端镜像（构建时 INSTALL_UPGRADE_TOOLS=1）。"
+            "在宿主机上执行：bash scripts/enable-one-click-upgrade.sh --dir <安装目录>",
         ))
-    if not Path(DOCKER_SOCK).exists():
+    if not has_socket:
         blockers.append(_blocker(
             "no_docker_socket",
             "容器里没有 docker socket",
             f"{DOCKER_SOCK} 不存在：后端容器没有接管宿主机的 docker 守护进程，"
-            "跑不了 compose 命令。",
-            "在编排文件里给后端服务加上 "
-            "- /var/run/docker.sock:/var/run/docker.sock（等于把宿主机 root 权限"
-            "交给容器，请只在可信环境开启）。",
+            "跑不了 compose / docker load 命令。",
+            "在编排文件的后端服务里加一行 - /var/run/docker.sock:/var/run/docker.sock，"
+            "然后执行 docker compose up -d backend 生效。",
         ))
-
-    # --- 4. 编排文件有 build: 段 ---
-    if compose_file and not has_build:
-        blockers.append(_blocker(
-            "no_build_section",
-            "编排文件里没有 build: 段",
-            f"{compose_file.name} 里的服务只有 image:，没有 build: —— "
-            "意味着这套部署用的是预构建镜像，拉了新代码也重建不出镜像。",
-            "改用离线包升级：下载新版离线安装包 → 解压 → bash install.sh -d <安装目录>。",
-        ))
-
-    # --- 5. compose 命令 ---
-    # compose 是**插件**，装了 docker CLI 不等于有 compose。
-    # 这里实跑一次 version 来确认，跑不通就是硬性缺失（自动升级做不了）。
-    compose_cmd, compose_label = await _detect_compose_cmd()
     if not compose_cmd:
         blockers.append(_blocker(
             "no_compose_cmd",
             "没有可用的 compose 命令",
             "docker compose 是插件形态，默认镜像里没有；docker-compose（v1）也没装。"
             "没有它就没法统一地 build / up 这套编排。",
-            "构建后端镜像时把 INSTALL_UPGRADE_TOOLS 改成 1 重建镜像"
-            "（该构建参数会一并装上 compose 插件），或改用离线包升级。",
+            "需要换用带工具的后端镜像（构建时 INSTALL_UPGRADE_TOOLS=1，"
+            "该构建参数会一并装上 compose 插件），或改用手动升级。",
         ))
 
-    # --- 6. origin remote ---
-    if pdir and git_bin:
-        rc, out = await _run(_git_cmd(pdir, "remote", "get-url", "origin"), cwd=pdir, timeout=20)
-        if rc != 0:
-            blockers.append(_blocker(
-                "no_origin",
-                "没有配置 origin remote",
-                "git 仓库里没有 origin，fetch 不到远端的 tag。",
-                "在项目目录里执行 git remote add origin <仓库地址>。",
-            ))
-
-    # --- 7. 工作区是否干净 ---
-    if pdir and git_bin and (pdir / ".git").exists():
-        dirty = await _dirty_files(pdir)
-        if dirty:
-            blockers.append(_blocker(
-                "dirty_tree",
-                "工作区有未提交的改动",
-                "升级会 checkout 到目标 tag，把这些改动覆盖掉，而且覆盖之后"
-                "没法从版本库里找回来。",
-                "先提交（git commit -am '...'）或 stash 这些改动，再执行升级。",
-            ))
-
-    # --- 警告项 ---
-    if pdir and git_bin and target:
-        tags = await _local_tags(pdir)
-        if target not in tags:
-            warnings.append(_warning(
-                "tag_not_local",
-                "本地还没有目标版本的 tag",
-                "升级第一步会先 fetch 远端 tag，拉下来再切换，不影响升级。",
-            ))
+    # ---- 模式相关的检查 ----
     if mode == MODE_GIT:
+        if not git_bin:
+            blockers.append(_blocker(
+                "no_git",
+                "容器里没有 git",
+                "后端镜像里没有 git 命令，无法拉取 tag、无法切换版本。",
+                "构建后端镜像时把 INSTALL_UPGRADE_TOOLS 改成 1 重建镜像"
+                "（docker-compose.yml 里已写好用法），或改用离线包升级。",
+            ))
+        if compose_file and not has_build:
+            blockers.append(_blocker(
+                "no_build_section",
+                "编排文件里没有 build: 段",
+                f"{compose_file.name} 里的服务只有 image:，没有 build: —— "
+                "意味着这套部署用的是预构建镜像，拉了新代码也重建不出镜像。",
+                "改用离线包升级：下载新版离线安装包 → 解压 → bash install.sh -d <安装目录>。",
+            ))
+        if root and git_bin:
+            rc, out = await _run(_git_cmd(root, "remote", "get-url", "origin"), cwd=root, timeout=20)
+            if rc != 0:
+                blockers.append(_blocker(
+                    "no_origin",
+                    "没有配置 origin remote",
+                    "git 仓库里没有 origin，fetch 不到远端的 tag。",
+                    "在项目目录里执行 git remote add origin <仓库地址>。",
+                ))
+        if root and git_bin and (root / ".git").exists():
+            dirty = await _dirty_files(root)
+            if dirty:
+                blockers.append(_blocker(
+                    "dirty_tree",
+                    "工作区有未提交的改动",
+                    "升级会 checkout 到目标 tag，把这些改动覆盖掉，而且覆盖之后"
+                    "没法从版本库里找回来。",
+                    "先提交（git commit -am '...'）或 stash 这些改动，再执行升级。",
+                ))
+            if target:
+                tags = await _local_tags(root)
+                if target not in tags:
+                    warnings.append(_warning(
+                        "tag_not_local",
+                        "本地还没有目标版本的 tag",
+                        "升级第一步会先 fetch 远端 tag，拉下来再切换，不影响升级。",
+                    ))
         notes.append("第 4 步会重建后端容器，接口会短暂中断几秒到几十秒，浏览器会自动等待。")
+    else:
+        # 离线包部署：不需要 git，也不需要 build: 段（它本来就是 image:）
+        if target:
+            assets, asset_error = await _release_assets(target)
+            release_assets = assets
+            if asset_error:
+                blockers.append(_blocker(
+                    "release_lookup_failed",
+                    "查不到目标版本的 Release",
+                    asset_error,
+                    "确认「系统设置 → 升级与更新」里的升级仓库与代理配置；"
+                    "也可以手动下载离线包升级。",
+                ))
+            else:
+                picked = _pick_asset(assets, arch)
+                if picked is None:
+                    names = "、".join(a.get("name") or "" for a in assets) or "（一个都没有）"
+                    blockers.append(_blocker(
+                        "no_release_asset",
+                        "目标版本没有本机架构的镜像包",
+                        f"{target} 这个 Release 里没有 {arch or '本机架构'} 的镜像资产"
+                        f"（当前 Release 的资产：{names}）。"
+                        "离线包部署的自动升级靠下载镜像包完成，没有它就升不了。",
+                        "让发版的人把 kb-workbench-images-<arch>.tar.gz 挂到这个 Release 上；"
+                        "或者手动下载完整离线包升级。",
+                    ))
+                else:
+                    notes.append(f"将下载 {picked.get('name')}（约 "
+                                 f"{_human_size(picked.get('size'))}）并导入本机。")
+        if not arch:
+            warnings.append(_warning(
+                "unknown_arch",
+                "没能确定宿主机的架构",
+                "拿不到 docker 守护进程报的架构，只能按默认的 amd64 找镜像包。"
+                "如果宿主机是 arm64，下载会失败。",
+            ))
+        notes.append("最后一步会重建容器，接口会短暂中断几秒到几十秒，浏览器会自动等待。")
 
-    # --- 手动命令（宿主机执行）---
-    manual = _manual_for(mode, target)
-
-    steps = [dict(d) for d in STAGE_DEFS]
+    # ---- 步骤清单 ----
+    stage_defs = GIT_STAGE_DEFS if mode == MODE_GIT else OFFLINE_STAGE_DEFS
+    steps = [dict(d) for d in stage_defs]
     for s in steps:
-        if s["key"] in ("checkout",) and target:
+        if s["key"] == "checkout" and target:
             s["command"] = f"git checkout {target}"
+        if s["key"] == "load" and arch:
+            s["command"] = (f"docker load -i <包> && docker tag "
+                            f"kb-workbench-backend:{arch} kb-workbench-backend:latest")
 
-    feasible = not blockers and bool(compose_cmd)
+    feasible = not blockers
+    # 形态层面支不支持自动升级：两种形态都有路可走；
+    # 只有「连形态都判不出来」时才算不支持。
+    auto_upgrade_supported = root is not None
 
     result = {
         "ok": True,
         "mode": mode,
         "feasible": feasible,
+        "auto_upgrade_supported": auto_upgrade_supported,
         "current": current,
         "current_display": f"v{current}",
         "target": target,
         "has_update": has_update,
-        "project_dir": str(pdir) if pdir else "",
+        "project_dir": str(root) if root else "",
+        "install_dir": str(root) if root else "",
         "project_dir_source": dir_source,
         "compose_file": compose_path,
         "compose_cmd": compose_label,
-        # 真正执行时用的命令（含绝对路径）。展示用 compose_cmd（"docker compose"），
-        # 执行用这个 —— 拆成两个字段是为了界面上能显示人话。
         "compose_cmd_args": list(compose_cmd),
+        "arch": arch,
         "blockers": blockers,
         "warnings": warnings,
         "dirty_files": dirty,
         "steps": steps,
-        "manual_commands": manual,
+        "manual_commands": _manual_commands(mode, target),
+        "enable_commands": _enable_commands(mode),
+        "release_assets": release_assets,
         "notes": notes,
         "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -683,7 +920,8 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
 
 # ==================== 执行 ====================
 
-async def _drain(proc: asyncio.subprocess.Process, job: UpgradeJob) -> None:
+async def _drain(proc: asyncio.subprocess.Process, job: UpgradeJob,
+                 sink: list[str] | None = None) -> None:
     """把子进程的输出逐行写进日志缓冲
 
     用 read(块) + 自己拆行，而不是 readline()：docker 的输出里存在
@@ -700,13 +938,20 @@ async def _drain(proc: asyncio.subprocess.Process, job: UpgradeJob) -> None:
         buf += chunk.decode("utf-8", errors="replace")
         while "\n" in buf:
             line, buf = buf.split("\n", 1)
-            job.log(line.rstrip("\r"))
+            line = line.rstrip("\r")
+            job.log(line)
+            if sink is not None:
+                sink.append(line)
     if buf:
-        job.log(buf.rstrip("\r"))
+        line = buf.rstrip("\r")
+        job.log(line)
+        if sink is not None:
+            sink.append(line)
 
 
-async def _stage(job: UpgradeJob, key: str, cmd: list[str], cwd: Path, timeout: float) -> None:
-    """执行一个步骤，把输出流式写进日志"""
+async def _stage(job: UpgradeJob, key: str, cmd: list[str], cwd: Path,
+                 timeout: float) -> str:
+    """执行一个步骤，把输出流式写进日志。返回收集到的输出文本。"""
     job.stage = key
     job.set_step(key, "running")
     job.log(f"$ {' '.join(cmd)}")
@@ -721,7 +966,8 @@ async def _stage(job: UpgradeJob, key: str, cmd: list[str], cwd: Path, timeout: 
         job.set_step(key, "failed")
         raise RuntimeError(f"无法执行 {cmd[0]}：{e}") from e
 
-    drain = asyncio.create_task(_drain(proc, job))
+    sink: list[str] = []
+    drain = asyncio.create_task(_drain(proc, job, sink))
     try:
         await asyncio.wait_for(drain, timeout=timeout)
     except asyncio.TimeoutError:
@@ -738,43 +984,195 @@ async def _stage(job: UpgradeJob, key: str, cmd: list[str], cwd: Path, timeout: 
         raise RuntimeError(f"命令退出码 {rc}：{' '.join(cmd)}")
     job.set_step(key, "done")
     await _flush_state(job, force=True)
+    return "\n".join(sink)
 
 
-async def _run_job(job: UpgradeJob, plan: dict[str, Any], who: str) -> None:
-    """作业主流程（后台任务）"""
-    pdir = Path(plan["project_dir"])
-    # compose_cmd_args 是探测出来的真实命令（含绝对路径）；
-    # compose_cmd 只是给人看的名字（"docker compose"）
+async def _download_asset(url: str, dest: Path, proxy: str, job: UpgradeJob) -> None:
+    """把 Release 资产下载到本地文件
+
+    走 update.py 里同一套代理配置 —— 用户在界面上配的代理对「检查更新」
+    和「下载镜像包」必须是同一个，否则会出现「检查能连上、下载连不上」。
+    """
+    kwargs = upd._client_kwargs(proxy)
+    kwargs["timeout"] = httpx.Timeout(60.0, read=600.0, write=60.0, pool=60.0)
+    # GitHub 的资产地址会 302 跳到对象存储，不跟重定向就只会拿到一个 302
+    kwargs["follow_redirects"] = True
+    done = 0
+    async with httpx.AsyncClient(**kwargs) as cli:
+        async with cli.stream("GET", url) as r:
+            if r.status_code >= 400:
+                raise RuntimeError(f"下载失败：HTTP {r.status_code}")
+            total = int(r.headers.get("content-length") or 0)
+            last_mark = 0
+            with dest.open("wb") as f:
+                async for chunk in r.aiter_bytes(256 * 1024):
+                    f.write(chunk)
+                    done += len(chunk)
+                    # 每 10% 打一行进度，别刷屏
+                    if total and done - last_mark >= max(1, total // 10):
+                        last_mark = done
+                        job.log(f"  下载中 {done * 100 // total}%"
+                                f"（{_human_size(done)} / {_human_size(total)}）")
+    job.log(f"  下载完成：{_human_size(done)}")
+
+
+async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
+    """离线包部署的升级流程
+
+    1. 查 Release 找镜像资产
+    2. 下载到临时目录
+    3. docker load 导入 + 把架构标签提升成 :latest（编排文件引用的是 :latest）
+    4. 在安装目录里 docker compose up -d（会用上新镜像重建容器）
+    """
+    root = Path(plan.get("install_dir") or plan.get("project_dir") or "")
+    target = job.target
+    docker = shutil.which("docker") or "docker"
     compose = list(plan.get("compose_cmd_args") or [])
     if not compose:
         compose, _ = await _detect_compose_cmd()
     if not compose:
-        job.status = ST_FAILED
-        job.error = "找不到 compose 命令"
-        await _flush_state(job, force=True)
-        return
+        raise RuntimeError("找不到 compose 命令")
 
+    # ---- 1. 查 Release ----
+    job.stage = "fetch-release"
+    job.set_step("fetch-release", "running")
+    job.log("查询 GitHub Release …")
+    await _flush_state(job, force=True)
+    assets, err = await _release_assets(target)
+    if err:
+        job.set_step("fetch-release", "failed")
+        raise RuntimeError(err)
+    arch = plan.get("arch") or ""
+    asset = _pick_asset(assets, arch)
+    if asset is None:
+        job.set_step("fetch-release", "failed")
+        names = "、".join(a.get("name") or "" for a in assets) or "（一个都没有）"
+        raise RuntimeError(f"{target} 这个 Release 里没有本机架构（{arch or '未知'}）的镜像包"
+                           f"；当前资产：{names}")
+    job.log(f"  找到镜像包：{asset['name']}（{_human_size(asset.get('size'))}）")
+    job.set_step("fetch-release", "done")
+    await _flush_state(job, force=True)
+
+    # ---- 2. 下载 ----
+    tmpdir = Path(tempfile.mkdtemp(prefix="kb-upgrade-"))
+    tar_path = tmpdir / str(asset.get("name") or "images.tar.gz")
+    try:
+        job.stage = "download"
+        job.set_step("download", "running")
+        job.log(f"下载 {asset.get('url')}")
+        await _flush_state(job, force=True)
+        cfg = upd.effective_config()
+        await _download_asset(str(asset.get("url") or ""), tar_path,
+                              (cfg.get("update_proxy") or "").strip(), job)
+        job.set_step("download", "done")
+        await _flush_state(job, force=True)
+
+        # ---- 3. 导入 + 提升标签 ----
+        #
+        # 回滚：改标签前先记住旧的 :latest 指向哪个镜像。
+        # 为什么需要：`:latest` 一旦被指到新镜像，旧镜像就成了没有标签的悬空镜像，
+        # 用户想退回去就没有抓手了 —— 而「新镜像起不来」正是这套流程最该防的事故。
+        # 所以这里先记下旧 ID，出错时把标签指回去。
+        old_ids: dict[str, str] = {}
+        for repo_name in ("kb-workbench-backend", "kb-workbench-frontend"):
+            rc, out = await _run([docker, "image", "inspect", "-f", "{{.Id}}",
+                                  f"{repo_name}:latest"], timeout=30)
+            if rc == 0 and out.strip():
+                old_ids[repo_name] = out.strip()
+
+        async def _rollback_tags() -> None:
+            if not old_ids:
+                return
+            job.log("出错，正在把镜像标签回退到升级前的版本……")
+            for repo_name, img_id in old_ids.items():
+                rc, _ = await _run([docker, "tag", img_id, f"{repo_name}:latest"],
+                                   timeout=120)
+                if rc == 0:
+                    job.log(f"已回退 {repo_name}:latest → {img_id[:19]}")
+                else:
+                    job.log(f"回退 {repo_name}:latest 失败，需要手工处理："
+                            f"docker tag {img_id} {repo_name}:latest")
+
+        try:
+            out = await _stage(job, "load", [docker, "load", "-i", str(tar_path)],
+                                root, timeout=1800)
+            loaded = re.findall(r"Loaded image:\s*(\S+)", out)
+            tagged = False
+            for ref in loaded:
+                if not ref.startswith("kb-workbench-"):
+                    continue
+                repo_name = ref.rsplit(":", 1)[0]
+                if repo_name.endswith(":latest"):
+                    continue
+                job.log(f"$ docker tag {ref} {repo_name}:latest")
+                await _stage(job, "load", [docker, "tag", ref, f"{repo_name}:latest"],
+                             root, timeout=120)
+                tagged = True
+            if not tagged:
+                # docker load 的输出没认出来（不同版本措辞可能不同）：
+                # 退回到按约定的架构标签提升，跟 install.sh 的做法保持一致
+                for repo_name in ("kb-workbench-backend", "kb-workbench-frontend"):
+                    if not arch:
+                        continue
+                    job.log(f"$ docker tag {repo_name}:{arch} {repo_name}:latest")
+                    await _stage(job, "load", [docker, "tag", f"{repo_name}:{arch}",
+                                               f"{repo_name}:latest"], root, timeout=120)
+        except Exception:
+            await _rollback_tags()
+            raise
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # ---- 4. 重启（会把自己杀掉）----
+    job.status = ST_RESTARTING
+    job.stage = "restart"
+    job.set_step("restart", "running")
+    job.log("正在重建容器，服务会短暂中断（约 10–30 秒）……")
+    await _flush_state(job, force=True)
+    await _stage(job, "restart", [*compose, "up", "-d"], root, timeout=900)
+
+
+async def _run_git_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
+    """源码部署的升级流程
+
+    1. git fetch origin --tags --force
+    2. git checkout <tag>
+    3. docker compose build（慢，但这段时间后端容器还活着）
+    4. docker compose up -d --remove-orphans（会重建后端容器）
+    """
+    root = Path(plan["project_dir"])
+    compose = list(plan.get("compose_cmd_args") or [])
+    if not compose:
+        compose, _ = await _detect_compose_cmd()
+    if not compose:
+        raise RuntimeError("找不到 compose 命令")
+
+    await _stage(job, "fetch", _git_cmd(root, "fetch", "origin", "--tags", "--force"),
+                 root, timeout=600)
+    await _stage(job, "checkout", _git_cmd(root, "checkout", job.target), root, timeout=300)
+    await _stage(job, "build", [*compose, "build"], root, timeout=3600)
+
+    # ---- 第 4 步：会把自己杀掉 ----
+    # 先把状态置成 restarting 并落盘，再执行命令：命令一执行，
+    # 这个进程随时可能消失，日志写不进去也无所谓。
+    job.status = ST_RESTARTING
+    job.stage = "restart"
+    job.set_step("restart", "running")
+    job.log("正在重建容器，服务会短暂中断（约 10–30 秒）……")
+    await _flush_state(job, force=True)
+    await _stage(job, "restart", [*compose, "up", "-d", "--remove-orphans"], root, timeout=900)
+
+
+async def _run_job(job: UpgradeJob, plan: dict[str, Any], who: str) -> None:
+    """作业主流程（后台任务）"""
     try:
         job.status = ST_RUNNING
         await _flush_state(job, force=True)
 
-        await _stage(job, "fetch", _git_cmd(pdir, "fetch", "origin", "--tags", "--force"),
-                     pdir, timeout=600)
-        await _stage(job, "checkout", _git_cmd(pdir, "checkout", job.target),
-                     pdir, timeout=300)
-        await _stage(job, "build", [*compose, "build"], pdir, timeout=3600)
-
-        # ---- 第 4 步：会把自己杀掉 ----
-        # 先把状态置成 restarting 并落盘，再执行命令：命令一执行，
-        # 这个进程随时可能消失，日志写不进去也无所谓。
-        job.status = ST_RESTARTING
-        job.stage = "restart"
-        job.set_step("restart", "running")
-        job.log("正在重建容器，服务会短暂中断（约 10–30 秒）……")
-        await _flush_state(job, force=True)
-
-        await _stage(job, "restart", [*compose, "up", "-d", "--remove-orphans"],
-                     pdir, timeout=600)
+        if job.mode == MODE_OFFLINE:
+            await _run_offline_job(job, plan)
+        else:
+            await _run_git_job(job, plan)
 
         # 能走到这里，说明这个容器没被纳入同一个 compose 项目（没被杀）。
         # 属于少见情况，但也不能把状态留在 restarting 不放。
@@ -795,7 +1193,8 @@ async def _run_job(job: UpgradeJob, plan: dict[str, Any], who: str) -> None:
                 path="/api/system/update/apply",
                 status=500,
                 detail={"target": job.target, "error": str(e)[:500],
-                        "stage": job.stage, "project_dir": job.project_dir},
+                        "stage": job.stage, "mode": job.mode,
+                        "root": job.root},
             )
         except Exception:
             pass
@@ -805,7 +1204,7 @@ async def _run_job(job: UpgradeJob, plan: dict[str, Any], who: str) -> None:
         await audit_svc.log_event(
             who, "upgrade_succeeded", resource="system_upgrade", method="POST",
             path="/api/system/update/apply",
-            detail={"target": job.target, "project_dir": job.project_dir},
+            detail={"target": job.target, "mode": job.mode, "root": job.root},
         )
     except Exception:
         pass
@@ -836,13 +1235,17 @@ async def start_upgrade(target: str = "", who: str = "") -> dict[str, Any]:
     if not plan.get("target"):
         return {"ok": False, "error": "没有可升级的目标版本", "plan": plan}
 
+    mode = plan.get("mode") or MODE_GIT
+    stage_defs = GIT_STAGE_DEFS if mode == MODE_GIT else OFFLINE_STAGE_DEFS
     new_job = UpgradeJob(
         job_id=uuid.uuid4().hex[:12],
         target=plan["target"],
         current=plan["current"],
-        project_dir=plan["project_dir"],
+        root=plan.get("install_dir") or plan.get("project_dir") or "",
         compose_cmd=plan.get("compose_cmd") or "",
         who=who,
+        mode=mode,
+        stage_defs=stage_defs,
     )
     # 立刻置成 running：这样第二个并发调用会看到「已有作业在跑」，
     # 而不是趁任务还没被调度起来又起一个
@@ -854,8 +1257,8 @@ async def start_upgrade(target: str = "", who: str = "") -> dict[str, Any]:
         await audit_svc.log_event(
             who, "upgrade_started", resource="system_upgrade", method="POST",
             path="/api/system/update/apply",
-            detail={"target": new_job.target, "project_dir": new_job.project_dir,
-                    "job_id": new_job.job_id},
+            detail={"target": new_job.target, "mode": mode,
+                    "root": new_job.root, "job_id": new_job.job_id},
         )
     except Exception:
         pass

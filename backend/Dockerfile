@@ -32,8 +32,24 @@ RUN set -eux; \
       echo "跳过 git / docker CLI 安装（INSTALL_UPGRADE_TOOLS=$INSTALL_UPGRADE_TOOLS）"; \
       exit 0; \
     fi; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends git ca-certificates; \
+    # 源换成 https。
+    # 为什么：Debian 默认源走 http://deb.debian.org:80，这条路在不少网络里
+    # 会被限速甚至掐断（实测过：同一个 Packages 文件，先 Hit 再 Err，
+    # apt 直接以 100 退出，整个构建失败）。而 443 端口的 https 通路稳定得多 ——
+    # 下面下载 docker CLI 和 compose 插件走的也是 https。
+    # 基础镜像里已经带了 ca-certificates，apt 走 https 不需要额外装。
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -f /etc/apt/sources.list ]; then \
+      sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list; \
+    fi; \
+    # apt 自带重试：Acquire::Retries=6、每条连接 30 秒超时。
+    # 为什么必须开：Debian 源的可达性在很多网络里是**时断时续**的
+    # （实测：同一份 Packages 先 Hit 再 Err，apt 直接以 100 退出，构建整个失败）。
+    # apt 的重试是内建的，比在 shell 里套循环稳（它会复用已下载的部分）。
+    apt-get -o Acquire::Retries=6 -o Acquire::http::Timeout=30 update; \
+    apt-get -o Acquire::Retries=6 install -y --no-install-recommends git ca-certificates; \
     rm -rf /var/lib/apt/lists/*; \
     # 架构：优先用 buildx 注入的 TARGETARCH，退回 dpkg 的架构名
     arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
@@ -56,7 +72,74 @@ RUN set -eux; \
     chmod 0755 /usr/local/libexec/docker/cli-plugins/docker-compose; \
     git --version; \
     docker --version; \
-    docker compose version || echo "警告：compose 插件自检未通过（不影响镜像构建）"
+    # compose 是**插件形态**：光把二进制放对位置不算数，
+    # 必须实跑一次 `docker compose version` 出版本号才算装上了。
+    #
+    # 为什么这里改成「失败就中断构建」（原来是 `|| echo 警告`）：
+    # 一个没有 compose 的「带工具镜像」比没有镜像更糟 —— 用户会以为
+    # 工具齐了，点「一键升级」才被后端报出「没有可用的 compose 命令」，
+    # 而那时他已经改了编排文件、重建了镜像。
+    # 构建期就炸掉，问题只出现在真正需要这个变体的人身上。
+    docker compose version
+
+# ==== 一键升级自检 ====
+#
+# 为什么把自检做成镜像里的一个命令：
+#   「能不能一键升级」取决于五件事（git / docker / socket / compose / 项目目录），
+#   少一样都不行。让用户自己进容器里一条条试是不现实的，
+#   一条 `docker exec <backend> kb-upgrade-selftest` 就能看清缺哪一样。
+#
+# 为什么用 printf 逐行写而不是 COPY 一个脚本文件：
+#   镜像的构建上下文只有 backend/，多放一个文件就得同步维护两处；
+#   而这里的内容只有几十行，printf 一次写完更省事。
+RUN set -eux; \
+    printf '%s\n' \
+      '#!/bin/sh' \
+      '# 知识工作台 · 一键升级自检' \
+      '# 逐项检查「自动升级」需要的每一环，缺哪样一目了然。' \
+      'ok=0; bad=0' \
+      'report() {' \
+      '  if [ "$3" = "0" ]; then printf "  [OK] %-14s %s\n" "$1" "$2"; ok=$((ok+1));' \
+      '  else printf "  [NG] %-14s %s\n" "$1" "$2"; bad=$((bad+1)); fi' \
+      '}' \
+      'echo ""' \
+      'echo "一键升级自检："' \
+      'if command -v git >/dev/null 2>&1; then' \
+      '  report "git" "$(git --version 2>/dev/null || echo 本机)" 0' \
+      'else' \
+      '  report "git" "没有装（镜像构建参数 INSTALL_UPGRADE_TOOLS）" 1' \
+      'fi' \
+      'if command -v docker >/dev/null 2>&1; then' \
+      '  report "docker" "$(docker --version 2>/dev/null || echo 本机)" 0' \
+      'else' \
+      '  report "docker" "没有装（镜像构建参数 INSTALL_UPGRADE_TOOLS）" 1' \
+      'fi' \
+      'if [ -S /var/run/docker.sock ]; then' \
+      '  report "docker.sock" "已挂载" 0' \
+      'else' \
+      '  report "docker.sock" "没挂载（编排文件里加 - /var/run/docker.sock:/var/run/docker.sock）" 1' \
+      'fi' \
+      'if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then' \
+      '  report "compose" "$(docker compose version 2>/dev/null | head -1)" 0' \
+      'else' \
+      '  report "compose" "没有可用的 compose 命令（插件形态，镜像构建时没装上）" 1' \
+      'fi' \
+      'PDIR="${KB_INSTALL_DIR:-${KB_PROJECT_DIR:-/app/install}}"' \
+      'if [ -d "$PDIR" ]; then' \
+      '  report "部署目录" "$PDIR" 0' \
+      'else' \
+      '  report "部署目录" "$PDIR 不存在（编排文件里挂载安装目录并设 KB_INSTALL_DIR）" 1' \
+      'fi' \
+      'echo ""' \
+      'echo "检查完毕：$ok 项通过，$bad 项缺失。"' \
+      'if [ "$bad" = "0" ]; then' \
+      '  echo "可以使用了：系统设置 → 升级与更新 里的一键升级"' \
+      'else' \
+      '  echo "一键升级暂时用不了：按上面每项后面的说明补齐即可。"' \
+      'fi' \
+      'exit "$bad"' \
+    > /usr/local/bin/kb-upgrade-selftest; \
+    chmod 0755 /usr/local/bin/kb-upgrade-selftest
 
 # 代码
 COPY . .

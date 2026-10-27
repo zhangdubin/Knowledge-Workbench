@@ -101,3 +101,46 @@ ok(
 )
 
 console.log(`✅ 升级指引 ${n} 项断言全部通过`)
+
+// ============ v0.5.1：一键升级弹窗的纯函数 ============
+{
+  const { planSummary, assetSize, autoUpgradeSupported, enableCommands } = await import('../src/utils/update.js')
+
+  // 步骤摘要
+  assert.equal(planSummary([]), '', '没有步骤时摘要为空')
+  assert.equal(planSummary(undefined), '', '传入 undefined 不应崩')
+  assert.equal(
+    planSummary([{ title: '拉取远端 tag' }, { title: '切换到目标版本' }]),
+    '拉取远端 tag → 切换到目标版本',
+    '步骤应按顺序拼成一句话'
+  )
+  assert.equal(
+    planSummary([{ title: '下载镜像' }, { title: '' }, { title: '导入镜像' }]),
+    '下载镜像 → 导入镜像',
+    '空标题的步骤应被跳过'
+  )
+
+  // 资产大小
+  assert.equal(assetSize(0), '', '0 应返回空串')
+  assert.equal(assetSize(undefined), '', 'undefined 应返回空串')
+  assert.equal(assetSize(-1), '', '负数应返回空串')
+  assert.equal(assetSize(512), '512 B', '字节')
+  assert.equal(assetSize(1024 * 40), '40 KB', 'KB')
+  assert.equal(assetSize(1024 * 1024 * 91), '91 MB', 'MB')
+
+  // 自动升级支持性
+  assert.equal(autoUpgradeSupported(null), true, '老后端不返回该字段时按支持处理')
+  assert.equal(autoUpgradeSupported({}), true, '空计划按支持处理')
+  assert.equal(autoUpgradeSupported({ auto_upgrade_supported: false }), false, '明确不支持时要认')
+  assert.equal(autoUpgradeSupported({ auto_upgrade_supported: true }), true, '明确支持时要认')
+
+  // 开启命令
+  assert.deepEqual(enableCommands(null), [], '没有计划时为空数组')
+  assert.deepEqual(enableCommands({}), [], '计划里没有该字段时为空数组')
+  assert.deepEqual(
+    enableCommands({ enable_commands: ['bash enable.sh', '  ', 'docker ps'] }),
+    ['bash enable.sh', 'docker ps'],
+    '空字符串应被剔除'
+  )
+  console.log('\n✅ 一键升级弹窗纯函数断言全部通过')
+}

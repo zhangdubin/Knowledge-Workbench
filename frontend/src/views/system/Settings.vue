@@ -364,7 +364,7 @@
     <el-dialog
       v-model="upgrade.visible"
       title="一键升级"
-      width="760px"
+      width="min(920px, 94vw)"
       align-center
       :close-on-click-modal="false"
       append-to-body
@@ -395,7 +395,7 @@
         <template v-if="upgrade.plan && !upgradeBusy">
           <el-alert
             v-if="upgrade.plan.feasible"
-            title="可以自动升级：后端会在容器里完成拉取版本 → 切换版本 → 重建镜像 → 重启服务"
+            :title="`可以自动升级：后端会在容器里完成 ${planSummary || '升级'}`"
             type="success" show-icon :closable="false"
           />
           <div v-else class="upgrade-blockers">
@@ -406,6 +406,40 @@
               </div>
               <div class="upgrade-blocker-detail">{{ b.detail }}</div>
               <div class="upgrade-blocker-fix">怎么办：{{ b.fix }}</div>
+            </div>
+          </div>
+
+          <!-- 开启引导：这套部署支持自动升级，只是前置条件没齐。
+               与其让人照着上面的文字自己改 YAML（多半会放弃），
+               不如给一条能在服务器上直接跑的命令。
+
+               注意：这里不按 autoSupported 过滤。「连部署形态都判不出来」
+               （比如容器里没挂编排文件）恰恰是最需要这条命令的情况 ——
+               开启脚本自己会去找安装目录。 -->
+          <div v-if="!upgrade.plan.feasible && enableCommands.length" class="upgrade-enable">
+            <div class="upgrade-enable-title">
+              <el-icon><MagicStick /></el-icon>
+              开启自动升级：在<b>服务器</b>上执行下面这条命令
+              <el-button text size="small" @click="copyEnable">
+                <el-icon><CopyDocument /></el-icon>复制命令
+              </el-button>
+            </div>
+            <pre class="upgrade-enable-cmd mono">{{ enableCommands.join('\n') }}</pre>
+            <div class="upgrade-enable-tip">
+              它会替你把后端容器武装起来：装上 docker 命令、挂上 docker socket 与安装目录。
+              装完回到这里点「开始升级」就能一键完成。
+              <b>注意：挂 docker socket 等于把宿主机的 root 权限交给容器</b>，
+              只在自己的独占服务器上这么做。
+            </div>
+          </div>
+
+          <!-- Release 资产：离线升级要下载镜像包，先让人知道多大 -->
+          <div v-if="releaseAssets.length" class="upgrade-assets">
+            <div class="upgrade-assets-title">目标版本的可下载内容</div>
+            <div v-for="a in releaseAssets" :key="a.name" class="upgrade-asset">
+              <el-icon><Paperclip /></el-icon>
+              <span class="upgrade-asset-name mono">{{ a.name }}</span>
+              <span class="upgrade-asset-size">{{ assetSizeText(a.size) }}</span>
             </div>
           </div>
 
@@ -521,7 +555,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../../api'
-import { upgradeCommand, upgradeTip as upgradeTipText, DEPLOY_MODE } from '../../utils/update'
+import { upgradeCommand, upgradeTip as upgradeTipText, DEPLOY_MODE, planSummary as planSummaryText, assetSize as assetSizeText, autoUpgradeSupported, enableCommands as enableCommandsOf } from '../../utils/update'
 import { useAuthStore } from '../../stores/auth'
 import PageTitle from '../../components/PageTitle.vue'
 import MarkdownText from '../../components/MarkdownText.vue'
@@ -636,6 +670,20 @@ let pollTimer = null
 
 const upgradeBusy = computed(() => upgrade.phase === 'running' || upgrade.phase === 'restarting')
 const manualCommands = computed(() => upgrade.plan?.manual_commands || [])
+// 「在宿主机上跑这一行就能开启自动升级」——后端给的。
+// 这跟手动升级命令不是一回事：手动命令是「这次怎么升」，
+// 开启命令是「把自动升级这个能力装上」，装好之后每次升级都不用再跑命令。
+const enableCommands = computed(() => enableCommandsOf(upgrade.plan))
+// 目标版本在 Release 上的资产。离线部署要下载镜像包，
+// 用户得先知道这玩意儿多大、要等多久。
+const releaseAssets = computed(() => upgrade.plan?.release_assets || [])
+// 这套部署形态本身支不支持自动升级。支持但前置条件没齐 → 显示「开启」引导；
+// 压根不支持（比如没装任何编排文件）→ 只给手动路径。
+const autoSupported = computed(() => autoUpgradeSupported(upgrade.plan))
+// 计划里的步骤标题拼成一句人话：「下载镜像 → 导入镜像 → 重建容器」。
+// 原来这句是写死的「拉取版本 → 切换版本 → 重建镜像 → 重启服务」，
+// 离线部署会显示完全对不上的步骤。
+const planSummary = computed(() => planSummaryText(upgrade.plan?.steps || []))
 // 步骤：运行中用作业自己的状态（pending/running/done/failed），
 // 没运行时用计划里的清单（只有标题与命令）
 const jobSteps = computed(() => {
@@ -790,6 +838,13 @@ function copyManual() {
   const cmds = manualCommands.value.filter((c) => !c.trim().startsWith('#'))
   navigator.clipboard?.writeText(cmds.join('\n'))
   ElMessage.success(`已复制 ${cmds.length} 条命令`)
+}
+
+function copyEnable() {
+  // 开启命令里的注释行同样不该被粘走 —— 用户要粘到服务器终端里跑
+  const cmds = enableCommands.value.filter((c) => !c.trim().startsWith('#'))
+  navigator.clipboard?.writeText(cmds.join('\n'))
+  ElMessage.success(`已复制 ${cmds.length} 条命令，粘贴到服务器终端执行`)
 }
 
 onUnmounted(() => {
@@ -1208,4 +1263,236 @@ onMounted(load)
 
 :deep(.row-blocked) { opacity: .75; }
 :deep(.row-good) { background: var(--el-color-success-light-9); }
+
+/* ==========================================================
+   一键升级弹窗
+   这一块之前**一个样式都没有**：47 个 class 全是裸 HTML，
+   渲染出来就是一堵文字墙，用户反馈「一鍵升級」界面没法看。
+   这里按「结论 → 障碍 → 动作 → 进度 → 日志」的顺序分层，
+   让人一眼知道：能不能升、缺什么、现在该按哪个键。
+   ========================================================== */
+.upgrade-dialog { --el-dialog-width: min(920px, 94vw); }
+.upgrade-body {  display: flex; flex-direction: column; gap: var(--space-4);
+  max-height: min(66vh, 620px); overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* —— 版本条 —— */
+.upgrade-versions {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.upgrade-ver { display: flex; flex-direction: column; gap: 2px; min-width: 96px; }
+.upgrade-ver-label {
+  font-size: var(--text-xs); color: var(--text-tertiary);
+  letter-spacing: .02em;
+}
+.upgrade-ver-value { font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); }
+.upgrade-arrow { color: var(--text-disabled); flex-shrink: 0; }
+.upgrade-mode {
+  margin-left: auto; flex-shrink: 0;
+  border-radius: var(--radius-full); font-weight: 500;
+}
+
+/* —— 障碍清单 —— */
+.upgrade-blockers {
+  display: flex; flex-direction: column; gap: var(--space-2);
+}
+.upgrade-blockers-title {
+  font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
+}
+.upgrade-blocker {
+  padding: var(--space-3) var(--space-4);
+  background: var(--warning-bg);
+  border: 1px solid color-mix(in srgb, var(--warning) 26%, transparent);
+  border-radius: var(--radius-md);
+}
+.upgrade-blocker-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: var(--text-sm); font-weight: 600; color: var(--warning-text);
+}
+.upgrade-blocker-detail {
+  margin-top: 4px;
+  font-size: var(--text-sm); line-height: 1.6; color: var(--text-secondary);
+}
+.upgrade-blocker-fix {
+  margin-top: 6px;
+  font-size: var(--text-sm); line-height: 1.6; color: var(--text-primary);
+}
+
+/* —— 开启引导：这是唯一「按一下就能做」的地方，要最显眼 —— */
+.upgrade-enable {
+  padding: var(--space-4);
+  background: var(--primary-bg);
+  border: 1px solid color-mix(in srgb, var(--primary) 32%, transparent);
+  border-radius: var(--radius-lg);
+}
+.upgrade-enable-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: var(--text-sm); font-weight: 600; color: var(--text-primary);
+}
+.upgrade-enable-title .el-icon { color: var(--primary); }
+.upgrade-enable-title .el-button { margin-left: auto; }
+.upgrade-enable-cmd {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm); line-height: 1.7;
+  color: var(--text-primary);
+  white-space: pre-wrap; word-break: break-all;
+}
+.upgrade-enable-tip {
+  margin-top: var(--space-3);
+  font-size: var(--text-sm); line-height: 1.7; color: var(--text-secondary);
+}
+.upgrade-enable-tip b { color: var(--danger-text); font-weight: 600; }
+
+/* —— Release 资产 —— */
+.upgrade-assets {
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.upgrade-assets-title {
+  font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
+  margin-bottom: var(--space-2);
+}
+.upgrade-asset {
+  display: flex; align-items: center; gap: 8px;
+  font-size: var(--text-sm); color: var(--text-secondary);
+  padding: 2px 0;
+}
+.upgrade-asset .el-icon { color: var(--text-disabled); }
+.upgrade-asset-name { color: var(--text-primary); }
+.upgrade-asset-size { margin-left: auto; color: var(--text-tertiary); }
+
+/* —— 脏文件 / 警告 —— */
+.upgrade-dirty {
+  padding: var(--space-3) var(--space-4);
+  background: var(--danger-bg);
+  border: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
+  border-radius: var(--radius-md);
+}
+.upgrade-dirty-title {
+  font-size: var(--text-sm); font-weight: 600; color: var(--danger-text);
+  margin-bottom: var(--space-2);
+}
+.upgrade-dirty-file {
+  display: inline-block; margin: 0 6px 4px 0;
+  padding: 2px 7px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs); color: var(--text-secondary);
+}
+.upgrade-warnings { display: flex; flex-direction: column; gap: 6px; }
+.upgrade-warning {
+  display: flex; align-items: flex-start; gap: 6px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--info-bg); border-radius: var(--radius-sm);
+  font-size: var(--text-sm); line-height: 1.6; color: var(--text-secondary);
+}
+.upgrade-warning .el-icon { color: var(--info-text); flex-shrink: 0; margin-top: 2px; }
+
+/* —— 更新内容 —— */
+.upgrade-notes {
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.upgrade-notes-title {
+  font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
+  margin-bottom: var(--space-2);
+}
+.upgrade-notes-body {
+  font-size: var(--text-sm); line-height: 1.7; color: var(--text-secondary);
+  max-height: 220px; overflow-y: auto;
+}
+
+/* —— 手动命令 —— */
+.upgrade-manual {
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.upgrade-manual-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: var(--text-sm); font-weight: 600; color: var(--text-primary);
+}
+.upgrade-manual-title .el-button { margin-left: auto; }
+.upgrade-manual-cmd {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-sunken); border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm); line-height: 1.7; color: var(--text-primary);
+  white-space: pre-wrap; word-break: break-all;
+}
+.upgrade-manual-tip {
+  margin-top: var(--space-2);
+  font-size: var(--text-sm); line-height: 1.6; color: var(--text-tertiary);
+}
+
+/* —— 执行中 —— */
+.upgrade-phase {
+  display: flex; align-items: center; gap: 8px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--primary-bg);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm); font-weight: 500; color: var(--text-primary);
+}
+.upgrade-phase .el-icon { color: var(--primary); }
+
+.upgrade-steps {
+  display: flex; flex-direction: column; gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.upgrade-step {
+  display: flex; align-items: flex-start; gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+.upgrade-step + .upgrade-step { border-top: 1px solid var(--border-light); }
+.upgrade-step-ico { margin-top: 2px; color: var(--text-disabled); flex-shrink: 0; }
+.upgrade-step.is-running .upgrade-step-ico { color: var(--primary); }
+.upgrade-step.is-done .upgrade-step-ico { color: var(--success-text); }
+.upgrade-step.is-failed .upgrade-step-ico { color: var(--danger-text); }
+.upgrade-step-main { flex: 1; min-width: 0; }
+.upgrade-step-title { font-size: var(--text-sm); font-weight: 500; color: var(--text-primary); }
+.upgrade-step.is-pending .upgrade-step-title { color: var(--text-tertiary); font-weight: 400; }
+.upgrade-step-cmd {
+  margin-top: 2px;
+  font-size: var(--text-xs); color: var(--text-tertiary);
+  word-break: break-all;
+}
+
+/* —— 日志 —— */
+.upgrade-log {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-sunken);
+}
+.upgrade-log-body {
+  margin: 0; padding: var(--space-3) var(--space-4);
+  max-height: 240px; overflow-y: auto;
+  font-size: var(--text-xs); line-height: 1.65;
+  color: var(--text-secondary);
+  white-space: pre-wrap; word-break: break-all;
+}
+.upgrade-log-empty { color: var(--text-disabled); font-style: italic; }
+
+/* —— 底部动作区 —— */
+.upgrade-foot { display: flex; align-items: center; gap: var(--space-3); }
+.upgrade-foot .el-button { margin-left: 0; }
 </style>

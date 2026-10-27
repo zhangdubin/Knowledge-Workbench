@@ -73,3 +73,61 @@ export function upgradeTip(current, mode = DEPLOY_MODE.GIT) {
   }
   return '当前版本还没有升级脚本（v0.4.0 起才附带），先用上面的命令手动升级；升到 v0.4.0 及以上后，后续就能一键升级了。'
 }
+
+/**
+ * 把「升级计划里的步骤」拼成一句人话。
+ *
+ * 为什么要有这个：弹窗里原来那句「拉取版本 → 切换版本 → 重建镜像 → 重启服务」
+ * 是写死的，可离线包部署走的根本不是这四步（是「下载镜像 → 导入镜像 → 重建容器」），
+ * 写死的话用户看到的说明和实际发生的事对不上。
+ *
+ * @param {Array<{title?: string}>} steps 计划里的步骤
+ * @returns {string} 形如「下载镜像 → 导入镜像 → 重建容器」；没有步骤时返回空串
+ */
+export function planSummary(steps) {
+  if (!Array.isArray(steps)) return ''
+  const titles = steps.map((s) => (s && s.title ? String(s.title).trim() : '')).filter(Boolean)
+  return titles.join(' → ')
+}
+
+/**
+ * 资产大小的人类可读写法。
+ *
+ * @param {number} bytes 字节数
+ * @returns {string} 形如「91 MB」；没有大小信息时返回空串
+ */
+export function assetSize(bytes) {
+  const n = Number(bytes)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  if (n >= 1024 * 1024) return `${Math.round(n / 1024 / 1024)} MB`
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`
+  return `${Math.round(n)} B`
+}
+
+/**
+ * 这套部署形态支不支持自动升级。
+ *
+ * 后端没给这个字段时按「支持」处理 —— 老版本后端不返回它，
+ * 但那时也只有源码部署一条路，不支持就没意义了。
+ *
+ * @param {object} plan 升级计划
+ * @returns {boolean}
+ */
+export function autoUpgradeSupported(plan) {
+  if (!plan || typeof plan !== 'object') return true
+  return plan.auto_upgrade_supported !== false
+}
+
+/**
+ * 从计划里取出「在宿主机上执行就能开启自动升级」的命令。
+ *
+ * 跟手动升级命令不是一回事：手动命令是「这次怎么升」，
+ * 开启命令是「把自动升级这个能力装上」，装好之后每次升级都不用再跑命令。
+ *
+ * @param {object} plan 升级计划
+ * @returns {string[]}
+ */
+export function enableCommands(plan) {
+  if (!plan || !Array.isArray(plan.enable_commands)) return []
+  return plan.enable_commands.filter((c) => typeof c === 'string' && c.trim())
+}

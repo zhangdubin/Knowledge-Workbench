@@ -264,6 +264,10 @@
           <el-button size="small" :loading="updateLoading" @click="checkUpdate(true)">
             {{ updateLoading ? '检查中…' : '检查更新' }}
           </el-button>
+          <!-- 一键升级：可行性判定在后端做，这里只负责把结果讲清楚 -->
+          <el-button size="small" type="primary" plain @click="openUpgrade">
+            <el-icon><Upload /></el-icon>一键升级
+          </el-button>
         </div>
       </div>
 
@@ -354,6 +358,138 @@
       </div>
     </div>
 
+    <!-- 一键升级弹窗：把「检查到新版」变成「真的升上去」。
+         可行性判定全在后端做（有没有 git / docker / build 段），
+         这里只负责把结果讲清楚，并把第 4 步之后的「服务重启」扛过去。 -->
+    <el-dialog
+      v-model="upgrade.visible"
+      title="一键升级"
+      width="760px"
+      align-center
+      :close-on-click-modal="false"
+      append-to-body
+      class="upgrade-dialog"
+    >
+      <div v-loading="upgrade.loading" class="upgrade-body">
+        <!-- 版本对照：一句话说清「从哪到哪」 -->
+        <div class="upgrade-versions">
+          <div class="upgrade-ver">
+            <div class="upgrade-ver-label">当前版本</div>
+            <div class="upgrade-ver-value mono">
+              {{ upgrade.plan?.current_display || updateInfo?.current || '—' }}
+            </div>
+          </div>
+          <el-icon class="upgrade-arrow"><Right /></el-icon>
+          <div class="upgrade-ver">
+            <div class="upgrade-ver-label">目标版本</div>
+            <div class="upgrade-ver-value mono">{{ upgrade.plan?.target || '—' }}</div>
+          </div>
+          <el-tag v-if="upgrade.plan?.mode" size="small" effect="plain" class="upgrade-mode">
+            {{ upgrade.plan.mode === DEPLOY_MODE.OFFLINE ? '离线包部署' : '源码部署' }}
+          </el-tag>
+        </div>
+
+        <el-alert v-if="upgrade.error" :title="upgrade.error" type="error" show-icon :closable="false" />
+
+        <!-- 判定结果：能升就直说，不能升就把缺什么、怎么补一条条摆出来 -->
+        <template v-if="upgrade.plan && !upgradeBusy">
+          <el-alert
+            v-if="upgrade.plan.feasible"
+            title="可以自动升级：后端会在容器里完成拉取版本 → 切换版本 → 重建镜像 → 重启服务"
+            type="success" show-icon :closable="false"
+          />
+          <div v-else class="upgrade-blockers">
+            <div class="upgrade-blockers-title">当前环境不能自动升级</div>
+            <div v-for="b in upgrade.plan.blockers || []" :key="b.code" class="upgrade-blocker">
+              <div class="upgrade-blocker-head">
+                <el-icon><WarningFilled /></el-icon>{{ b.title }}
+              </div>
+              <div class="upgrade-blocker-detail">{{ b.detail }}</div>
+              <div class="upgrade-blocker-fix">怎么办：{{ b.fix }}</div>
+            </div>
+          </div>
+
+          <!-- 脏文件：升级会 checkout 覆盖工作区，这些改动会消失 -->
+          <div v-if="(upgrade.plan.dirty_files || []).length" class="upgrade-dirty">
+            <div class="upgrade-dirty-title">未提交的改动（升级会覆盖它们）</div>
+            <code v-for="f in upgrade.plan.dirty_files" :key="f" class="upgrade-dirty-file mono">{{ f }}</code>
+          </div>
+
+          <div v-if="(upgrade.plan.warnings || []).length" class="upgrade-warnings">
+            <div v-for="w in upgrade.plan.warnings" :key="w.code" class="upgrade-warning">
+              <el-icon><InfoFilled /></el-icon>{{ w.title }} —— {{ w.detail }}
+            </div>
+          </div>
+        </template>
+
+        <!-- 发布内容 -->
+        <div v-if="updateInfo?.notes && !upgradeBusy" class="upgrade-notes">
+          <div class="upgrade-notes-title">更新内容</div>
+          <MarkdownText :content="updateInfo.notes" class="upgrade-notes-body" />
+        </div>
+
+        <!-- 手动命令：不能自动升时，这是唯一能走通的路 -->
+        <div v-if="!upgradeBusy && manualCommands.length" class="upgrade-manual">
+          <div class="upgrade-manual-title">
+            手动升级：在<b>宿主机</b>的项目目录里执行
+            <el-button text size="small" @click="copyManual">
+              <el-icon><CopyDocument /></el-icon>复制命令
+            </el-button>
+          </div>
+          <pre class="upgrade-manual-cmd mono">{{ manualCommands.join('\n') }}</pre>
+          <div class="upgrade-manual-tip">{{ upgradeTip }}</div>
+        </div>
+
+        <!-- 执行中：当前阶段 + 实时日志 -->
+        <template v-if="upgradeBusy">
+          <div class="upgrade-phase">
+            <el-icon v-if="upgrade.phase === 'restarting'" class="is-loading"><Loading /></el-icon>
+            <el-icon v-else><Loading /></el-icon>
+            <span v-if="upgrade.phase === 'restarting'">
+              正在重启服务，请稍候……（最多等待 90 秒，还剩 {{ upgrade.waitLeft }} 秒）
+            </span>
+            <span v-else>正在执行：{{ upgrade.job?.stage_title || '准备中' }}</span>
+          </div>
+
+          <div class="upgrade-steps">
+            <div
+              v-for="s in jobSteps" :key="s.key"
+              class="upgrade-step" :class="`is-${s.status}`"
+            >
+              <el-icon class="upgrade-step-ico">
+                <component :is="stepIcon(s.status)" />
+              </el-icon>
+              <div class="upgrade-step-main">
+                <div class="upgrade-step-title">{{ s.title }}</div>
+                <div class="upgrade-step-cmd mono">{{ s.command }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="upgrade-log" ref="logBox">
+            <div v-if="!(upgrade.job?.log || '')" class="upgrade-log-empty">（等待输出…）</div>
+            <pre class="upgrade-log-body mono">{{ upgrade.job?.log || '' }}</pre>
+          </div>
+        </template>
+      </div>
+
+      <template #footer>
+        <div class="upgrade-foot">
+          <el-button @click="upgrade.visible = false">
+            {{ upgradeBusy ? '后台继续' : '关闭' }}
+          </el-button>
+          <el-button
+            v-if="canStartUpgrade"
+            type="primary"
+            :loading="upgrade.starting"
+            @click="startUpgrade"
+          >
+            <el-icon><Upload /></el-icon>开始升级
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
     <!-- 关于系统：版本标识的「正式户口」——排障时让人一眼说清跑的是哪一版 -->
     <div class="card">
       <div class="card-title">
@@ -382,10 +518,10 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../../api'
-import { upgradeCommand, upgradeTip as upgradeTipText } from '../../utils/update'
+import { upgradeCommand, upgradeTip as upgradeTipText, DEPLOY_MODE } from '../../utils/update'
 import { useAuthStore } from '../../stores/auth'
 import PageTitle from '../../components/PageTitle.vue'
 import MarkdownText from '../../components/MarkdownText.vue'
@@ -400,6 +536,10 @@ async function checkUpdate(refresh = false) {
   updateLoading.value = true
   try {
     updateInfo.value = await Api.updateCheck(refresh)
+    // 检查完顺手问一次部署模式：离线包部署的机器上没有 git，
+    // 页面上的「升级方法」必须给离线包的指引，给 git 命令只会
+    // 得到 "git: command not found"（这正是最需要指引时的坑）
+    refreshDeployMode()
   } catch { /* 拦截器已提示 */ } finally {
     updateLoading.value = false
   }
@@ -460,8 +600,201 @@ function copyUpgradeCmd() {
 
 // 升级脚本是 v0.4.0 才进仓库的，旧版本的前端里没有这个文件。
 // 按当前版本给不同的命令，别让用户去跑一条不存在的脚本。
-const upgradeCmd = computed(() => upgradeCommand(updateInfo.value?.current, updateInfo.value?.latest))
-const upgradeTip = computed(() => upgradeTipText(updateInfo.value?.current))
+//
+// 第三个参数是部署模式：离线包部署的机器上根本没有 git，
+// 给它 git 命令只会得到 "git: command not found"。
+const deployMode = ref(DEPLOY_MODE.GIT)
+const upgradeCmd = computed(() => upgradeCommand(
+  updateInfo.value?.current, updateInfo.value?.latest, deployMode.value))
+const upgradeTip = computed(() => upgradeTipText(updateInfo.value?.current, deployMode.value))
+
+// ---- 一键升级弹窗 ----
+//
+// 为什么单独一个弹窗：升级会**重启整个服务**，那段时间里页面上任何一次
+// 点击都可能落在一个正在重启的界面上。放进弹窗，状态、日志、等待都有地方安放。
+//
+// 可行性判定完全在后端做（只有它知道容器里有没有 git / docker、
+// 编排文件带不带 build: 段），前端只负责把返回的结论讲清楚，
+// 以及扛过第 4 步之后「后端没了」的那几十秒。
+
+const POLL_MS = 1500           // 日志轮询间隔
+const RESTART_WAIT_MS = 90000  // 第 4 步之后最多等多久（后端要重建容器）
+
+const upgrade = reactive({
+  visible: false,
+  loading: false,     // 正在取可行性判定
+  starting: false,    // 正在提交升级
+  plan: null,
+  job: null,
+  phase: 'idle',      // idle | running | restarting | done | failed
+  error: '',
+  waitLeft: 0,
+})
+
+const logBox = ref(null)
+let pollTimer = null
+
+const upgradeBusy = computed(() => upgrade.phase === 'running' || upgrade.phase === 'restarting')
+const manualCommands = computed(() => upgrade.plan?.manual_commands || [])
+// 步骤：运行中用作业自己的状态（pending/running/done/failed），
+// 没运行时用计划里的清单（只有标题与命令）
+const jobSteps = computed(() => {
+  const steps = upgrade.job?.steps || upgrade.plan?.steps || []
+  return steps.map((s) => ({ ...s, status: s.status || 'pending' }))
+})
+const canStartUpgrade = computed(() =>
+  !!upgrade.plan?.feasible && !!upgrade.plan?.target && !upgradeBusy.value && !upgrade.starting)
+
+function stepIcon(status) {
+  return { running: 'Loading', done: 'CircleCheck', failed: 'CircleClose' }[status] || 'Clock'
+}
+
+// 日志自动滚到底：正在看的人关心的是「现在写到哪了」
+async function scrollLog() {
+  await nextTick()
+  const el = logBox.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+async function refreshDeployMode() {
+  // 页面上的「升级方法」区块要知道部署模式，否则会给离线包部署的机器
+  // 递一条它根本跑不了的 git 命令
+  try {
+    const plan = await Api.updatePlan(updateInfo.value?.latest || '')
+    deployMode.value = plan?.mode === DEPLOY_MODE.OFFLINE ? DEPLOY_MODE.OFFLINE : DEPLOY_MODE.GIT
+    return plan
+  } catch {
+    return null
+  }
+}
+
+async function openUpgrade() {
+  upgrade.visible = true
+  upgrade.phase = 'idle'
+  upgrade.error = ''
+  upgrade.job = null
+  upgrade.loading = true
+  try {
+    const plan = await Api.updatePlan(updateInfo.value?.latest || '')
+    upgrade.plan = plan
+    deployMode.value = plan?.mode === DEPLOY_MODE.OFFLINE ? DEPLOY_MODE.OFFLINE : DEPLOY_MODE.GIT
+    // 后端把「查不到目标版本」这类错误放在 ok/error 里，HTTP 仍是 200
+    if (plan && plan.ok === false && plan.error) upgrade.error = plan.error
+  } catch (e) {
+    upgrade.plan = null
+    upgrade.error = e?.response?.data?.detail || '无法获取升级计划，请确认后端服务正常'
+  } finally {
+    upgrade.loading = false
+  }
+}
+
+async function startUpgrade() {
+  const plan = upgrade.plan
+  if (!plan?.feasible || !plan.target) return
+  // 二次确认：升级会重启服务，这是必须让人点头的一步
+  try {
+    await ElMessageBox.confirm(
+      `即将把系统从 ${plan.current_display || plan.current} 升级到 ${plan.target}。\n\n`
+      + '· 升级过程中服务会重启一次，期间系统不可用\n'
+      + '· 「重建镜像」那一步最慢，通常要几分钟\n'
+      + '· 升级失败不会自动回滚，需要照着日志手动处理\n\n'
+      + '确定继续吗？',
+      '确认执行一键升级',
+      { type: 'warning', confirmButtonText: '开始升级', cancelButtonText: '再想想' }
+    )
+  } catch { return }
+
+  upgrade.starting = true
+  try {
+    const res = await Api.updateApply(plan.target)
+    upgrade.job = res.job
+    upgrade.phase = 'running'
+    ElMessage.success(res.already_running ? '已有升级作业在运行，已切到它的进度' : '升级已开始')
+    scrollLog()
+    pollJob()
+  } catch (e) {
+    upgrade.error = e?.response?.data?.detail || '无法启动升级'
+    ElMessage.error(upgrade.error)
+  } finally {
+    upgrade.starting = false
+  }
+}
+
+function pollJob() {
+  clearTimeout(pollTimer)
+  pollTimer = setTimeout(pollOnce, POLL_MS)
+}
+
+async function pollOnce() {
+  const jobId = upgrade.job?.job_id || ''
+  try {
+    const res = await Api.updateJob(jobId)
+    const job = res.job
+    if (job) {
+      upgrade.job = job
+      if (job.status === 'restarting') { enterRestartWait(); return }
+      if (job.status === 'succeeded') { finishUpgrade(); return }
+      if (job.status === 'failed') {
+        upgrade.phase = 'failed'
+        upgrade.error = job.error || '升级失败'
+        return
+      }
+    }
+    upgrade.phase = 'running'
+    scrollLog()
+    pollJob()
+  } catch {
+    // 轮询失败 = 后端正在被第 4 步重建掉。
+    // 这不是错误，是「该转进等它回来的模式了」。
+    enterRestartWait()
+  }
+}
+
+// 进入「正在重启服务」模式：轮询会一直失败，直到新容器起来
+function enterRestartWait() {
+  if (upgrade.phase === 'restarting') return
+  upgrade.phase = 'restarting'
+  upgrade.waitLeft = Math.round(RESTART_WAIT_MS / 1000)
+  waitBackend()
+}
+
+async function waitBackend() {
+  const deadline = Date.now() + RESTART_WAIT_MS
+  while (Date.now() < deadline) {
+    try {
+      await Api.upgradeHealth()
+      // 后端回来了 —— 升级完成
+      upgrade.phase = 'done'
+      upgrade.waitLeft = 0
+      ElMessage.success('服务已恢复，升级完成，正在刷新页面…')
+      setTimeout(() => window.location.reload(), 2000)
+      return
+    } catch {
+      upgrade.waitLeft = Math.max(0, Math.round((deadline - Date.now()) / 1000))
+      await new Promise((r) => setTimeout(r, 2000))
+    }
+  }
+  upgrade.phase = 'failed'
+  upgrade.error = ('服务在 90 秒内没有恢复。请到服务器上执行 '
+    + 'docker compose logs backend 看看到底卡在哪一步。')
+}
+
+function finishUpgrade() {
+  upgrade.phase = 'done'
+  ElMessage.success('升级完成，正在刷新页面…')
+  setTimeout(() => window.location.reload(), 1500)
+}
+
+function copyManual() {
+  // 只复制能执行的命令：注释行是给人看的，粘到终端里是噪音
+  const cmds = manualCommands.value.filter((c) => !c.trim().startsWith('#'))
+  navigator.clipboard?.writeText(cmds.join('\n'))
+  ElMessage.success(`已复制 ${cmds.length} 条命令`)
+}
+
+onUnmounted(() => {
+  clearTimeout(pollTimer)
+})
 
 const loading = ref(false)
 const saving = ref(false)
@@ -748,7 +1081,10 @@ onMounted(load)
   display: inline-flex; align-items: center; gap: 8px;
   font-weight: 600; color: var(--el-text-color-primary);
 }
-.set-key { font-size: 12px; color: var(--el-text-color-placeholder); }
+/* 环境变量名是内容，不是占位符。
+   原来用的 placeholder 色（#b8bcc6）在白底上只有 2.23:1，
+   读起来发飘 —— 用户要照着这个 key 去写 .env，看不清就容易写错。 */
+.set-key { font-size: 12px; color: var(--text-tertiary); }
 .set-help {
   margin: 6px 0 10px; font-size: 13px; line-height: 1.75;
   color: var(--el-text-color-regular); max-width: 900px;
@@ -783,7 +1119,9 @@ onMounted(load)
   font-size: 13px; color: var(--el-text-color-regular); margin-bottom: 8px;
 }
 .cand-warn { display: inline-flex; align-items: center; gap: 4px; color: var(--el-color-warning-dark-2); }
-.opt-path { margin-right: 10px; }
+/* 备选存储路径是内容，不是占位符 —— 用户要照着它去挂盘。
+   原来继承的 placeholder 色在白底上只有 2.23:1，几乎读不出来。 */
+.opt-path { margin-right: 10px; color: var(--text-tertiary); }
 .opt-tags { float: right; }
 .data-table { width: 100%; }
 

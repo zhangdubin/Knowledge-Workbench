@@ -197,13 +197,23 @@ async def case_not_configured() -> None:
     os.environ.pop("UPDATE_REPO", None)
     os.environ.pop("KB_UPDATE_REPO", None)
 
-    info = await upd.check_update()
-    check("未配置时 configured 为假", info.get("configured") is False)
-    check("未配置时状态是 not_configured", info.get("status") == "not_configured",
-          f"status={info.get('status')!r}")
-    check("未配置时告诉用户去哪配", "升级与更新" in (info.get("error") or ""),
-          (info.get("error") or "")[:60])
-    check("未配置时没有原始异常抛出", "Traceback" not in (info.get("error") or ""))
+    # 上一行把环境变量清掉了还不够：effective() 的最后一级兜底是
+    # pydantic 的 settings 对象，而它是 **import 时** 就从环境里把
+    # KB_UPDATE_REPO 读进去的 —— 之后再 pop os.environ 对它无效。
+    # 所以这里要把这层默认值也一并按住，否则在「.env 里配了仓库」的
+    # 机器上永远测不出「未配置」这个分支（环境变量兜底是正常功能，不能动）。
+    saved_repo = ss.settings.update_repo
+    ss.settings.update_repo = ""
+    try:
+        info = await upd.check_update()
+        check("未配置时 configured 为假", info.get("configured") is False)
+        check("未配置时状态是 not_configured", info.get("status") == "not_configured",
+              f"status={info.get('status')!r}")
+        check("未配置时告诉用户去哪配", "升级与更新" in (info.get("error") or ""),
+              (info.get("error") or "")[:60])
+        check("未配置时没有原始异常抛出", "Traceback" not in (info.get("error") or ""))
+    finally:
+        ss.settings.update_repo = saved_repo
 
     # 非法值只可能来自 .env / 环境变量 —— 它绕过了界面上的校验
     os.environ["UPDATE_REPO"] = "not-a-valid-repo"

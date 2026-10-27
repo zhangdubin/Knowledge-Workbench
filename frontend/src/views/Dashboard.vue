@@ -58,28 +58,28 @@
 
     <!-- 统计 -->
     <div class="stat-grid">
-      <div class="stat-card" @click="$router.push('/types')">
+      <div class="stat-card" role="button" tabindex="0" @click="go('/types')" @keydown="onCardKey($event, '/types')">
         <div class="icon"><el-icon><Files /></el-icon></div>
         <div class="value-block">
           <div class="value">{{ stats.type_count || 0 }}</div>
           <div class="label">数据模型</div>
         </div>
       </div>
-      <div class="stat-card success" @click="$router.push('/types')">
+      <div class="stat-card success" role="button" tabindex="0" @click="go('/types')" @keydown="onCardKey($event, '/types')">
         <div class="icon"><el-icon><Document /></el-icon></div>
         <div class="value-block">
           <div class="value">{{ stats.record_count || 0 }}</div>
           <div class="label">数据记录</div>
         </div>
       </div>
-      <div class="stat-card warning" @click="$router.push('/graph')">
+      <div class="stat-card warning" role="button" tabindex="0" @click="go('/graph')" @keydown="onCardKey($event, '/graph')">
         <div class="icon"><el-icon><Share /></el-icon></div>
         <div class="value-block">
           <div class="value">{{ stats.relation_count || 0 }}</div>
           <div class="label">关联关系</div>
         </div>
       </div>
-      <div class="stat-card info" @click="$router.push('/library')">
+      <div class="stat-card info" role="button" tabindex="0" @click="go('/library')" @keydown="onCardKey($event, '/library')">
         <div class="icon"><el-icon><Coin /></el-icon></div>
         <div class="value-block">
           <div class="value">{{ fileCount }}</div>
@@ -99,8 +99,7 @@
         <div
           v-for="q in quickLinks"
           :key="q.path"
-          class="quick-item"
-          @click="$router.push(q.path)"
+          class="quick-item" role="button" tabindex="0" @click="go(q.path)" @keydown="onCardKey($event, q.path)"
         >
           <div class="quick-icon" :style="{ background: q.bg, color: q.color }">
             <el-icon :size="22"><component :is="q.icon" /></el-icon>
@@ -127,8 +126,7 @@
           <div
             v-for="app in apps.slice(0, 4)"
             :key="app.key"
-            class="app-card"
-            @click="$router.push(`/apps/${app.key}`)"
+            class="app-card" role="button" tabindex="0" @click="go(`/apps/${app.key}`)" @keydown="onCardKey($event, `/apps/${app.key}`)"
           >
             <div class="app-card-header">
               <div class="app-icon">
@@ -198,9 +196,27 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { Api } from '../api'
 import { formatTime } from '../utils/format'
 import { entityIcon, appIcon } from '../utils/icons'
+
+const router = useRouter()
+
+// 整块可点的卡片（统计卡、快捷入口、应用卡）都是 div + @click：
+// 鼠标能点，但键盘用户 Tab 过来会直接跳过它 —— 既没有焦点，
+// 也没有「这东西可以点」的语义。
+// 统一走这两个函数：role/tabindex 让它进 Tab 序列，Enter/Space 触发同样的跳转。
+function go(path) {
+  router.push(path)
+}
+function onCardKey(e, path) {
+  if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+    // 空格默认会滚动页面，先抢掉这个键
+    e.preventDefault()
+    go(path)
+  }
+}
 
 const stats = ref({})
 const apps = ref([])

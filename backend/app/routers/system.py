@@ -586,3 +586,65 @@ async def update_check(refresh: int = 0,
     from ..services import update as upd
     return await upd.check_update(refresh=bool(refresh))
 
+
+# ==================== 一键升级 ====================
+#
+# 上面那个接口只负责「查」；这一组负责「做」。
+#
+# 之所以敢在接口里代执行，是因为后端容器被授予了三样东西：
+# git、docker CLI、宿主机的项目目录 + docker.sock。
+# 默认镜像里这三样都没有 —— 那台机器上这一组接口会如实说「不可行」，
+# 并给出确切的手动命令，而不是假装失败。
+#
+# 权限与「检查更新」一致（system_config，superuser 自动放行）：
+# 升级会重启整个服务，权限不能比改配置更低。
+
+class UpgradeApplyIn(BaseModel):
+    target: str = ""      # 目标 tag；留空则用更新检查里的最新版本
+
+
+@router.get("/update/plan")
+async def update_plan(target: str = "",
+                      principal: Principal = Depends(require_feature("system_config"))):
+    """一键升级的可行性判定
+
+    返回：能不能自动升（feasible）、缺什么（blockers，每条带怎么补）、
+    部署模式（mode：git / offline）、步骤清单、手动命令。
+    前端据此决定「给按钮」还是「给命令」。
+    """
+    from ..services import upgrade as upg
+    return await upg.build_plan(target)
+
+
+@router.post("/update/apply")
+async def update_apply(payload: UpgradeApplyIn, request: Request,
+                       principal: Principal = Depends(require_feature("system_config"))):
+    """启动升级作业（后台跑，接口立刻返回 job_id）
+
+    已经在跑的话不会新起一个，而是返回当前那个作业 ——
+    两个作业抢同一个目录，第二个 checkout 会把第一个正在构建的代码换掉。
+    """
+    from ..services import upgrade as upg
+    out = await upg.start_upgrade(payload.target, who=principal.username)
+    request.state.audit_detail = {
+        "action": "upgrade",
+        "target": (out.get("job") or {}).get("target") or payload.target,
+        "already_running": bool(out.get("already_running")),
+    }
+    if not out.get("ok"):
+        # 400 而不是 500：失败都发生在动手前（条件不满足），属于可解释的拒绝
+        raise HTTPException(400, str(out.get("error") or "无法启动升级"))
+    return out
+
+
+@router.get("/update/job")
+async def update_job(job_id: str = "",
+                     principal: Principal = Depends(require_feature("system_config"))):
+    """作业状态 + 实时日志（前端 1.5 秒轮询一次）
+
+    后端容器被第 4 步重启后，内存里的作业没了，接口会从状态文件恢复 ——
+    所以浏览器在「正在重启服务」期间仍然能看到完整的升级日志。
+    """
+    from ..services import upgrade as upg
+    return upg.get_job(job_id)
+

@@ -381,6 +381,20 @@ backups/snap-20260924-220600/
 - `node scripts/v25-verify-access-paths.cjs` —— 搜索 / 图谱 / 关联 / 列表这四条聚合路径不泄露
 - `node scripts/v27-verify-nginx-upstream.cjs` —— 前端在后端不可用时不崩溃、能自动恢复
 
+## 🎨 界面质量的自动化验收
+
+「简陋」是主观描述，改完说不清有没有改好。所以把它拆成能自动判定的指标：
+
+- `node scripts/v28-verify-ui-polish.cjs` —— **UI 体检**：文字对比度（WCAG AA 4.5:1）、
+  焦点可见性、触控目标（≥28×28）、横向溢出、行高、伪按钮（div 冒充按钮）。
+  禁用控件按 WCAG 1.4.3 豁免对比度。
+- `node scripts/v29-verify-routes-render.cjs` —— **路由渲染冒烟**：19 个页面逐个打开，
+  断言真的有内容、且没有 JS 运行时错误。
+
+第二条是踩坑补上的：v0.5.0 开发中出现过一次「编译通过、构建通过、单元测试全绿，
+但整页白屏」—— Apps.vue 用了 `watch` 却忘了从 vue 导入。编译器不管这个，
+vite 也不管，单测更管不到（单测测的是纯函数）。只有真的在浏览器里打开一次才会炸。
+
 ## 📁 目录结构
 
 ```
@@ -412,6 +426,62 @@ kb-workbench/
 ├── start.sh                # 启停脚本
 └── README.md
 ```
+
+## ⬆️ 一键升级（v0.5.0 新增）
+
+「系统设置 → 升级与更新 → 一键升级」。后端接管整个升级过程：
+`git fetch --tags` → `git checkout <tag>` → `docker compose build` → `docker compose up -d`，
+全程实时日志、阶段提示、审计留痕。
+
+**点下去之前会先做可行性判定。** 缺任何一样东西都会明确告诉你缺什么、怎么补，
+不会「假装能升然后失败」：
+
+| 缺什么 | 表现 |
+|---|---|
+| 项目目录 | 容器里找不到带 `.git` 与编排文件的目录 |
+| git | 后端镜像里没有 git 命令 |
+| docker CLI | 后端镜像里没有 docker 命令 |
+| docker socket | 后端容器没接管宿主机 docker 守护进程 |
+| compose 命令 | 找不到可用的 `docker compose` / `docker-compose` |
+
+### 两种部署形态，升级路径不同
+
+- **源码部署**（有 `.git`，编排文件带 `build:`）→ 走 git + compose 全自动
+- **离线包部署**（镜像 `image:`，无 `.git`）→ 走 `bash install.sh -d <安装目录>`，
+  安装脚本会保留 `.env` 与全部数据
+
+判定依据是「容器里找不找得到项目目录」，不是猜的。离线包部署的机器上
+**根本没有 git**，所以 v0.4.2 之前那条 `./scripts/upgrade.sh` 的指引是跑不通的 ——
+v0.4.2 起按部署形态分别给对命令。
+
+### 想开自动升级，要额外挂三样东西
+
+默认**不开**（后端镜像不带 git/docker CLI，不给所有用户白涨 90MB）：
+
+```yaml
+services:
+  backend:
+    build:
+      args:
+        INSTALL_UPGRADE_TOOLS: "1"      # 镜像里装 git + docker CLI
+    environment:
+      KB_PROJECT_DIR: /app/project       # 告诉后端项目目录在哪
+    volumes:
+      - .:/app/project                   # 挂进项目目录
+      - /var/run/docker.sock:/var/run/docker.sock   # 让后端能跑 compose
+```
+
+> ⚠️ 挂 `docker.sock` 等于把宿主机的 root 权限交给容器。
+> 只有在你信任这台机器、且这台机器上只跑你自己的编排时才这么做。
+> 单机多租户环境请保持关闭，走手动命令。
+
+### 第 4 步会把自己杀掉
+
+`docker compose up -d` 会重建后端容器，**正在执行这段命令的后端进程自己会被终止**。
+所以作业状态拆成两段：前三步跑完前日志是完整的；第 4 步一执行状态切到「重启中」，
+前端显示「正在重启服务，请稍候…」并自动重试 90 秒，页面刷新后就是新版本。
+
+工作区不干净（有未提交的改动）时直接拒绝，并列出哪些文件脏了。
 
 ## 📦 离线安装包
 

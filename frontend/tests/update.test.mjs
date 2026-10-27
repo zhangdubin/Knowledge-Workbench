@@ -12,6 +12,7 @@ import {
   upgradeCommand,
   upgradeTip,
   UPGRADE_SCRIPT_SINCE,
+  DEPLOY_MODE,
 } from '../src/utils/update.js'
 
 let n = 0
@@ -67,5 +68,36 @@ ok(
 ok(upgradeTip('0.4.1').includes('回滚'), '新版本提示里说明有回滚')
 ok(upgradeTip('0.3.4').includes('手动升级'), '旧版本提示改走手动升级')
 ok(!upgradeTip('0.3.4').includes('失败自动回滚'), '旧版本别承诺回滚（没有脚本）')
+
+// ---------- 部署模式 ----------
+// 离线包部署的机器上没有 git，给它 git 命令只会得到 "git: command not found"
+ok(
+  !upgradeCommand('0.4.2', 'v0.5.0', DEPLOY_MODE.OFFLINE).includes('git '),
+  '离线包部署绝不能提示 git 命令',
+)
+ok(
+  upgradeCommand('0.4.2', 'v0.5.0', DEPLOY_MODE.OFFLINE).includes('install.sh'),
+  '离线包部署提示走安装脚本',
+)
+ok(
+  upgradeCommand('0.3.4', 'v0.5.0', DEPLOY_MODE.OFFLINE).includes('install.sh'),
+  '离线包部署时旧版本也走安装脚本（没有 upgrade.sh 这回事）',
+)
+ok(
+  upgradeTip('0.4.2', DEPLOY_MODE.OFFLINE).includes('离线包'),
+  '离线包部署的提示要说明是离线包升级',
+)
+ok(
+  !upgradeTip('0.4.2', DEPLOY_MODE.OFFLINE).includes('回滚'),
+  '离线包安装脚本没有回滚机制，别承诺',
+)
+ok(
+  upgradeCommand('0.4.2', 'v0.5.0', DEPLOY_MODE.GIT) === './scripts/upgrade.sh',
+  '源码部署的默认行为不变',
+)
+ok(
+  upgradeCommand('0.4.2', 'v0.5.0').includes('upgrade.sh'),
+  '不传模式时默认按源码部署处理',
+)
 
 console.log(`✅ 升级指引 ${n} 项断言全部通过`)

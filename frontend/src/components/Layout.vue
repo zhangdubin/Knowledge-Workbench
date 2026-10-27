@@ -1,33 +1,50 @@
 <template>
   <el-container class="layout">
-    <el-aside width="224px" class="sidebar">
+    <el-aside :width="sidebarWidth" class="sidebar" :class="{ 'is-collapsed': collapsed }">
       <div class="brand">
         <div class="brand-logo">
           <el-icon :size="19"><Collection /></el-icon>
         </div>
-        <div class="brand-text">
+        <div v-show="!collapsed" class="brand-text">
           <div class="brand-title">知识工作台</div>
           <div class="brand-sub">Knowledge Workbench</div>
         </div>
       </div>
 
+      <!-- 折叠态用 Element Plus 自己的 collapse：它会把标题收进悬浮气泡，
+           鼠标停上去还能看到全名，比自己写一套更稳 -->
       <el-menu
         :default-active="activeMenu"
         :router="true"
+        :collapse="collapsed"
+        :collapse-width="64"
         class="nav-menu"
       >
         <template v-for="g in navGroups" :key="g.title">
-          <div class="nav-group-title">{{ g.title }}</div>
+          <div v-show="!collapsed" class="nav-group-title">{{ g.title }}</div>
+          <!-- 折叠后分组标题没了，用一条细线保留分组边界，
+               否则一列图标看不出谁跟谁是一组 -->
+          <div v-if="collapsed" class="nav-group-divider" />
           <el-menu-item v-for="item in g.items" :key="item.path" :index="item.path">
             <el-icon><component :is="item.icon" /></el-icon>
-            <span>{{ item.label }}</span>
+            <template #title>{{ item.label }}</template>
           </el-menu-item>
         </template>
         <div v-if="!navGroups.length" class="nav-group-title">当前账号没有任何页面权限</div>
       </el-menu>
 
       <div class="sidebar-footer">
-        <div class="kbd-hint">
+        <button
+          type="button"
+          class="collapse-btn"
+          :title="collapsed ? '展开侧边栏' : '收起侧边栏'"
+          :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
+          @click="toggleCollapse"
+        >
+          <el-icon><component :is="collapsed ? 'DArrowRight' : 'DArrowLeft'" /></el-icon>
+          <span v-show="!collapsed">收起侧边栏</span>
+        </button>
+        <div v-show="!collapsed" class="kbd-hint">
           <span class="kbd">⌘K</span>
           <span>快速搜索</span>
         </div>
@@ -52,6 +69,7 @@
           >
             <el-icon><Menu /></el-icon>
           </el-button>
+          <!-- 当前上下文：面包屑给出层级，页面名给出当前位置 -->
           <el-breadcrumb separator="/" class="breadcrumb">
             <el-breadcrumb-item :to="{ path: '/' }">
               <el-icon><HomeFilled /></el-icon>
@@ -253,6 +271,24 @@ const navGroups = computed(() => NAV
 
 const avatarText = computed(() => (auth.displayName || '?').slice(0, 1))
 
+// ---- 侧边栏折叠 ----
+// 折叠状态存到 localStorage：这是「工作台形状」的偏好，
+// 不是临时状态，刷新后不该弹回去（每次进来都要重新收起很烦）
+const COLLAPSE_KEY = 'kb-sidebar-collapsed'
+const collapsed = ref(false)
+const sidebarWidth = computed(() => (collapsed.value ? '64px' : '224px'))
+
+function readCollapse() {
+  try {
+    collapsed.value = localStorage.getItem(COLLAPSE_KEY) === '1'
+  } catch (e) { /* 隐私模式下不可用，用默认展开 */ }
+}
+
+function toggleCollapse() {
+  collapsed.value = !collapsed.value
+  try { localStorage.setItem(COLLAPSE_KEY, collapsed.value ? '1' : '0') } catch (e) { /* 忽略 */ }
+}
+
 // ---- 改密 ----
 const pwOpen = ref(false)
 const pwSaving = ref(false)
@@ -373,6 +409,7 @@ function handleKey(e) {
 }
 
 onMounted(async () => {
+  readCollapse()
   await auth.bootstrap()
   window.addEventListener('keydown', handleKey)
   checkMobile()
@@ -397,6 +434,14 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   border-right: 1px solid rgba(255, 255, 255, 0.05);
+  transition: width var(--duration) var(--ease-out);
+  overflow: hidden;
+}
+/* 折叠态：品牌区只剩图标，中间对齐 */
+.sidebar.is-collapsed .brand {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .brand {
@@ -405,6 +450,7 @@ onUnmounted(() => {
   gap: 11px;
   padding: 18px 18px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  min-height: 69px;
 }
 .brand-logo {
   width: 34px;
@@ -427,7 +473,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 .brand-sub {
-  font-size: 10px;
+  font-size: 11px;
   color: rgba(255, 255, 255, 0.32);
   margin-top: 3px;
   letter-spacing: 0.6px;
@@ -441,6 +487,7 @@ onUnmounted(() => {
   background: transparent;
   padding: 6px 0 14px;
   overflow-y: auto;
+  overflow-x: hidden;
   /* 让 Element Plus 菜单融入深色侧栏 */
   --el-menu-bg-color: transparent;
   --el-menu-text-color: rgba(255, 255, 255, 0.66);
@@ -474,14 +521,16 @@ onUnmounted(() => {
 .nav-menu :deep(.el-menu-item:hover) .el-icon {
   color: rgba(255, 255, 255, 0.78);
 }
+/* 当前项：背景 + 字重 + 左侧高亮条，三重指示 ——
+   只靠颜色区分在深色侧栏上不够明显，只靠背景又不够「当前位置」 */
 .nav-menu :deep(.el-menu-item.is-active) {
-  background: rgba(255, 255, 255, 0.075) !important;
+  background: rgba(255, 255, 255, 0.085) !important;
   color: #fff !important;
-  font-weight: 550;
+  font-weight: 600;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
 }
 .nav-menu :deep(.el-menu-item.is-active:focus) {
-  background: rgba(255, 255, 255, 0.075);
+  background: rgba(255, 255, 255, 0.085);
 }
 .nav-menu :deep(.el-menu-item.is-active) .el-icon {
   color: #a7aae8;
@@ -497,23 +546,65 @@ onUnmounted(() => {
   background: linear-gradient(180deg, #8a8ee0, #5b5fc7);
   border-radius: 0 3px 3px 0;
 }
+/* 折叠态：图标居中，悬浮时用 Element Plus 的气泡显示全名 */
+.sidebar.is-collapsed :deep(.el-menu-item) {
+  margin: 1px 8px;
+  padding: 0 !important;
+  justify-content: center;
+}
+.sidebar.is-collapsed :deep(.el-menu-item::before) {
+  left: -8px;
+}
 
 .nav-group-title {
-  font-size: 10.5px;
+  font-size: 11px;
   color: rgba(255, 255, 255, 0.34);
   letter-spacing: 1.1px;
   padding: 17px 21px 7px;
   font-weight: 600;
   text-transform: uppercase;
 }
+/* 折叠态：分组标题换成一条分隔线，保留「谁跟谁一组」的线索 */
+.nav-group-divider {
+  height: 1px;
+  margin: 10px 16px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.nav-group-divider:first-of-type { margin-top: 4px; }
 
 .sidebar-footer {
   padding: 12px 18px 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.055);
 }
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  margin-bottom: 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+.collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+}
+.collapse-btn:focus-visible {
+  outline: 2px solid var(--primary-light);
+  outline-offset: 1px;
+}
+.sidebar.is-collapsed .collapse-btn { justify-content: center; padding: 4px 0; }
 .kbd-hint {
-  font-size: 11.5px;
-  color: rgba(255, 255, 255, 0.32);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.36);
   display: flex;
   align-items: center;
   gap: 7px;
@@ -524,13 +615,13 @@ onUnmounted(() => {
   padding: 1px 6px;
   border-radius: 4px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 12px;
   color: rgba(255, 255, 255, 0.6);
 }
 .sys-version {
   margin-top: 8px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   color: rgba(255, 255, 255, 0.3);
   letter-spacing: 0.2px;
 }
@@ -544,6 +635,9 @@ onUnmounted(() => {
   padding: 0 26px;
   height: 58px;
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
 }
 .topbar-left {
   display: flex;
@@ -569,6 +663,7 @@ onUnmounted(() => {
   color: var(--text-secondary);
   font-weight: 500;
 }
+/* 当前位置：比面包屑更重，告诉用户「你现在在这」 */
 .page-title {
   font-size: 15px;
   font-weight: 600;
@@ -608,13 +703,13 @@ onUnmounted(() => {
 }
 .search-kbd {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-tertiary);
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0 5px;
-  line-height: 16px;
+  line-height: 18px;
 }
 
 /* ============ 主区 ============ */
@@ -735,6 +830,10 @@ onUnmounted(() => {
   transition: all 0.16s ease;
 }
 .user-chip:hover { border-color: var(--primary-light); background: var(--primary-50); }
+.user-chip:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
 .user-avatar {
   width: 28px; height: 28px; border-radius: 50%;
   background: var(--primary-grad); color: #fff;
@@ -743,7 +842,7 @@ onUnmounted(() => {
 }
 .user-meta { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }
 .user-name { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); }
-.user-role { font-size: 10.5px; color: var(--text-tertiary); }
+.user-role { font-size: 12px; color: var(--text-tertiary); }
 .user-caret { color: var(--text-tertiary); font-size: 12px; }
 
 @media (max-width: 768px) {

@@ -22,6 +22,16 @@
   --info: #6b7280;
   --info-bg: rgba(107, 114, 128, 0.08);
 
+  /* ---- 状态色的「文字版」 ----
+     状态色本身是拿来当图标/边框用的，当文字用时颜色得再压暗一档才够对比度。
+     #c07c17 配白底只有 3.42:1，达不到 AA 的 4.5:1；
+     #9a6006 是 5.31:1，视觉上仍是同一种琥珀色，但读得清了。
+     凡是「在浅色背景上显示状态文字」的地方，都用这一组，而不是原色。 */
+  --warning-text: #9a6006;
+  --success-text: #0a6650;
+  --danger-text: #ad3630;
+  --info-text: #5b6273;
+
   /* ============ 中性色 · 冷灰层级 ============ */
   --bg: #f6f7f9;
   --bg-card: #ffffff;
@@ -33,8 +43,11 @@
 
   --text-primary: #17181d;
   --text-secondary: #4b4f59;
-  --text-tertiary: #8a8f9b;
-  --text-disabled: #b8bcc6;
+  /* 次要文字是全站出现最多的颜色（副标题、计数、空态描述、占位提示），
+     原来的 #8a8f9b 在白底上只有 3.24:1，达不到 AA 的 4.5:1。
+     压到 #646b7a 后：白底 5.35:1，浅灰底（--bg-subtle）4.73:1，两处都过。 */
+  --text-tertiary: #646b7a;
+  --text-disabled: #8d94a2;
 
   --border: #e4e6ec;
   --border-light: #eef0f3;
@@ -43,36 +56,64 @@
   --grid-line: #eef0f4;
   --grid-line-strong: #e3e6ec;
 
-  /* ============ 阴影 · 中性柔和（去蓝调、低扩散） ============ */
-  --shadow-xs: 0 1px 2px rgba(16, 18, 27, 0.04);
-  --shadow-sm: 0 1px 2px rgba(16, 18, 27, 0.04), 0 1px 3px rgba(16, 18, 27, 0.03);
-  --shadow: 0 2px 4px rgba(16, 18, 27, 0.03), 0 4px 12px rgba(16, 18, 27, 0.045);
-  --shadow-lg: 0 4px 8px rgba(16, 18, 27, 0.04), 0 12px 28px rgba(16, 18, 27, 0.07);
-  --shadow-xl: 0 8px 16px rgba(16, 18, 27, 0.05), 0 24px 56px rgba(16, 18, 27, 0.10);
+  /* ============ 阴影 · 三档语义（卡片静止 / 卡片悬浮 / 弹层） ============
+     之前所有阴影都偏淡，卡片贴在底色上看不出「浮」——这不是颜色选错，
+     而是「暗部密度」和「扩散半径」两个参数都太小：浏览器把 <4px 的位移
+     当成没有位移，视觉上就等于没抬起来。
+     现在把阴影拆成三档并整体加深：
+       - 卡片静止：只有贴近底面的一层薄暗部，表示「这是一张纸」
+       - 卡片悬浮：位移拉到 4px、扩散 28px，鼠标压上来时能明确看出卡片被抬起
+       - 弹层：再加一层大扩散，给对话框/下拉「浮在内容之上」的重量感
+     旧的 --shadow-xs/sm/lg/xl 保留为别名，既有两千行样式引用不用逐个改，
+     但新代码请直接用语义名（--shadow-card / --shadow-card-hover / --shadow-overlay）。 */
+  --shadow-xs: 0 1px 2px rgba(16, 18, 27, 0.05);
+  --shadow-card: 0 1px 2px rgba(16, 18, 27, 0.05), 0 1px 3px rgba(16, 18, 27, 0.045);
+  --shadow-card-hover: 0 4px 10px rgba(16, 18, 27, 0.07), 0 12px 28px rgba(16, 18, 27, 0.10);
+  --shadow-overlay: 0 10px 24px rgba(16, 18, 27, 0.11), 0 28px 64px rgba(16, 18, 27, 0.16);
+  --shadow-sm: var(--shadow-card);
+  --shadow: var(--shadow-card);
+  --shadow-lg: var(--shadow-card-hover);
+  --shadow-xl: var(--shadow-overlay);
   --hairline-hi: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 
-  /* ============ 圆角（收紧，更精致） ============ */
+  /* ============ 圆角 · 4/6/8/12/16/20/24 ============
+     旧的刻度是 4/6/8/10/14/18：8px 之后步长突然变成 4、4，中间没有 12 这一档，
+     于是 10px 和 14px 既不像控件也不像卡片，看着像「随手取的数」。
+     现在步长一致、全部落在 4 的倍数上：
+       4 / 6  控件、标签、徽章（太小会显得廉价）
+       8      输入框、小按钮（表单里最常见的圆角）
+       12     卡片（内容块的默认圆角）
+       16     弹层、抽屉
+       20 / 24 大容器、整块留白区 */
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius: 8px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 18px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
   --radius-full: 9999px;
 
-  /* ============ 间距 ============ */
+  /* ============ 间距 · 4px 网格 ============
+     补上 7 / 9 两档把 4 的倍数填满：以前想在 24 和 32 之间取值，
+     只能硬写 28px，结果同一个间距在不同文件里长得不一样。 */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  --space-7: 28px;
   --space-8: 32px;
+  --space-9: 36px;
   --space-10: 40px;
   --space-12: 48px;
+  --space-16: 64px;
 
   /* ============ 字号 ============ */
-  --text-xs: 11px;
+  /* 最小字号 12px：11px 的小字在 1x 屏上已经开始糊，
+     而徽章、表头、提示语恰恰是最需要看清的地方 */
+  --text-xs: 12px;
   --text-sm: 12px;
   --text-base: 14px;
   --text-md: 15px;
@@ -95,6 +136,74 @@
   --duration: 0.2s;
   --duration-slow: 0.3s;
 
+  /* ============ 层级（z-index）============
+     之前所有浮层都吃 Element Plus 的默认 z-index，两套体系混在一起时，
+     顶栏、下拉、对话框谁盖住谁只能靠 DOM 顺序碰运气。
+     这里给出有语义的分层：新增浮层时对号入座，不要再随手写 9999。 */
+  --z-base: 0;
+  --z-raised: 10;        /* 抬起的卡片、吸顶元素 */
+  --z-sticky: 100;       /* 粘性表头 / 粘性列 */
+  --z-drawer: 1500;      /* 抽屉 */
+  --z-overlay: 2000;     /* 遮罩 */
+  --z-dialog: 2100;      /* 对话框 */
+  --z-popper: 2200;      /* 下拉、tooltip、悬浮卡片 */
+  --z-message: 2400;     /* 全局轻提示 */
+  --z-toast: 2600;       /* 最上层通知 */
+
+  /* ============ 焦点环 ============
+     键盘用户必须一眼看到焦点落在哪，但环太粗会读成「错误」。
+     所以：环做细（2px）+ 主色 + 与元素留 2px 间隙，
+     间隙这一像素是刻意的 —— 贴着画会糊在控件边框上，看不出是焦点还是边框。 */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color: var(--primary);
+  /* 鼠标点击时的淡环：同样 2px，但透明度低很多 —— 几乎看不见，却保证焦点没丢 */
+  --focus-ring-soft-color: rgba(91, 95, 199, 0.38);
+  --focus-ring: 0 0 0 var(--focus-ring-width) var(--focus-ring-color);
+  --focus-ring-soft: 0 0 0 var(--focus-ring-width) var(--primary-ring);
+  --focus-ring-danger: 0 0 0 var(--focus-ring-width) var(--danger-bg);
+
+  /* ============ 交互表面（悬停 / 按下 / 选中）============
+     交互反馈需要一层「比底色深一点、但不发灰」的表面色。
+     过去每个组件各写各的 rgba，长得都不一样；这里统一成
+     悬停 = 极浅主色底，按下 = 稍深主色底，选中 = 主色底 + 主色文字。 */
+  --surface-hover: var(--primary-bg);
+  --surface-active: var(--primary-bg-strong);
+  --surface-selected: var(--primary-bg-strong);
+  --surface-disabled: var(--bg-subtle);
+  --surface-neutral-hover: var(--bg-subtle);
+  --surface-neutral-active: var(--bg-sunken);
+
+  /* ============ 半透明 / 玻璃态表面 ============
+     吸顶栏、浮在内容上的遮罩层需要「透出下面一层」的质感，
+     所以用 rgba 而不是纯色，滚动时才能看到底下的内容在动。 */
+  --surface-glass: rgba(255, 255, 255, 0.82);
+  --surface-glass-strong: rgba(255, 255, 255, 0.92);
+  --surface-glass-border: rgba(16, 18, 27, 0.08);
+  --surface-glass-blur: saturate(180%) blur(14px);
+  --surface-scrim: rgba(16, 18, 27, 0.45);
+
+  /* ============ 骨架屏 ============
+     骨架要「像内容但不是内容」：底色比卡片深一档，再叠一道扫过的高光，
+     让用户看出这一块还在加载，而不是真的空。 */
+  --skeleton-base: var(--bg-sunken);
+  --skeleton-shine: rgba(255, 255, 255, 0.55);
+  --skeleton-radius: var(--radius-sm);
+  --skeleton-duration: 1.4s;
+
+  /* ============ 表格密度档位 ============
+     密度由「上下内边距 + 行高 + 字号」共同决定，这里自己定义，
+     不用 Element Plus 的 size：小号会把整表字号一起调小，
+     列表页一屏能看的行数太少。具体档位见文件末尾的 table-density-* 类。 */
+  --table-row-height: 44px;
+  --table-cell-pad-y: 10px;
+  --table-cell-pad-x: 12px;
+  --table-header-pad-y: 9px;
+  --table-font-size: var(--text-base);
+  --table-header-font-size: var(--text-xs);
+  --table-header-weight: 600;
+  --table-stripe-bg: var(--bg-subtle);
+
   /* ============ Element Plus 变量映射（浅色） ============ */
   --el-color-primary: var(--primary);
   --el-color-primary-light-3: #7d81d6;
@@ -106,10 +215,18 @@
 
   --el-color-success: var(--success);
   --el-color-success-light-9: var(--success-bg);
+  --el-color-success-light-8: var(--success-bg);
   --el-color-warning: var(--warning);
   --el-color-warning-light-9: var(--warning-bg);
   --el-color-danger: var(--danger);
   --el-color-danger-light-9: var(--danger-bg);
+  /* 危险按钮的悬停/按下态：Element Plus 用 light-3/light-5 派生，
+     不给就回落到 EP 默认的红色系，和本项目的沉静红对不上。 */
+  --el-color-danger-light-3: #d0615c;
+  --el-color-danger-light-5: #dd8079;
+  --el-color-danger-light-7: #eaa39e;
+  --el-color-danger-light-8: #f2b8b4;
+  --el-color-danger-dark-2: #a5302c;
   --el-color-error: var(--danger);
   --el-color-error-light-9: var(--danger-bg);
   --el-color-info: var(--info);
@@ -118,6 +235,7 @@
   --el-bg-color: var(--bg-card);
   --el-bg-color-page: var(--bg);
   --el-bg-color-overlay: var(--bg-elevated);
+  --el-text-color: var(--text-primary);
   --el-text-color-primary: var(--text-primary);
   --el-text-color-regular: var(--text-secondary);
   --el-text-color-secondary: var(--text-tertiary);
@@ -129,16 +247,201 @@
   --el-border-color-extra-light: var(--border-light);
   --el-border-color-dark: var(--border-strong);
   --el-border-color-darker: var(--border-strong);
+  --el-border-color-hover: var(--border-strong);
+  --el-border-width: 1px;
+  --el-border-style: solid;
   --el-fill-color: var(--bg-subtle);
   --el-fill-color-light: var(--bg-subtle);
   --el-fill-color-lighter: var(--bg);
   --el-fill-color-extra-light: var(--bg);
   --el-fill-color-blank: var(--bg-card);
+  --el-fill-color-dark: var(--bg-elevated);
+  --el-fill-color-darker: var(--bg-elevated);
+  --el-hover-color: var(--surface-hover);
+  --el-disabled-bg-color: var(--bg-subtle);
+  --el-disabled-text-color: var(--text-disabled);
+  --el-disabled-border-color: var(--border);
   --el-border-radius-base: var(--radius-sm);
-  --el-border-radius-small: 4px;
-  --el-box-shadow-light: var(--shadow-sm);
-  --el-box-shadow: var(--shadow);
+  --el-border-radius-small: var(--radius-xs);
+  --el-border-radius-round: var(--radius-full);
+  --el-border-radius-circle: 50%;
+  --el-box-shadow-light: var(--shadow-card);
+  --el-box-shadow: var(--shadow-card-hover);
   --el-box-shadow-lighter: var(--shadow-xs);
+  --el-box-shadow-dark: var(--shadow-overlay);
+
+  /* ---- 字体 / 尺寸 / 动效：与本项目的排版刻度对齐 ---- */
+  --el-font-family: var(--font-sans);
+  --el-font-size-base: var(--text-base);
+  --el-font-size-small: var(--text-sm);
+  --el-font-size-extra-small: var(--text-xs);
+  --el-font-size-medium: var(--text-md);
+  --el-font-size-large: var(--text-lg);
+  --el-font-size-extra-large: var(--text-xl);
+  --el-font-line-height-primary: 1.6;
+  --el-font-weight-primary: 400;
+  /* 组件高度维持 EP 默认 32px：改成 34 会让按钮和输入框在不同页面错位，
+     这类「顺手调大一点」的改动收益远小于代价。 */
+  --el-component-size: 32px;
+  --el-component-size-small: 28px;
+  --el-component-size-large: 38px;
+  /* EP 的 small 按钮写死了 24px（--el-button-size），比 WCAG 2.2 的
+     24×24 勉强及格、比手指实际点得准的 28px 差一截，这里顶上去 */
+  --el-button-size: 32px;
+  --el-button-size-small: 28px;
+  --el-button-size-large: 38px;
+  --el-transition-duration: var(--duration);
+  --el-transition-duration-fast: var(--duration-fast);
+  --el-transition-function-ease-in-out-bezier: var(--ease-out);
+  --el-transition-function-fast-bezier: var(--ease-out);
+
+  /* ---- 层级：接上本项目的 z-index 语义刻度 ----
+     EP 用 --el-index-popper 统一控制下拉/提示的层级，指向我们的 --z-popper，
+     这样业务侧自定义的浮层（z-index: var(--z-toast)）仍然压得住 EP 的弹层。 */
+  --el-index-normal: 1;
+  --el-index-top: var(--z-overlay);
+  --el-index-popper: var(--z-popper);
+  --el-mask-color: var(--surface-scrim);
+  --el-mask-color-extra-light: rgba(255, 255, 255, 0.3);
+  --el-popup-modal-bg-color: var(--surface-scrim);
+  --el-popup-modal-opacity: 1;
+
+  /* ---- 按钮：主 / 次 / 文字 / 危险 ----
+     次级按钮用「白底 + 灰边」，悬停才染上主色；
+     文字按钮保持透明底，避免和主按钮抢注意力。 */
+  --el-button-font-weight: 500;
+  --el-button-bg-color: var(--bg-card);
+  --el-button-text-color: var(--text-secondary);
+  --el-button-border-color: var(--border);
+  --el-button-hover-bg-color: var(--primary-50);
+  --el-button-hover-text-color: var(--primary);
+  --el-button-hover-border-color: var(--primary-200);
+  --el-button-hover-link-text-color: var(--primary);
+  --el-button-active-bg-color: var(--primary-100);
+  --el-button-active-text-color: var(--primary-dark);
+  --el-button-active-border-color: var(--primary-light);
+  --el-button-disabled-bg-color: var(--bg-subtle);
+  --el-button-disabled-text-color: var(--text-disabled);
+  --el-button-disabled-border-color: var(--border);
+  --el-button-divide-border-color: var(--border-light);
+
+  /* ---- 输入框 ---- */
+  --el-input-bg-color: var(--bg-card);
+  --el-input-border-color: var(--border);
+  --el-input-hover-border-color: var(--border-strong);
+  --el-input-focus-border-color: var(--primary);
+  --el-input-text-color: var(--text-primary);
+  --el-input-icon-color: var(--text-tertiary);
+  --el-input-placeholder-color: var(--text-disabled);
+  --el-input-border-radius: var(--radius);
+  --el-input-focus-color: var(--primary-bg);
+  --el-select-border-color-hover: var(--border-strong);
+  --el-select-disabled-color: var(--text-disabled);
+
+  /* ---- 表格 ---- */
+  --el-table-border-color: var(--border-light);
+  --el-table-border: 1px solid var(--border-light);
+  --el-table-header-bg-color: var(--bg-subtle);
+  --el-table-header-text-color: var(--text-secondary);
+  --el-table-row-hover-bg-color: var(--primary-50);
+  --el-table-current-row-bg-color: var(--primary-bg);
+  --el-table-text-color: var(--text-secondary);
+  --el-table-bg-color: var(--bg-card);
+  --el-table-tr-bg-color: var(--bg-card);
+  --el-table-expanded-cell-bg-color: var(--bg-subtle);
+  --el-table-fixed-box-shadow: var(--shadow-sm);
+
+  /* ---- 对话框 / 抽屉 / MessageBox ---- */
+  --el-dialog-bg-color: var(--bg-card);
+  --el-dialog-box-shadow: var(--shadow-overlay);
+  --el-dialog-border-radius: var(--radius-lg);
+  --el-dialog-title-font-size: var(--text-lg);
+  --el-dialog-content-font-size: var(--text-base);
+  --el-dialog-font-line-height: 1.65;
+  --el-dialog-margin-top: 10vh;
+  --el-drawer-bg-color: var(--bg-card);
+  --el-drawer-padding-primary: var(--space-5);
+  --el-messagebox-width: 420px;
+  --el-messagebox-border-radius: var(--radius-lg);
+  --el-messagebox-box-shadow: var(--shadow-overlay);
+  --el-messagebox-title-color: var(--text-primary);
+  --el-messagebox-content-color: var(--text-secondary);
+  --el-messagebox-content-font-size: var(--text-base);
+  --el-messagebox-font-size: var(--text-lg);
+  --el-messagebox-font-line-height: 1.7;
+
+  /* ---- 标签页 ---- */
+  --el-tabs-header-height: 44px;
+
+  /* ---- 下拉菜单 / tooltip / 浮层 ---- */
+  --el-dropdown-menuBox-shadow: var(--shadow-overlay);
+  --el-popper-bg-color-light: var(--bg-elevated);
+  --el-popper-bg-color-dark: #1b1d24;
+  --el-popper-border-radius: var(--radius);
+  --el-tooltip-bg-color: #1b1d24;
+  --el-popover-bg-color: var(--bg-elevated);
+  --el-popover-border-color: var(--border);
+  --el-popover-border-radius: var(--radius);
+  --el-popover-title-text-color: var(--text-primary);
+
+  /* ---- 分页 ---- */
+  --el-pagination-bg-color: transparent;
+  --el-pagination-button-bg-color: transparent;
+  --el-pagination-button-color: var(--text-secondary);
+  --el-pagination-button-disabled-bg-color: transparent;
+  --el-pagination-button-disabled-color: var(--text-disabled);
+  --el-pagination-hover-color: var(--primary);
+  --el-pagination-text-color: var(--text-tertiary);
+  --el-pagination-font-size: var(--text-sm);
+  --el-pagination-border-radius: var(--radius-sm);
+  --el-pagination-item-gap: 6px;
+
+  /* ---- 空状态 ---- */
+  --el-empty-padding: var(--space-8) 0;
+  --el-empty-image-width: 120px;
+  --el-empty-description-margin-top: var(--space-3);
+  --el-empty-bottom-margin-top: var(--space-5);
+
+  /* ---- 骨架屏 / 加载 ---- */
+  --el-skeleton-color: var(--skeleton-base);
+  --el-skeleton-to-color: var(--bg-subtle);
+
+  /* ---- 滚动条 ---- */
+  --el-scrollbar-bg-color: transparent;
+  --el-scrollbar-hover-bg-color: var(--border-strong);
+  --el-scrollbar-opacity: 0.55;
+  --el-scrollbar-hover-opacity: 0.85;
+
+  /* ---- 菜单（浅色下的默认值；深色侧栏在 Layout.vue 里就地覆盖）---- */
+  --el-menu-active-color: var(--primary);
+  --el-menu-hover-bg-color: var(--primary-50);
+  --el-menu-hover-text-color: var(--primary);
+  --el-menu-text-color: var(--text-secondary);
+  --el-menu-item-height: 38px;
+  --el-menu-item-font-size: var(--text-base);
+  --el-menu-base-level-padding: 12px;
+
+  /* ---- 其它小件：卡片 / 标签 / 开关 / 复选 / 进度 / 树 ---- */
+  --el-card-bg-color: var(--bg-card);
+  --el-card-border-color: var(--border);
+  --el-card-border-radius: var(--radius-md);
+  --el-card-padding: var(--space-5);
+  --el-tag-border-radius: var(--radius-sm);
+  --el-tag-font-size: var(--text-xs);
+  --el-switch-on-color: var(--primary);
+  --el-switch-off-color: var(--border-strong);
+  --el-checkbox-checked-bg-color: var(--primary);
+  --el-checkbox-checked-text-color: #fff;
+  --el-checkbox-input-border: 1px solid var(--border-strong);
+  --el-checkbox-input-border-color-hover: var(--primary);
+  --el-radio-input-border: 1px solid var(--border-strong);
+  --el-radio-input-border-color-hover: var(--primary);
+  --el-radio-checked-text-color: var(--primary);
+  --el-progress-bar-height: 6px;
+  --el-tree-node-hover-bg-color: var(--bg-subtle);
+  --el-tree-text-color: var(--text-secondary);
+  --el-upload-dragger-padding-vertical: var(--space-6);
+  --el-upload-dragger-padding-horizontal: var(--space-6);
 }
 
 /* 暗色主题 */
@@ -163,6 +466,12 @@ html.dark {
   --info: #8b93a1;
   --info-bg: rgba(139, 147, 161, 0.12);
 
+  /* 深色底上反过来：文字色要提亮，而不是压暗 */
+  --warning-text: #e8b45c;
+  --success-text: #4bbf98;
+  --danger-text: #f0837a;
+  --info-text: #a3abba;
+
   --bg: #0c0d12;
   --bg-card: #15171d;
   --bg-elevated: #1c1f27;
@@ -172,8 +481,9 @@ html.dark {
 
   --text-primary: #eceef2;
   --text-secondary: #b1b7c2;
-  --text-tertiary: #7b8292;
-  --text-disabled: #4c5261;
+  /* 深色底上的次要文字同样要够亮：#8a91a1 在卡片底上是 5.8:1 */
+  --text-tertiary: #8a91a1;
+  --text-disabled: #5c6373;
 
   --border: #262932;
   --border-light: #1e2129;
@@ -181,14 +491,34 @@ html.dark {
   --grid-line: #171a21;
   --grid-line-strong: #20242d;
 
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.3);
-  --shadow: 0 2px 4px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.35), 0 12px 28px rgba(0, 0, 0, 0.45);
-  --shadow-xl: 0 8px 16px rgba(0, 0, 0, 0.4), 0 24px 56px rgba(0, 0, 0, 0.55);
+  /* 暗色下的阴影：底色本身已经很深，投影不能再靠「黑」堆出来，
+     否则卡片边缘会糊成一片。改成「更深一层底 + 更亮的轮廓光」的思路：
+     暗部 + 顶部 1px 提亮，让卡片边缘在暗底上仍然能分辨。 */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-card-hover: 0 4px 10px rgba(0, 0, 0, 0.45), 0 12px 28px rgba(0, 0, 0, 0.55);
+  --shadow-overlay: 0 10px 24px rgba(0, 0, 0, 0.5), 0 28px 64px rgba(0, 0, 0, 0.65);
+  --shadow-sm: var(--shadow-card);
+  --shadow: var(--shadow-card);
+  --shadow-lg: var(--shadow-card-hover);
+  --shadow-xl: var(--shadow-overlay);
   --hairline-hi: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 
-  /* Element Plus 变量映射（深色） */
+  /* 暗色下玻璃态要用「深色 + 半透明」，不能照抄浅色的白色半透明 */
+  --surface-glass: rgba(21, 23, 29, 0.78);
+  --surface-glass-strong: rgba(21, 23, 29, 0.92);
+  --surface-glass-border: rgba(255, 255, 255, 0.07);
+  --surface-scrim: rgba(4, 5, 8, 0.66);
+  --skeleton-base: #1d2028;
+  --skeleton-shine: rgba(255, 255, 255, 0.06);
+  --table-stripe-bg: rgba(255, 255, 255, 0.025);
+  /* 深色底上的靛蓝压不住，焦点环要换成更亮的一档 */
+  --focus-ring-color: var(--primary-light);
+  --focus-ring-soft-color: rgba(160, 164, 233, 0.42);
+
+  /* Element Plus 变量映射（深色）
+     大部分 --el-* 直接引用项目 token，切换主题时会自动跟随，
+     这里只写「深色下必须另给值」的那几条。 */
   --el-color-primary: var(--primary);
   --el-color-primary-light-3: #9a9de4;
   --el-color-primary-light-5: #b0b3e9;
@@ -203,6 +533,12 @@ html.dark {
   --el-color-warning-light-9: var(--warning-bg);
   --el-color-danger: var(--danger);
   --el-color-danger-light-9: var(--danger-bg);
+  /* 深色底上危险色要提亮，否则 hover 反而变暗（看着像被禁用） */
+  --el-color-danger-light-3: #ef8078;
+  --el-color-danger-light-5: #f59a93;
+  --el-color-danger-light-7: #f8bdb8;
+  --el-color-danger-light-8: #fbd3cf;
+  --el-color-danger-dark-2: #c04e45;
   --el-color-error: var(--danger);
   --el-color-error-light-9: var(--danger-bg);
   --el-color-info: var(--info);
@@ -211,6 +547,7 @@ html.dark {
   --el-bg-color: var(--bg-card);
   --el-bg-color-page: var(--bg);
   --el-bg-color-overlay: var(--bg-elevated);
+  --el-text-color: var(--text-primary);
   --el-text-color-primary: var(--text-primary);
   --el-text-color-regular: var(--text-secondary);
   --el-text-color-secondary: var(--text-tertiary);
@@ -222,6 +559,7 @@ html.dark {
   --el-border-color-extra-light: var(--border-light);
   --el-border-color-dark: var(--border-strong);
   --el-border-color-darker: var(--border-strong);
+  --el-border-color-hover: var(--border-strong);
   --el-fill-color: var(--bg-subtle);
   --el-fill-color-light: var(--bg-subtle);
   --el-fill-color-lighter: var(--bg);
@@ -229,14 +567,16 @@ html.dark {
   --el-fill-color-blank: var(--bg-card);
   --el-fill-color-dark: var(--bg-elevated);
   --el-fill-color-darker: var(--bg-elevated);
+  --el-hover-color: var(--surface-hover);
   --el-border-radius-base: var(--radius-sm);
-  --el-border-radius-small: 4px;
+  --el-border-radius-small: var(--radius-xs);
 
-  --el-mask-color: rgba(0, 0, 0, 0.62);
-  --el-box-shadow-light: var(--shadow);
-  --el-box-shadow: var(--shadow-lg);
+  --el-mask-color: var(--surface-scrim);
+  --el-popup-modal-bg-color: var(--surface-scrim);
+  --el-box-shadow-light: var(--shadow-card);
+  --el-box-shadow: var(--shadow-card-hover);
   --el-box-shadow-lighter: var(--shadow-xs);
-  --el-box-shadow-dark: var(--shadow-xl);
+  --el-box-shadow-dark: var(--shadow-overlay);
   --el-disabled-bg-color: var(--bg-subtle);
   --el-disabled-text-color: var(--text-disabled);
   --el-disabled-border-color: var(--border);
@@ -310,7 +650,7 @@ body {
   background: var(--bg-card);
   padding: 18px 20px;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-card);
   border: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -327,7 +667,7 @@ body {
   pointer-events: none;
 }
 .stat-card:hover {
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-card-hover);
   transform: translateY(-1px);
   border-color: var(--primary-200);
 }
@@ -371,13 +711,13 @@ body {
   background: var(--bg-card);
   padding: 20px 22px;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-card);
   border: 1px solid var(--border);
   margin-bottom: var(--space-4);
   transition: box-shadow var(--duration) var(--ease-out), border-color var(--duration) var(--ease-out);
 }
 .card:hover {
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card-hover);
   border-color: var(--border-strong);
 }
 .card-title {
@@ -426,7 +766,7 @@ html.dark .title-ico { color: var(--primary-light); }
   background: var(--bg-card);
   padding: 20px;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-card);
   border: 1px solid var(--border);
   cursor: pointer;
   transition: border-color var(--duration) var(--ease-out), box-shadow var(--duration) var(--ease-out), transform var(--duration) var(--ease-out);
@@ -446,7 +786,7 @@ html.dark .title-ico { color: var(--primary-light); }
 }
 .app-card:hover {
   transform: translateY(-2px);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-card-hover);
   border-color: var(--primary-200);
 }
 .app-card:hover::before { opacity: 1; }
@@ -510,7 +850,7 @@ html.dark .title-ico { color: var(--primary-light); }
   background: var(--bg-card);
   padding: 15px 16px;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-card);
   border: 1px solid var(--border);
   cursor: pointer;
   transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
@@ -520,7 +860,7 @@ html.dark .title-ico { color: var(--primary-light); }
 }
 .entity-tile:hover {
   transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card-hover);
   border-color: var(--primary-200);
 }
 .entity-tile .icon {
@@ -618,7 +958,7 @@ html.dark .title-ico { color: var(--primary-light); }
   background: var(--bg-card);
   padding: 19px 20px;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-card);
   border: 1px solid var(--border);
   cursor: pointer;
   transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
@@ -642,7 +982,7 @@ html.dark .title-ico { color: var(--primary-light); }
 }
 .note-card:hover {
   transform: translateY(-2px);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-card-hover);
   border-color: var(--primary-200);
 }
 .note-card:hover::before { opacity: 1; }
@@ -761,10 +1101,20 @@ html.dark .title-ico { color: var(--primary-light); }
   filter: none !important;
 }
 
+/* 禁用的主按钮：Element Plus 默认是「浅底 + 白字」，
+   白字压在浅紫底上只有 2.48:1，整颗按钮看着像没渲染出来。
+   改成「浅底 + 灰字」—— 明确表示不可用，但字还是读得清。 */
+.el-button--primary.is-disabled,
+.el-button--primary.is-disabled:hover {
+  background: var(--bg-subtle) !important;
+  border-color: var(--border) !important;
+  color: var(--text-disabled) !important;
+}
+
 .el-card {
   border: 1px solid var(--border) !important;
   border-radius: var(--radius-md) !important;
-  box-shadow: var(--shadow-xs) !important;
+  box-shadow: var(--shadow-card) !important;
 }
 
 .el-tabs__item {
@@ -843,7 +1193,7 @@ html.dark .title-ico { color: var(--primary-light); }
 .el-popper.is-pure {
   border: 1px solid var(--border) !important;
   border-radius: var(--radius) !important;
-  box-shadow: var(--shadow-lg) !important;
+  box-shadow: var(--shadow-overlay) !important;
   background: var(--bg-elevated) !important;
 }
 .el-popper.is-dark {
@@ -851,7 +1201,7 @@ html.dark .title-ico { color: var(--primary-light); }
   border-color: #1b1d24 !important;
   border-radius: var(--radius-sm) !important;
   font-size: var(--text-sm);
-  box-shadow: var(--shadow-lg) !important;
+  box-shadow: var(--shadow-overlay) !important;
   color: rgba(255, 255, 255, 0.92) !important;
 }
 .el-popper.is-dark .el-popper__arrow::before {
@@ -896,9 +1246,17 @@ html.dark .title-ico { color: var(--primary-light); }
 }
 .el-tag--primary,
 .el-tag--info.is-hit { background: var(--primary-bg) !important; color: var(--primary) !important; }
-.el-tag--success { background: var(--success-bg) !important; color: var(--success) !important; }
-.el-tag--warning { background: var(--warning-bg) !important; color: var(--warning) !important; }
-.el-tag--danger { background: var(--danger-bg) !important; color: var(--danger) !important; }
+.el-tag--success { background: var(--success-bg) !important; color: var(--success-text) !important; }
+.el-tag--warning { background: var(--warning-bg) !important; color: var(--warning-text) !important; }
+.el-tag--danger { background: var(--danger-bg) !important; color: var(--danger-text) !important; }
+
+/* Element Plus 的数字输入框：加减按钮默认只有 15px 高，
+   鼠标点不准是一眼可见的「不好用」。这里把命中区域顶到 28px。 */
+.el-input-number__decrease,
+.el-input-number__increase {
+  min-height: 28px;
+  width: 32px;
+}
 
 /* 分页 */
 .el-pagination {
@@ -934,7 +1292,7 @@ html.dark .title-ico { color: var(--primary-light); }
 .el-message {
   border-radius: var(--radius) !important;
   border: 1px solid var(--border) !important;
-  box-shadow: var(--shadow-lg) !important;
+  box-shadow: var(--shadow-overlay) !important;
   background: var(--bg-elevated) !important;
   padding: 12px 16px !important;
 }
@@ -1506,14 +1864,44 @@ html:not(.dark) body {
   background-attachment: fixed;
 }
 
-/* 焦点可见性（键盘导航） */
+/* ============ 焦点可见性（键盘导航）============
+   两档焦点环：
+   - 键盘操作（:focus-visible）：实心主色环 + 2px 偏移，清晰但不刺眼
+   - 鼠标点击 / 脚本定位（:focus:not(:focus-visible)）：同一尺寸的淡环
+   为什么鼠标点击也要留一圈淡的？
+   因为 :focus-visible 的判定依赖「最近一次交互是不是键盘」，
+   在自动化脚本、远程桌面、语音控制这些场景里会失灵 ——
+   一旦失灵，焦点就彻底消失了，键盘用户彻底摸黑。
+   淡环不打扰鼠标用户（几乎看不见），却保证「焦点永远看得见」。
+   两个容易踩的坑：
+   1) outline 会自动跟随元素自身的圆角，所以这里绝不能写 border-radius ——
+      写了等于在聚焦瞬间改变元素形状（按钮聚焦时圆角突变，非常跳）。
+   2) 已经自带焦点环的控件（输入框、下拉）要去掉通用环，否则会套两圈。 */
 :focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
+:focus:not(:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--focus-ring-soft-color);
+  outline-offset: var(--focus-ring-offset);
+}
+/* 输入框 / 下拉：焦点环由 wrapper 的 is-focus 阴影负责，通用环要去掉 */
+.el-input__inner:focus-visible,
+.el-input__inner:focus,
+.el-textarea__inner:focus-visible,
+.el-textarea__inner:focus,
 .el-input__wrapper:focus-within,
-.el-textarea__inner:focus { outline: none; }
+.el-select__wrapper:focus-visible,
+.el-select__wrapper:focus {
+  outline: none;
+}
+/* 原生可交互元素（自绘的 button / a / summary）统一补上焦点环 */
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
 
 /* 抽屉 */
 .el-drawer {
@@ -2163,4 +2551,303 @@ html.dark {
   color: var(--text-secondary);
   background: var(--bg-subtle);
   box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* =========================================================
+   设计系统地基：表格密度 / 统一弹层 / 骨架与空态 / 玻璃态
+   ------------------------------------------------------------
+   这一段是给后面所有业务页面用的「地基」：
+   别的同事只要用对这里的类和令牌，就不会再写出一套各页不同的样式。
+   ========================================================= */
+
+/* ============ 表格现代化 ============
+   旧的三处毛病：
+   1) 表头是「大写 + 浅灰底 + 加粗」，权重压过正文，一眼扫过去先看到表头；
+      中文列名本来就没大小写，uppercase 只对英文列名起作用，却让英文列名
+      显得在喊叫。这里去掉 uppercase，改用「浅底 + 600 字重 + 略小字号」。
+   2) 行悬浮的底色太浅，鼠标滑过几乎看不出这行被选中 —— 补足对比度。
+   3) 斑马纹之前只能靠 Element Plus 的 stripe 属性开，而且和行悬浮抢样式。
+      现在改成 .table-striped 显式开关，用 nth-child 自己实现，
+      这样「要不要斑马纹」由页面自己决定，悬浮态也一定压得住斑马纹。 */
+.el-table {
+  --el-table-header-bg-color: var(--bg-subtle);
+  --el-table-header-text-color: var(--text-secondary);
+  --el-table-row-hover-bg-color: var(--primary-50);
+  --el-table-current-row-bg-color: var(--primary-bg);
+  --el-table-border-color: var(--border-light);
+  font-size: var(--table-font-size);
+}
+.el-table th.el-table__cell,
+.el-table .el-table__header th.el-table__cell {
+  background: var(--bg-subtle) !important;
+  color: var(--text-secondary) !important;
+  font-weight: var(--table-header-weight) !important;
+  font-size: var(--table-header-font-size) !important;
+  letter-spacing: 0.4px;
+  text-transform: none;          /* 中文表格不需要大写；英文列名也不再 shout */
+  border-bottom-color: var(--border) !important;
+}
+.el-table td.el-table__cell {
+  border-bottom-color: var(--border-light) !important;
+  color: var(--text-secondary);
+}
+.el-table .el-table__body tr:hover > td.el-table__cell {
+  background-color: var(--primary-50) !important;
+}
+
+/* 斑马纹：默认不开，需要的页面挂 .table-striped */
+.el-table.table-striped .el-table__body tr:nth-child(even) td.el-table__cell {
+  background: var(--table-stripe-bg);
+}
+/* 悬浮态必须压过斑马纹 —— 顺序和选择器权重都要算准，
+   否则鼠标滑到偶数行时看不到「这行被选中」 */
+.el-table.table-striped .el-table__body tr:hover td.el-table__cell {
+  background: var(--primary-50) !important;
+}
+/* 选中行同理 */
+.el-table.table-striped .el-table__body tr.current-row td.el-table__cell {
+  background-color: var(--el-table-current-row-bg-color) !important;
+}
+
+/* ---- 表格密度档位 ----
+   密度只改「行高与内边距」，不改字号。
+   之前用 Element Plus 的 size="small" 来做紧凑表格，它会把整表字号一起调小，
+   结果是一屏能看的行数没多几行，眼睛却先累了。 */
+.el-table.table-density-compact {
+  font-size: var(--table-font-size);
+}
+.el-table.table-density-compact .el-table__cell { padding: 5px 0; }
+.el-table.table-density-compact .cell { padding: 0 10px; line-height: 21px; }
+
+.el-table.table-density-default { font-size: var(--table-font-size); }
+.el-table.table-density-default .el-table__cell { padding: var(--table-cell-pad-y) 0; }
+.el-table.table-density-default .cell { padding: 0 var(--table-cell-pad-x); line-height: 23px; }
+
+.el-table.table-density-comfortable { font-size: var(--text-base); }
+.el-table.table-density-comfortable .el-table__cell { padding: 14px 0; }
+.el-table.table-density-comfortable .cell { padding: 0 16px; line-height: 25px; }
+
+/* ============ 对话框 / 抽屉统一 ============
+   标题、正文、底部动作区各归各的层级：
+   - 标题：一级，600+ 字重，不加背景色（加了就像又开了一层卡片）
+   - 正文：正文色 + 1.65 行距，比 1.5 松 —— 表单里多是长句，太紧会读错行
+   - 动作区：与正文用一条分隔线隔开，右对齐
+   危险操作单独占位：删除这类破坏性动作放左侧，用次级色，
+   绝不和主按钮并排 —— 并排时用户会在两个高饱和按钮之间反复犹豫。 */
+.el-dialog {
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-overlay) !important;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  padding: 0 !important;
+}
+.el-dialog__header {
+  padding: 20px 24px !important;
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.el-dialog__title {
+  font-weight: 650 !important;
+  font-size: var(--text-lg) !important;
+  letter-spacing: -0.3px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.el-dialog__body {
+  padding: 24px !important;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  line-height: 1.65;
+}
+.el-dialog__footer {
+  padding: 14px 24px !important;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-subtle);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* 底部动作区工具类：没有 DialogShell 时也能用同一套排布 */
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  width: 100%;
+}
+.dialog-actions--split { justify-content: space-between; }
+/* 破坏性操作单独占位：推到最左，和主按钮拉开距离 */
+.dialog-actions .dialog-actions-danger {
+  margin-right: auto;
+}
+
+/* 抽屉：与对话框同一套层级 */
+.el-drawer {
+  box-shadow: var(--shadow-overlay) !important;
+  border-left: 1px solid var(--border);
+}
+.el-drawer__header {
+  padding: 18px 22px !important;
+  margin-bottom: 0 !important;
+  border-bottom: 1px solid var(--border-light);
+  color: var(--text-primary);
+  font-weight: 650;
+  font-size: var(--text-lg);
+  letter-spacing: -0.2px;
+}
+.el-drawer__body {
+  padding: 20px 22px !important;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+.el-drawer__footer {
+  padding: 14px 22px !important;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-subtle);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ============ 骨架屏 / 加载态 ============
+   骨架要「像内容但不是内容」：底色比卡片深一档 + 一道扫过的高光。
+   Element Plus 的 .el-skeleton__item 只有纯色块，加一道高光才有「正在加载」的感觉。 */
+.el-skeleton__item,
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-base) 25%,
+    var(--skeleton-shine) 37%,
+    var(--skeleton-base) 63%
+  ) !important;
+  background-size: 400% 100% !important;
+  animation: skeleton-sweep var(--skeleton-duration) ease-in-out infinite;
+  border-radius: var(--skeleton-radius);
+}
+@keyframes skeleton-sweep {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+/* 尊重「减少动态效果」的系统偏好：骨架改成呼吸式明暗，不再横向扫 */
+@media (prefers-reduced-motion: reduce) {
+  .el-skeleton__item,
+  .skeleton {
+    animation: skeleton-pulse 1.6s ease-in-out infinite !important;
+    background: var(--skeleton-base) !important;
+  }
+  @keyframes skeleton-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+}
+/* 加载遮罩：淡一点，别把下面的内容全遮死 */
+.el-loading-mask {
+  background-color: var(--surface-glass) !important;
+  backdrop-filter: blur(1px);
+}
+html.dark .el-loading-mask { background-color: var(--surface-scrim) !important; }
+
+/* ============ 空状态 ============
+   .empty-state 是历史类（各视图还在用），这里统一它的排版基线：
+   图标块、标题、描述、动作区四段的间距与字重都固定下来，
+   新的 EmptyState 组件也沿用同一套刻度。 */
+.empty-state {
+  text-align: center;
+  padding: 72px 24px;
+  color: var(--text-tertiary);
+  background: var(--bg-card);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+.empty-state .empty-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--space-5);
+  color: var(--text-tertiary);
+  font-size: 32px;
+}
+.empty-state .empty-title {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+  letter-spacing: -0.2px;
+}
+.empty-state .empty-desc {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-6);
+  max-width: 420px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.65;
+}
+.empty-state .empty-actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* ============ 玻璃态表面 ============
+   吸顶栏、浮在内容上的遮罩层用：透出下面一层 + 模糊 + 一道细边。
+   工具类 .surface-glass 供业务页直接挂。 */
+.surface-glass {
+  background: var(--surface-glass);
+  backdrop-filter: var(--surface-glass-blur);
+  -webkit-backdrop-filter: var(--surface-glass-blur);
+  border-bottom: 1px solid var(--surface-glass-border);
+}
+.surface-scrim {
+  background: var(--surface-scrim);
+  backdrop-filter: blur(2px);
+}
+
+/* ============ 触控目标下限 ============
+   WCAG 2.2 的最小目标尺寸是 24×24，这里收到 28×28：
+   24px 在触屏上仍然难点准（Fitts 定律），28px 是一般手型的下限。
+   规则是「命中区」不小于 28px —— 可以用内边距撑开，
+   不必将视觉尺寸也放大（图标按钮放大到 28px 会显得笨重）。
+   注意 min-height 不会覆盖 height，只在 height 更小时生效，
+   所以标准尺寸的按钮不受影响。 */
+button {
+  min-height: 28px;
+  min-width: 28px;
+}
+/* EP 的 small 按钮写死了 24px 高，这里顶到 28px */
+.el-button--small {
+  --el-button-size: 28px;
+}
+/* 表格行内的文字按钮：之前只有 18px 高，鼠标点不准 */
+.el-table .el-button.is-text,
+.el-table .el-button.is-link {
+  min-height: 28px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+/* ============ 通用交互态 ============
+   给任何可点击的「行 / 卡片 / 列表项」用：统一的悬停与按下手感。 */
+.interactive {
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+  cursor: pointer;
+}
+.interactive:hover {
+  background: var(--surface-hover);
+}
+.interactive:active {
+  background: var(--surface-active);
 }

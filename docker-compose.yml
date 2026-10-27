@@ -2,7 +2,28 @@ name: kb-workbench
 
 services:
   backend:
-    build: ./backend
+    # build.args.INSTALL_UPGRADE_TOOLS —— 「一键升级」能不能用的总开关
+    #
+    #   0（默认）：镜像里没有 git / docker CLI。「检查更新」照常可用；
+    #               「一键升级」接口会如实报出「容器里没有 git / 没有 docker」，
+    #               并给出确切的手动命令，不会假装失败。
+    #   1：额外装上 git + docker CLI + compose 插件（镜像会大 90MB 左右），
+    #      容器内才有能力自己跑完 fetch → checkout → build → up 这四步。
+    #
+    # 想用一键升级，要做三件事：
+    #   1) 把下面 INSTALL_UPGRADE_TOOLS 改成 1（或在 .env 里设
+    #      KB_INSTALL_UPGRADE_TOOLS=1），然后重建后端镜像；
+    #   2) 打开下面 volumes 里注释掉的两行（项目目录 + docker.sock），
+    #      并在 environment 里放开 KB_PROJECT_DIR=/app/project；
+    #   3) git commit 这次改动 —— 一键升级会 checkout 到目标 tag，
+    #      未提交的本地改动会被覆盖，接口也会因为「工作区不干净」拒绝升级。
+    #
+    # 提醒：挂载 docker.sock 等于把宿主机的 root 权限交给容器，
+    #       只在可信环境开启。
+    build:
+      context: ./backend
+      args:
+        INSTALL_UPGRADE_TOOLS: ${KB_INSTALL_UPGRADE_TOOLS:-0}
     container_name: kb-backend
     restart: unless-stopped
     # 本地 .env 覆盖默认值（可选）。所有可调项见 .env.example。
@@ -27,6 +48,13 @@ services:
       # 「系统设置 → 备份目录」的下拉里就会直接出现它，点一下即可切换，
       # 不用改 compose 结构、也不用重启容器。
       - ${KB_BACKUP_ALT_HOST_DIR:-./backups-alt}:/mnt/kb-backup
+      # ==== 一键升级需要的挂载（默认关闭，按需打开）====
+      # 项目目录：容器要在这里跑 git fetch / checkout，所以必须带着 .git
+      #           和编排文件一起挂进来。
+      # - .:/app/project
+      # docker.sock：让容器能操作宿主机的容器（build / up）。
+      #              等于把宿主机 root 权限交给容器，只在可信环境开启。
+      # - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data/kb.db
       - DATA_DIR=/app/data
@@ -46,6 +74,10 @@ services:
       # 单文件超过该体积时在上传结果里提示（不阻止上传）
       - LARGE_FILE_WARN_MB=200
       - UPLOAD_MAX_MB=${UPLOAD_MAX_MB:-1024}
+      # 一键升级用的项目目录（**容器内**路径）。
+      # 只有打开了上面 volumes 里注释掉的项目目录挂载时才有意义，
+      # 所以默认不设 —— 设了但没挂载，只会让接口报「找不到项目目录」。
+      # - KB_PROJECT_DIR=/app/project
       # ==== SQLite 调优（详见 backend/app/config.py 注释）====
       - SQLITE_CACHE_MB=${SQLITE_CACHE_MB:-64}
       - SQLITE_MMAP_MB=${SQLITE_MMAP_MB:-256}

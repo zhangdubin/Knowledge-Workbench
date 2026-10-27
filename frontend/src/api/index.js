@@ -41,7 +41,10 @@ api.interceptors.response.use(
     const msg = err.response?.data?.detail || err.message || '请求失败'
     if (status === 401) {
       toLogin(msg)
-    } else {
+    } else if (!err.config?.silent) {
+      // silent：调用方自己处理错误。
+      // 升级作业轮询期间后端会被重启，每次失败都弹一次「请求失败」
+      // 会把用户刷屏，而且那种失败其实是「正在重启」，不是错误。
       ElMessage.error(msg)
     }
     return Promise.reject(err)
@@ -145,6 +148,22 @@ export const Api = {
   // refresh=1 跳过服务端 10 分钟缓存（「重新检查」按钮用）
   updateCheck: (refresh = false) => api.get('/api/system/update/check',
     refresh ? { params: { refresh: 1 }, timeout: 20000 } : { timeout: 20000 }),
+
+  // ============ 一键升级 ============
+  // 可行性判定：能不能自动升、缺什么、为什么不能、手动怎么升。
+  // target 传空串时后端会自己去查最新版本（有 10 分钟缓存）。
+  updatePlan: (target = '') => api.get('/api/system/update/plan',
+    { params: target ? { target } : {}, timeout: 20000 }),
+  // 启动升级作业（后台跑，接口立刻返回 job_id）。
+  // 已经有作业在跑时后端不会新起一个，而是返回当前那个。
+  updateApply: (target) => api.post('/api/system/update/apply', { target }),
+  // 作业状态 + 实时日志（前端 1.5 秒轮询一次）。
+  // silent：第 4 步之后后端会重建，轮询失败是「正在重启」而不是错误，
+  // 弹窗自己处理，不该在这里弹成红色警告。
+  updateJob: (jobId = '') => api.get('/api/system/update/job',
+    { params: jobId ? { job_id: jobId } : {}, timeout: 10000, silent: true }),
+  // 等待后端恢复用的健康探针（同样 silent）
+  upgradeHealth: () => api.get('/api/health', { timeout: 5000, silent: true }),
 
   // ============ 可视化驾驶舱 ============
   listDashboards: () => api.get('/api/dashboards'),

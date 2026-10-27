@@ -547,6 +547,22 @@ async def _flush_state(job: UpgradeJob, force: bool = False) -> None:
     await asyncio.to_thread(_write)
 
 
+def _save_state_file(data: dict[str, Any]) -> None:
+    """原子替换状态文件（同步版）
+
+    给「进程重启后要修正状态」这种低频路径用 ——
+    _flush_state 是给正在跑的作业用的，走线程池。
+    这里一个进程重启后的兜底修正，同步写一次无妨。
+    """
+    try:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, STATE_FILE)
+    except OSError as e:
+        log.warning("升级状态写盘失败：%s", e)
+
+
 def _read_state_file() -> dict[str, Any] | None:
     """读状态文件（重启后的后端靠它还原上一次升级的现场）"""
     try:
@@ -575,6 +591,16 @@ def get_job(job_id: str = "") -> dict[str, Any]:
         if data.get("status") == ST_RESTARTING:
             data = {**data, "status": ST_SUCCEEDED,
                     "note": "服务已重启完成"}
+        # 状态停在「运行中」，但内存里没有活着的作业 ——
+        # 写这个状态的进程已经不在了（容器重启过、进程被杀了、宿主机断电）。
+        # 谎称还在跑只会让前端转圈转到天荒地老，
+        # 用户既看不到结果也没法重新发起（并发锁还占着）。
+        # 这里如实说「中断了」，并把并发锁放开。
+        elif data.get("status") in (ST_PENDING, ST_RUNNING):
+            data = {**data, "status": ST_FAILED,
+                    "error": "升级进程在完成前中断了（后端容器被重启过）。"
+                             "请重新发起一次升级。"}
+            _save_state_file(data)
         return {"ok": True, "job": data, "restored": True}
     if job is not None:
         return {"ok": True, "job": job.snapshot(), "restored": False}

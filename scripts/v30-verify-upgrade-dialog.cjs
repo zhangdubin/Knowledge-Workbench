@@ -183,20 +183,33 @@ async function main() {
         else bad('没把升级的四个阶段讲清楚')
       }
 
-      // 3c. 不能升级时，每条障碍都得说清「怎么办」
-      if (cannotUpgrade || isLatest) {
+      // 3c. 有障碍时，每条都得说清「怎么办」
+      //
+      // 「有障碍」不能靠弹窗上的文字去猜 —— 已经武装好的部署本来就没有障碍，
+      // 弹窗会直接说「已是最新」，这时一张卡片都不该有。
+      // 所以以接口返回的 blockers 为准：卡片数要跟障碍数对上。
+      const planBlockers = await page.evaluate(async () => {
+        const r = await fetch('/api/system/update/plan', { credentials: 'include' })
+        const j = await r.json()
+        return Array.isArray(j?.blockers) ? j.blockers : []
+      })
+      if (planBlockers.length) {
         const blocks = await page.evaluate(() => {
           // 从弹窗根上找，别从第一张卡片里找卡片（那样只会找到空集）
           const root = document.querySelector('.el-dialog')
           if (!root) return []
           return Array.from(root.querySelectorAll('.upgrade-blocker')).map(x => (x.innerText || '').trim())
         })
-        if (!blocks.length) bad('有障碍但一个障碍卡片都没渲染')
-        else {
+        if (blocks.length !== planBlockers.length) {
+          bad(`接口有 ${planBlockers.length} 条障碍，弹窗却渲染了 ${blocks.length} 张卡片`)
+        } else {
+          ok(`${planBlockers.length} 条障碍都渲染了卡片`)
           const noFix = blocks.filter(b => !/怎么办/.test(b))
           if (!noFix.length) ok(`${blocks.length} 条障碍都给了「怎么办」`)
           else bad(`有障碍没给解决办法：${noFix.length} 条`)
         }
+      } else {
+        ok('接口没有障碍，弹窗也不该有障碍卡片')
       }
 
       // 4. 样式：弹窗体不能是「裸 HTML」

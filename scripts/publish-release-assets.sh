@@ -159,8 +159,32 @@ add_asset() {      # add_asset <文件路径> [资产名]
 }
 
 step "收集资产"
+#
+# 「自动升级」下载的镜像包必须**自带升级工具**。
+#
+# 为什么：用户开启自动升级时装的是「带工具镜像」（后端要有 docker/compose
+# 才能驱动升级）。如果升级下载回来的镜像是**普通镜像**，那么升完一次
+# 工具就没了 —— 第二次点「一键升级」必然失败在「后端镜像里没有 docker 命令」。
+# 而升级过程本身是「换掉正在跑的后端」，所以工具必须跟着新镜像一起走。
+#
+# 离线包里的镜像保持普通版（不白涨 35MB），只有给自动升级用的这个资产用带工具版。
 for arch in $ARCHES; do
-  add_asset "$PKG_DIR/images/kb-workbench-images-${arch}.tar.gz"
+  if docker image inspect "kb-workbench-backend:tools-${arch}" >/dev/null 2>&1; then
+    UPGRADE_OUT="dist-offline/kb-workbench-images-${arch}.tar.gz"
+    if [ ! -f "$UPGRADE_OUT" ] || [ "$UPGRADE_OUT" -ot "dist-offline/.stamp-images-${arch}" ]; then
+      step "导出「自动升级用」镜像包 ${arch}（后端自带升级工具）"
+      # 打成 kb-workbench-backend:<arch> 的标签 —— 后端加载后会把它提升成 :latest，
+      # 跟离线安装脚本（install.sh）的约定一致。
+      docker tag "kb-workbench-backend:tools-${arch}" "kb-workbench-backend:upgrade-${arch}"
+      docker save "kb-workbench-backend:upgrade-${arch}" "kb-workbench-frontend:${arch}" \
+        | gzip > "$UPGRADE_OUT"
+      touch "dist-offline/.stamp-images-${arch}"
+    fi
+    add_asset "$UPGRADE_OUT" "kb-workbench-images-${arch}.tar.gz"
+  else
+    warn "本地没有 kb-workbench-backend:tools-${arch}，${arch} 的升级镜像包用普通版"
+    add_asset "$PKG_DIR/images/kb-workbench-images-${arch}.tar.gz"
+  fi
 done
 
 # 完整离线包（给人手动升级用的那个 tar.gz）

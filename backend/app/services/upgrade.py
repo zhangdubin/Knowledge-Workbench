@@ -72,6 +72,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import tempfile
 import time
@@ -569,6 +570,11 @@ def get_job(job_id: str = "") -> dict[str, Any]:
         return {"ok": True, "job": job.snapshot(), "restored": False}
     data = _read_state_file()
     if data and (not job_id or data.get("job_id") == job_id):
+        # 状态停在「重启中」，而我们现在还能应答 —— 说明新容器已经起来了，
+        # 这次升级实际上成功了（写这个状态的是上一个进程，它没能改过来）。
+        if data.get("status") == ST_RESTARTING:
+            data = {**data, "status": ST_SUCCEEDED,
+                    "note": "服务已重启完成"}
         return {"ok": True, "job": data, "restored": True}
     if job is not None:
         return {"ok": True, "job": job.snapshot(), "restored": False}
@@ -1045,6 +1051,83 @@ async def _download_asset(url: str, dest: Path, proxy: str, job: UpgradeJob) -> 
             await asyncio.sleep(3)
 
 
+async def _self_container_info(docker: str) -> dict[str, Any]:
+    """看自己这个容器的信息（镜像 ID、挂载关系）
+
+    为什么要看自己的挂载：第 4 步的 compose up 是在**宿主机**上执行的，
+    而我们只知道自己眼里的路径（比如 /app/install）。宿主机的真实路径
+    得从挂载关系里反查出来 —— 传给 compose 的路径必须是宿主机的视角。
+    """
+    cid = os.environ.get("HOSTNAME", "").strip()
+    if not cid:
+        return {}
+    rc, out = await _run([docker, "inspect", cid], timeout=30)
+    if rc != 0 or not out.strip():
+        return {}
+    try:
+        data = json.loads(out)
+        return data[0] if isinstance(data, list) and data else {}
+    except (ValueError, IndexError, TypeError):
+        return {}
+
+
+async def _start_restart_helper(job: UpgradeJob, plan: dict[str, Any],
+                                root: Path, compose: list[str]) -> bool:
+    """起一个**独立容器**去跑 compose up。
+
+    为什么不能在本容器里直接跑 compose up：
+    第 4 步要重建的后端容器，就是发起这条命令的这个容器。容器一停，
+    容器里的所有进程（包括 compose 客户端）一起被杀 ——
+    compose 刚把新容器创建出来、还没 start，客户端就被腰斩了。
+    实测现象：旧容器 Exited(0)、新容器卡在 Created（从没启动过），
+    服务就此起不来，状态永远停在「重启中」。
+
+    独立容器跑在宿主机上，不在本容器的进程树里，本容器被停掉也影响不到它，
+    它照样能把 compose up 跑完。
+
+    用的镜像是**当前正在跑的这个容器的镜像 ID**（不是 :latest 标签）：
+    此刻 :latest 已经指向新镜像了，而新镜像未必带 docker/compose；
+    老镜像一定带（能执行升级就说明它带）。
+
+    返回 False 表示起不来（调用方退回「在本容器里跑」的旧办法）。
+    """
+    docker = shutil.which("docker") or "docker"
+    info = await _self_container_info(docker)
+    image_id = str(info.get("Image") or "")
+    if not image_id:
+        return False
+
+    cpath = str(root)                      # 容器眼里的安装目录
+    hpath = ""                             # 宿主机上的安装目录
+    for m in (info.get("Mounts") or []):
+        if m.get("Destination") == cpath:
+            hpath = str(m.get("Source") or "")
+            break
+    if not hpath:
+        return False
+
+    name = f"kb-upgrade-restart-{uuid.uuid4().hex[:6]}"
+    inner = " ".join([*compose, "up", "-d", "--remove-orphans"])
+    # 睡 2 秒再动手：给后端一点时间把「重启中」写进状态文件、
+    # 把响应返回给前端。前端这时候已经在轮询了。
+    script = (f"sleep 2; cd {shlex.quote(cpath)} && {inner} "
+              f"> {shlex.quote(cpath)}/.upgrade-restart.log 2>&1")
+    cmd = [docker, "run", "-d", "--rm", "--name", name,
+           "-v", "/var/run/docker.sock:/var/run/docker.sock",
+           "-v", f"{hpath}:{cpath}",
+           "-w", cpath,
+           image_id,
+           "sh", "-c", script]
+    job.log(f"起一个临时容器执行重启（{name}）—— "
+            f"它独立于本容器，本容器被停掉也不影响它把 compose 跑完")
+    rc, out = await _run(cmd, timeout=120)
+    if rc != 0:
+        job.log(f"  临时容器起不来：{(out or '').strip()[:200]}")
+        return False
+    job.log(f"  临时容器已启动，日志见 {cpath}/.upgrade-restart.log")
+    return True
+
+
 async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
     """离线包部署的升级流程
 
@@ -1158,7 +1241,10 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
     job.set_step("restart", "running")
     job.log("正在重建容器，服务会短暂中断（约 10–30 秒）……")
     await _flush_state(job, force=True)
-    await _stage(job, "restart", [*compose, "up", "-d"], root, timeout=900)
+    if not await _start_restart_helper(job, plan, root, compose):
+        # 起不了临时容器只能退回在本容器里跑（多半会失败，但总得试）
+        job.log("  临时容器起不来，退回在本容器里执行 compose up")
+        await _stage(job, "restart", [*compose, "up", "-d"], root, timeout=900)
 
 
 async def _run_git_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
@@ -1189,7 +1275,10 @@ async def _run_git_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
     job.set_step("restart", "running")
     job.log("正在重建容器，服务会短暂中断（约 10–30 秒）……")
     await _flush_state(job, force=True)
-    await _stage(job, "restart", [*compose, "up", "-d", "--remove-orphans"], root, timeout=900)
+    if not await _start_restart_helper(job, plan, root, compose):
+        job.log("  临时容器起不来，退回在本容器里执行 compose up")
+        await _stage(job, "restart", [*compose, "up", "-d", "--remove-orphans"],
+                     root, timeout=900)
 
 
 async def _run_job(job: UpgradeJob, plan: dict[str, Any], who: str) -> None:

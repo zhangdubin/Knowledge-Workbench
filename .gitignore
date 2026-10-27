@@ -42,3 +42,8 @@ backups/
 
 # 离线安装包的组装工作区（含大体积镜像 tar，由脚本生成）
 dist-offline/
+
+# 「带工具镜像」的构建缓存：预置的 docker CLI / compose 二进制（260MB）。
+# 只在构建时用 bind mount 挂进去，不进镜像、不进版本库。
+backend/.docker-cache/*
+!backend/.docker-cache/.gitkeep

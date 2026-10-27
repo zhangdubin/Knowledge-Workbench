@@ -427,49 +427,55 @@ kb-workbench/
 └── README.md
 ```
 
-## ⬆️ 一键升级（v0.5.0 新增）
+## ⬆️ 一键升级（v0.5.0 新增，v0.6.0 支持离线包部署）
 
-「系统设置 → 升级与更新 → 一键升级」。后端接管整个升级过程：
-`git fetch --tags` → `git checkout <tag>` → `docker compose build` → `docker compose up -d`，
-全程实时日志、阶段提示、审计留痕。
+「系统设置 → 升级与更新 → 一键升级」。后端接管整个升级过程，全程实时日志、
+阶段提示、审计留痕。**两种部署形态都能自动升**，路径不同：
+
+| 部署形态 | 怎么认出来的 | 自动升级的四步 |
+|---|---|---|
+| **源码部署** | 目录里有 `.git` | `git fetch --tags` → `git checkout <tag>` → `docker compose build` → `docker compose up -d` |
+| **离线包部署** | 目录里有编排文件、没有 `.git` | 查 Release 拿镜像包 → 下载 → `docker load` + 提升 `:latest` 标签 → `docker compose up -d` |
+
+判定依据是「目录里有没有 `.git`」，不是猜的。离线包部署的机器上**根本没有 git**，
+所以早期那条 `./scripts/upgrade.sh` 的指引在它上面根本跑不通。
 
 **点下去之前会先做可行性判定。** 缺任何一样东西都会明确告诉你缺什么、怎么补，
 不会「假装能升然后失败」：
 
-| 缺什么 | 表现 |
+| 缺什么 | 怎么办 |
 |---|---|
-| 项目目录 | 容器里找不到带 `.git` 与编排文件的目录 |
-| git | 后端镜像里没有 git 命令 |
-| docker CLI | 后端镜像里没有 docker 命令 |
-| docker socket | 后端容器没接管宿主机 docker 守护进程 |
-| compose 命令 | 找不到可用的 `docker compose` / `docker-compose` |
+| 安装目录 | 挂进容器并设 `KB_INSTALL_DIR` |
+| docker CLI | 用带工具的后端镜像（`INSTALL_UPGRADE_TOOLS=1`） |
+| docker socket | 挂 `/var/run/docker.sock` |
+| compose 命令 | 同 docker CLI（compose 是**插件形态**，装 docker CLI 不会自动带上） |
+| 目标版本的镜像包 | 发版时要挂 `kb-workbench-images-<arch>.tar.gz` 资产 |
 
-### 两种部署形态，升级路径不同
+### 开启自动升级：一条命令
 
-- **源码部署**（有 `.git`，编排文件带 `build:`）→ 走 git + compose 全自动
-- **离线包部署**（镜像 `image:`，无 `.git`）→ 走 `bash install.sh -d <安装目录>`，
-  安装脚本会保留 `.env` 与全部数据
+默认**不开**（后端镜像不带 git/docker CLI/compose，不给所有用户白涨体积）。
+要开就在**宿主机**上跑：
 
-判定依据是「容器里找不找得到项目目录」，不是猜的。离线包部署的机器上
-**根本没有 git**，所以 v0.4.2 之前那条 `./scripts/upgrade.sh` 的指引是跑不通的 ——
-v0.4.2 起按部署形态分别给对命令。
-
-### 想开自动升级，要额外挂三样东西
-
-默认**不开**（后端镜像不带 git/docker CLI，不给所有用户白涨 90MB）：
-
-```yaml
-services:
-  backend:
-    build:
-      args:
-        INSTALL_UPGRADE_TOOLS: "1"      # 镜像里装 git + docker CLI
-    environment:
-      KB_PROJECT_DIR: /app/project       # 告诉后端项目目录在哪
-    volumes:
-      - .:/app/project                   # 挂进项目目录
-      - /var/run/docker.sock:/var/run/docker.sock   # 让后端能跑 compose
+```bash
+bash scripts/enable-one-click-upgrade.sh --dir <安装目录>
 ```
+
+它会：
+
+1. 自动定位安装目录、数据目录、后端容器；
+2. 给编排文件的后端服务**幂等地**加三样 —— `docker.sock` 挂载、安装目录挂载、
+   `KB_INSTALL_DIR` 环境变量（**改前备份，改后校验 YAML 语法，重复跑不重复加**）；
+3. 检查后端镜像里有没有 docker CLI / compose 插件，没有就给两条现成的路：
+   下载带工具的镜像，或用源码重建；
+4. 打印验证命令。
+
+验证只要一条：
+
+```bash
+docker exec <后端容器> kb-upgrade-selftest
+```
+
+它会逐项检查「能不能一键升级」，缺哪样一目了然。
 
 > ⚠️ 挂 `docker.sock` 等于把宿主机的 root 权限交给容器。
 > 只有在你信任这台机器、且这台机器上只跑你自己的编排时才这么做。
@@ -481,7 +487,14 @@ services:
 所以作业状态拆成两段：前三步跑完前日志是完整的；第 4 步一执行状态切到「重启中」，
 前端显示「正在重启服务，请稍候…」并自动重试 90 秒，页面刷新后就是新版本。
 
-工作区不干净（有未提交的改动）时直接拒绝，并列出哪些文件脏了。
+源码部署时工作区不干净（有未提交的改动）直接拒绝，并列出哪些文件脏了。
+离线部署时改标签前会记住旧镜像，出错自动回退，不会把你留在一个起不来的版本上。
+
+### 架构要按宿主机算
+
+下载镜像包时取的是 `docker info` 报的**宿主机**架构，不是容器架构 ——
+Apple Silicon 上跑 x86 容器是模拟执行，照容器架构下包会拿到跑不了的镜像。
+架构对不上直接报错不下：下错架构要等几百 MB 才发现，跑起来还是 exec format error。
 
 ## 📦 离线安装包
 

@@ -82,7 +82,7 @@ printf "  ✔ docker-compose.yml / .env.example\n"
 # 4. 运维脚本
 # ------------------------------------------------------------
 say "放入运维脚本"
-RUNTIME_SCRIPTS="backup.sh restore.sh healthcheck.sh reset-admin-password.sh migrate-blobs.sh move-data.sh"
+RUNTIME_SCRIPTS="backup.sh restore.sh healthcheck.sh reset-admin-password.sh migrate-blobs.sh move-data.sh enable-one-click-upgrade.sh"
 for f in $RUNTIME_SCRIPTS; do
   if [ -f "scripts/$f" ]; then
     cp "scripts/$f" "$PKG/scripts/$f"

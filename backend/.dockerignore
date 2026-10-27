@@ -10,3 +10,9 @@ venv
 *.log
 .DS_Store
 data
+
+# 构建缓存目录：里面是 260MB 的预置二进制（docker CLI / compose 插件）。
+# 不能进镜像 —— `COPY . .` 会把它们一并拷进去，镜像直接胖 200MB+。
+# 它们是靠 bind mount 在构建时挂进来的（见 Dockerfile 的 --mount=type=bind），
+# 所以这里排除掉不影响构建。
+.docker-cache

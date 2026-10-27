@@ -992,28 +992,57 @@ async def _download_asset(url: str, dest: Path, proxy: str, job: UpgradeJob) -> 
 
     走 update.py 里同一套代理配置 —— 用户在界面上配的代理对「检查更新」
     和「下载镜像包」必须是同一个，否则会出现「检查能连上、下载连不上」。
+
+    带**断点续传的重试**。为什么必须有：
+    镜像包 90MB 上下，服务器到 GitHub 的链路常常是抖的 ——
+    下载中途断一次，之前就整包作废，用户只能从头再来。
+    这里用 HTTP Range 从断处接着下，最多试 4 次；
+    服务器不支持 Range（返回 200 而不是 206）就老实从头下。
     """
     kwargs = upd._client_kwargs(proxy)
     kwargs["timeout"] = httpx.Timeout(60.0, read=600.0, write=60.0, pool=60.0)
     # GitHub 的资产地址会 302 跳到对象存储，不跟重定向就只会拿到一个 302
     kwargs["follow_redirects"] = True
-    done = 0
-    async with httpx.AsyncClient(**kwargs) as cli:
-        async with cli.stream("GET", url) as r:
-            if r.status_code >= 400:
-                raise RuntimeError(f"下载失败：HTTP {r.status_code}")
-            total = int(r.headers.get("content-length") or 0)
-            last_mark = 0
-            with dest.open("wb") as f:
-                async for chunk in r.aiter_bytes(256 * 1024):
-                    f.write(chunk)
-                    done += len(chunk)
-                    # 每 10% 打一行进度，别刷屏
-                    if total and done - last_mark >= max(1, total // 10):
-                        last_mark = done
-                        job.log(f"  下载中 {done * 100 // total}%"
-                                f"（{_human_size(done)} / {_human_size(total)}）")
-    job.log(f"  下载完成：{_human_size(done)}")
+
+    total = 0
+    for attempt in range(1, 5):
+        done = dest.stat().st_size if dest.exists() else 0
+        headers = {"Range": f"bytes={done}-"} if done else {}
+        try:
+            async with httpx.AsyncClient(**kwargs) as cli:
+                async with cli.stream("GET", url, headers=headers) as r:
+                    if r.status_code >= 400:
+                        raise RuntimeError(f"下载失败：HTTP {r.status_code}")
+                    # 206 = 断点续传成功，200 = 服务器从头给（那就重头写）
+                    if done and r.status_code != 206:
+                        job.log("  服务器不支持断点续传，从头开始下载")
+                        done = 0
+                    cr = r.headers.get("content-range")
+                    if cr and "/" in cr:
+                        total = int(cr.rsplit("/", 1)[1])
+                    else:
+                        total = int(r.headers.get("content-length") or 0)
+                    last_mark = done
+                    mode = "ab" if done else "wb"
+                    with dest.open(mode) as f:
+                        async for chunk in r.aiter_bytes(256 * 1024):
+                            f.write(chunk)
+                            done += len(chunk)
+                            # 每 10% 打一行进度，别刷屏
+                            if total and done - last_mark >= max(1, total // 10):
+                                last_mark = done
+                                job.log(f"  下载中 {done * 100 // total}%"
+                                        f"（{_human_size(done)} / {_human_size(total)}）")
+            if total and done < total:
+                raise RuntimeError(f"下载不完整：{done}/{total} 字节")
+            job.log(f"  下载完成：{_human_size(done)}")
+            return
+        except Exception as e:
+            if attempt >= 4:
+                raise
+            job.log(f"  第 {attempt} 次下载中断（{e}），"
+                    f"已下载 {_human_size(done)}，3 秒后续传")
+            await asyncio.sleep(3)
 
 
 async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:

@@ -171,19 +171,39 @@ step "收集资产"
 for arch in $ARCHES; do
   if docker image inspect "kb-workbench-backend:tools-${arch}" >/dev/null 2>&1; then
     UPGRADE_OUT="dist-offline/kb-workbench-images-${arch}.tar.gz"
-    if [ ! -f "$UPGRADE_OUT" ] || [ "$UPGRADE_OUT" -ot "dist-offline/.stamp-images-${arch}" ]; then
+    # 记的是**镜像 ID**，不是时间戳。
+    #
+    # 为什么：时间戳靠不住 —— 重新构建的镜像可能比上一个 tarball 还新，
+    # 但只要 tarball 比 stamp 新就会跳过重建，于是发出去的是上一版的包。
+    # 实测踩过：发出去的「自动升级用」镜像包是旧的普通版（91MB），
+    # 而带工具的应该是 124MB —— 用户升完一次工具就没了，发布页面上却看不出来。
+    img_id="$(docker image inspect -f '{{.Id}}' "kb-workbench-backend:tools-${arch}")"
+    if [ ! -f "$UPGRADE_OUT" ] \
+       || [ "$(cat "dist-offline/.stamp-images-${arch}" 2>/dev/null || true)" != "$img_id" ]; then
       step "导出「自动升级用」镜像包 ${arch}（后端自带升级工具）"
-      # 打成 kb-workbench-backend:<arch> 的标签 —— 后端加载后会把它提升成 :latest，
+      # 打成 kb-workbench-backend:upgrade-<arch> 的标签 —— 后端加载后会把它提升成 :latest，
       # 跟离线安装脚本（install.sh）的约定一致。
       docker tag "kb-workbench-backend:tools-${arch}" "kb-workbench-backend:upgrade-${arch}"
       docker save "kb-workbench-backend:upgrade-${arch}" "kb-workbench-frontend:${arch}" \
         | gzip > "$UPGRADE_OUT"
-      touch "dist-offline/.stamp-images-${arch}"
+      printf '%s' "$img_id" > "dist-offline/.stamp-images-${arch}"
     fi
     add_asset "$UPGRADE_OUT" "kb-workbench-images-${arch}.tar.gz"
   else
-    warn "本地没有 kb-workbench-backend:tools-${arch}，${arch} 的升级镜像包用普通版"
-    add_asset "$PKG_DIR/images/kb-workbench-images-${arch}.tar.gz"
+    # 这里必须**硬失败**，不能悄悄降级成普通镜像。
+    #
+    # 为什么：自动升级下载的就是这个资产。如果它装的是普通后端镜像，
+    # 用户升完一次就把 docker/compose 弄丢了 —— 第二次点「一键升级」
+    # 必然失败在「后端镜像里没装 docker 命令」。
+    # 而发布的时候没有任何人会发现：Release 页面上照样有资产、下载也正常，
+    # 只有真升过一次的人才知道。
+    #
+    # 实测踩过：发版时 Docker 守护进程正好在重启，
+    # `docker image inspect` 一失败就被当成了「本地没这个镜像」。
+    die "本地没有 kb-workbench-backend:tools-${arch}（$arch 的带工具后端镜像）。
+    先构建它：./scripts/build-offline-images.sh --tools-only
+    确认 docker 守护进程是好的（docker info 能通），再重跑本脚本。
+    绝不能用普通镜像代替 —— 那样升级一次之后工具就没了。"
   fi
 done
 
@@ -212,11 +232,15 @@ add_asset "$FULL_PKG" "kb-workbench-offline-v${VERSION}.tar.gz"
 for arch in $ARCHES; do
   if docker image inspect "kb-workbench-backend:tools-${arch}" >/dev/null 2>&1; then
     TOOLS_OUT="dist-offline/kb-workbench-backend-tools-${arch}.tar.gz"
-    if [ ! -f "$TOOLS_OUT" ]; then
+    # 重新导出：本地那个可能是上一版的（带工具镜像会随版本变）
+    if [ ! -f "$TOOLS_OUT" ] || [ "$TOOLS_OUT" -ot "kb-workbench-backend:tools-${arch}" ]; then
       step "导出带工具的后端镜像 ${arch}"
       docker save "kb-workbench-backend:tools-${arch}" | gzip > "$TOOLS_OUT"
     fi
     add_asset "$TOOLS_OUT"
+  else
+    die "本地没有 kb-workbench-backend:tools-${arch}，没法提供带工具的后端镜像。
+    离线机器想用「一键升级」需要它 —— 先跑 ./scripts/build-offline-images.sh --tools-only"
   fi
 done
 

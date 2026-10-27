@@ -144,3 +144,34 @@ console.log(`✅ 升级指引 ${n} 项断言全部通过`)
   )
   console.log('\n✅ 一键升级弹窗纯函数断言全部通过')
 }
+
+// ============ v0.6.1：「已是最新版本」的判定 ============
+// 为什么要单独判：弹窗一上来就是「当前环境不能自动升级」+ 一串障碍，
+// 读起来像系统坏了 —— 其实只是没有更新的版本而已。
+{
+  const { isLatestPlan } = await import('../src/utils/update.js')
+
+  assert.equal(
+    isLatestPlan({ target: 'v0.6.0', current: '0.6.0', has_update: false }),
+    true,
+    '当前版本 == 目标版本 ⇒ 已是最新',
+  )
+  assert.equal(
+    isLatestPlan({ target: 'v0.7.0', current: '0.6.0', has_update: true }),
+    false,
+    '有新版 ⇒ 不是最新',
+  )
+  assert.equal(
+    isLatestPlan({ target: '', has_update: false }),
+    false,
+    '查不到目标版本时不能算「已是最新」（那是「不知道」不是「没有」）',
+  )
+  assert.equal(isLatestPlan({ has_update: false }), false, '没有 target ⇒ 不是最新')
+  assert.equal(isLatestPlan(null), false, '空计划 ⇒ 不是最新')
+  assert.equal(
+    isLatestPlan({ target: 'v0.6.0' }),
+    false,
+    '没有 has_update 字段 ⇒ 按「不是最新」处理（别乱下结论）',
+  )
+  console.log('✅ 「已是最新版本」判定 6 项断言全部通过')
+}

@@ -393,13 +393,25 @@
 
         <!-- 判定结果：能升就直说，不能升就把缺什么、怎么补一条条摆出来 -->
         <template v-if="upgrade.plan && !upgradeBusy">
+          <!-- 已是最新版本时先说这个。
+               否则弹窗一上来就是「当前环境不能自动升级」+ 一串障碍，
+               读起来像系统坏了 —— 其实只是没有更新的版本而已。 -->
           <el-alert
-            v-if="upgrade.plan.feasible"
+            v-if="isLatest"
+            :title="`当前已是最新版本（${upgrade.plan.current}），没有可升级的新版本`"
+            type="info" show-icon :closable="false"
+          />
+          <el-alert
+            v-else-if="upgrade.plan.feasible"
             :title="`可以自动升级：后端会在容器里完成 ${planSummary || '升级'}`"
             type="success" show-icon :closable="false"
           />
-          <div v-else class="upgrade-blockers">
-            <div class="upgrade-blockers-title">当前环境不能自动升级</div>
+          <div v-if="!upgrade.plan.feasible" class="upgrade-blockers">
+            <div class="upgrade-blockers-title">
+              {{ isLatest
+                 ? '想让下次升级自动完成，先把这几件事补上'
+                 : '当前环境不能自动升级' }}
+            </div>
             <div v-for="b in upgrade.plan.blockers || []" :key="b.code" class="upgrade-blocker">
               <div class="upgrade-blocker-head">
                 <el-icon><WarningFilled /></el-icon>{{ b.title }}
@@ -427,7 +439,8 @@
             <pre class="upgrade-enable-cmd mono">{{ enableCommands.join('\n') }}</pre>
             <div class="upgrade-enable-tip">
               它会替你把后端容器武装起来：装上 docker 命令、挂上 docker socket 与安装目录。
-              装完回到这里点「开始升级」就能一键完成。
+              <template v-if="isLatest">装完之后，等下个版本发布，回到这里点「开始升级」就能一键完成。</template>
+              <template v-else>装完回到这里点「开始升级」就能一键完成。</template>
               <b>注意：挂 docker socket 等于把宿主机的 root 权限交给容器</b>，
               只在自己的独占服务器上这么做。
             </div>
@@ -555,7 +568,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../../api'
-import { upgradeCommand, upgradeTip as upgradeTipText, DEPLOY_MODE, planSummary as planSummaryText, assetSize as assetSizeText, autoUpgradeSupported, enableCommands as enableCommandsOf } from '../../utils/update'
+import { upgradeCommand, upgradeTip as upgradeTipText, DEPLOY_MODE, planSummary as planSummaryText, assetSize as assetSizeText, autoUpgradeSupported, enableCommands as enableCommandsOf, isLatestPlan } from '../../utils/update'
 import { useAuthStore } from '../../stores/auth'
 import PageTitle from '../../components/PageTitle.vue'
 import MarkdownText from '../../components/MarkdownText.vue'
@@ -684,6 +697,10 @@ const autoSupported = computed(() => autoUpgradeSupported(upgrade.plan))
 // 原来这句是写死的「拉取版本 → 切换版本 → 重建镜像 → 重启服务」，
 // 离线部署会显示完全对不上的步骤。
 const planSummary = computed(() => planSummaryText(upgrade.plan?.steps || []))
+// 「当前版本 == 目标版本」= 已是最新，没有可升的东西。
+// 这时候把障碍清单摆在最前面会让人以为系统坏了，
+// 所以要先说「已是最新」，再把障碍说成「为下次升级做准备」。
+const isLatest = computed(() => isLatestPlan(upgrade.plan))
 // 步骤：运行中用作业自己的状态（pending/running/done/failed），
 // 没运行时用计划里的清单（只有标题与命令）
 const jobSteps = computed(() => {

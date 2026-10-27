@@ -131,3 +131,24 @@ export function enableCommands(plan) {
   if (!plan || !Array.isArray(plan.enable_commands)) return []
   return plan.enable_commands.filter((c) => typeof c === 'string' && c.trim())
 }
+
+/**
+ * 计划是不是「当前已是最新版本，没有可升的东西」。
+ *
+ * 为什么单独拎出来：弹窗一上来如果就是「当前环境不能自动升级」
+ * 加一串障碍，读起来像系统坏了 —— 其实只是没有更新的版本而已。
+ * 所以要先说「已是最新」，再把障碍说成「为下次升级做准备」。
+ *
+ * 注意必须要有 target 才算「已是最新」：
+ * 查不到目标版本时后端会返回 has_update=false，
+ * 但那是「不知道有没有新版」，不是「确认没有新版」——
+ * 这两种情况不能混，否则会把「查不到」说成「已是最新」。
+ *
+ * @param {object} plan 升级计划
+ * @returns {boolean}
+ */
+export function isLatestPlan(plan) {
+  if (!plan || typeof plan !== 'object') return false
+  if (!plan.target) return false
+  return plan.has_update === false
+}

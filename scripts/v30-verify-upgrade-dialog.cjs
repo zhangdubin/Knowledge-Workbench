@@ -155,10 +155,16 @@ async function main() {
       // 1. 结论必须说清楚（两种状态各有一套说法，都算数）
       const canUpgrade = /可以自动升级/.test(t)
       const cannotUpgrade = /不能自动升级|暂不支持|条件不满足/.test(t)
-      if (canUpgrade || cannotUpgrade) {
-        ok(`弹窗给出了结论（${canUpgrade ? '可以自动升级' : '当前不能自动升级'}）`)
+      const isLatest = /已是最新版本/.test(t)
+      if (canUpgrade || cannotUpgrade || isLatest) {
+        ok(`弹窗给出了结论（${canUpgrade ? '可以自动升级'
+          : isLatest ? '当前已是最新版本' : '当前不能自动升级'}）`)
       } else {
         bad('弹窗没有给出明确结论')
+      }
+      // 已是最新时，不能用「环境坏了」的口气说话
+      if (isLatest && /当前环境不能自动升级/.test(t)) {
+        bad('已是最新版本，却还写着「当前环境不能自动升级」')
       }
 
       // 2. 阻塞项 / 引导命令
@@ -178,7 +184,7 @@ async function main() {
       }
 
       // 3c. 不能升级时，每条障碍都得说清「怎么办」
-      if (cannotUpgrade) {
+      if (cannotUpgrade || isLatest) {
         const blocks = await page.evaluate(() => {
           // 从弹窗根上找，别从第一张卡片里找卡片（那样只会找到空集）
           const root = document.querySelector('.el-dialog')

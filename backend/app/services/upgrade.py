@@ -616,8 +616,10 @@ def _enable_commands(mode: str) -> list[str]:
     """
     cmds = ["bash scripts/enable-one-click-upgrade.sh --dir <安装目录>"]
     if mode == MODE_GIT:
-        # 源码部署还要把 git / docker 工具装进后端镜像
-        cmds.append("KB_INSTALL_UPGRADE_TOOLS=1 docker compose build backend")
+        # 源码部署还要把 git / docker 工具装进后端镜像。
+        # Dockerfile 现在把「带工具」做成了独立的 stage（--target tools），
+        # 编排文件里的 build.target 由这个环境变量控制。
+        cmds.append("KB_BUILD_TARGET=tools docker compose build backend")
     cmds.append("cd <安装目录> && docker compose up -d backend")
     return cmds
 
@@ -755,10 +757,19 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
                 "KB_PROJECT_DIR（例：- .:/app/project 与 - KB_PROJECT_DIR=/app/project）。",
             ))
         else:
+            # 「找不到…（未找到）」是废话。找不到的时候，
+            # 有价值的是「都找过哪些地方」—— 用户照着挂一次就明白了。
+            tried = ""
+            if dir_source == "未找到":
+                tried = ("已经找过 /app/install、/app/project、/install、/project、"
+                         "/workspace 这些常见挂载点，以及当前目录向上的每一层，"
+                         "都没有带编排文件的目录。")
+            else:
+                tried = f"（{dir_source}）。"
             blockers.append(_blocker(
                 "install_dir_missing",
                 "找不到安装目录",
-                f"容器里找不到带编排文件的安装目录（{dir_source}）。"
+                f"容器里找不到带编排文件的安装目录。{tried}"
                 "离线包升级要在安装目录里执行 docker compose up -d，"
                 "容器里看不到安装目录就没法继续。",
                 "在编排文件的后端服务里加两行："
@@ -771,7 +782,8 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
             "no_docker_cli",
             "后端镜像里没装 docker 命令",
             "后端容器里没有 docker CLI，无法导入镜像、无法重建容器、无法重启服务。",
-            "需要换用带工具的后端镜像（构建时 INSTALL_UPGRADE_TOOLS=1）。"
+            "需要换用带工具的后端镜像（构建时用 --target tools，"
+            "它会一并装上 docker CLI 与 compose 插件）。"
             "在宿主机上执行：bash scripts/enable-one-click-upgrade.sh --dir <安装目录>",
         ))
     if not has_socket:
@@ -789,8 +801,8 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
             "没有可用的 compose 命令",
             "docker compose 是插件形态，默认镜像里没有；docker-compose（v1）也没装。"
             "没有它就没法统一地 build / up 这套编排。",
-            "需要换用带工具的后端镜像（构建时 INSTALL_UPGRADE_TOOLS=1，"
-            "该构建参数会一并装上 compose 插件），或改用手动升级。",
+            "需要换用带工具的后端镜像（构建时用 --target tools，"
+            "它会一并装上 compose 插件），或改用手动升级。",
         ))
 
     # ---- 模式相关的检查 ----
@@ -800,8 +812,8 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
                 "no_git",
                 "容器里没有 git",
                 "后端镜像里没有 git 命令，无法拉取 tag、无法切换版本。",
-                "构建后端镜像时把 INSTALL_UPGRADE_TOOLS 改成 1 重建镜像"
-                "（docker-compose.yml 里已写好用法），或改用离线包升级。",
+                "构建后端镜像时用 tools 变体重建（KB_BUILD_TARGET=tools docker compose build backend），"
+                "或改用离线包升级。",
             ))
         if compose_file and not has_build:
             blockers.append(_blocker(
@@ -856,25 +868,33 @@ async def build_plan(target: str = "", force: bool = False) -> dict[str, Any]:
                 picked = _pick_asset(assets, arch)
                 if picked is None:
                     names = "、".join(a.get("name") or "" for a in assets) or "（一个都没有）"
-                    blockers.append(_blocker(
-                        "no_release_asset",
-                        "目标版本没有本机架构的镜像包",
-                        f"{target} 这个 Release 里没有 {arch or '本机架构'} 的镜像资产"
-                        f"（当前 Release 的资产：{names}）。"
-                        "离线包部署的自动升级靠下载镜像包完成，没有它就升不了。",
-                        "让发版的人把 kb-workbench-images-<arch>.tar.gz 挂到这个 Release 上；"
-                        "或者手动下载完整离线包升级。",
-                    ))
+                    if not arch:
+                        # 架构都探测不到，说「没有本机架构的镜像资产」是误导 ——
+                        # 资产可能一个不少（arm64 / amd64 都有），
+                        # 只是分不清该下哪一个。
+                        # 这两种情况的解法完全不同，不能混成一条。
+                        blockers.append(_blocker(
+                            "unknown_arch",
+                            "没能确定本机架构",
+                            "容器里没有 docker 命令，探测不到宿主机的架构，"
+                            "因此没法确认该下载哪个架构的镜像包"
+                            f"（当前 Release 的资产：{names}）。",
+                            "换成带 docker 命令的后端镜像后就能自动判断；"
+                            "或者手动下载对应架构的镜像包升级。",
+                        ))
+                    else:
+                        blockers.append(_blocker(
+                            "no_release_asset",
+                            "目标版本没有本机架构的镜像包",
+                            f"{target} 这个 Release 里没有 {arch} 的镜像资产"
+                            f"（当前 Release 的资产：{names}）。"
+                            "离线包部署的自动升级靠下载镜像包完成，没有它就升不了。",
+                            "让发版的人把 kb-workbench-images-<arch>.tar.gz 挂到这个 Release 上；"
+                            "或者手动下载完整离线包升级。",
+                        ))
                 else:
                     notes.append(f"将下载 {picked.get('name')}（约 "
                                  f"{_human_size(picked.get('size'))}）并导入本机。")
-        if not arch:
-            warnings.append(_warning(
-                "unknown_arch",
-                "没能确定宿主机的架构",
-                "拿不到 docker 守护进程报的架构，只能按默认的 amd64 找镜像包。"
-                "如果宿主机是 arm64，下载会失败。",
-            ))
         notes.append("最后一步会重建容器，接口会短暂中断几秒到几十秒，浏览器会自动等待。")
 
     # ---- 步骤清单 ----

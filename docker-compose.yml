@@ -32,7 +32,7 @@ services:
       #
       # 为什么默认不装 git / docker CLI：绝大多数部署只用「检查更新」，
       # 那时根本不需要在容器里跑它们，白涨几十 MB 不值当。
-      target: base
+      target: ${KB_BUILD_TARGET:-base}
     container_name: kb-backend
     restart: unless-stopped
     # 本地 .env 覆盖默认值（可选）。所有可调项见 .env.example。

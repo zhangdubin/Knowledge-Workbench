@@ -451,15 +451,41 @@ kb-workbench/
 | 缺什么 | 怎么办 |
 |---|---|
 | 安装目录 | 挂进容器并设 `KB_INSTALL_DIR` |
-| docker CLI | 用带工具的后端镜像（`INSTALL_UPGRADE_TOOLS=1`） |
+| docker CLI | 用带工具的后端镜像（`--target tools`） |
 | docker socket | 挂 `/var/run/docker.sock` |
 | compose 命令 | 同 docker CLI（compose 是**插件形态**，装 docker CLI 不会自动带上） |
 | 目标版本的镜像包 | 发版时要挂 `kb-workbench-images-<arch>.tar.gz` 资产 |
 
-### 开启自动升级：一条命令
+### 开启自动升级
 
-默认**不开**（后端镜像不带 git/docker CLI/compose，不给所有用户白涨体积）。
-要开就在**宿主机**上跑：
+**v0.6.3 起，用离线包装的话，装完就是开着的。**
+
+安装脚本会顺手把部署武装好：
+
+| 装的时候自动做 | 做什么 |
+|---|---|
+| 换带工具的后端镜像 | 后端自带 docker CLI 与 compose 插件（离线包里直接装这一版） |
+| 编排文件加 `docker.sock` 挂载 | 后端能驱动宿主机的 docker（load 镜像、重建容器） |
+| 编排文件加安装目录挂载 | 容器里能看到 `/app/install`，升级时能在那儿执行 compose |
+| 写 `KB_INSTALL_DIR` | 告诉后端安装目录在容器里的位置 |
+
+装完打开「系统设置 → 升级与更新」，弹窗直接就是「**可以自动升级**」，
+四个阶段一步不缺。验证：
+
+```bash
+docker exec <后端容器> kb-upgrade-selftest   # 五项全 [OK] 才算武装好
+```
+
+> ⚠️ 挂 `docker.sock` 等于把宿主机的 root 权限交给后端容器。
+> **只在自己的独占服务器上这么做。** 共享机器请装的时候加 `--no-upgrade-tools`：
+
+```bash
+bash install.sh -d <安装目录> --no-upgrade-tools
+```
+
+### 老版本补开：一条命令
+
+v0.6.3 之前装的（或者用了 `--no-upgrade-tools` 的），在**宿主机**上跑：
 
 ```bash
 bash scripts/enable-one-click-upgrade.sh --dir <安装目录>
@@ -470,8 +496,9 @@ bash scripts/enable-one-click-upgrade.sh --dir <安装目录>
 1. 自动定位安装目录、数据目录、后端容器；
 2. 给编排文件的后端服务**幂等地**加三样 —— `docker.sock` 挂载、安装目录挂载、
    `KB_INSTALL_DIR` 环境变量（**改前备份，改后校验 YAML 语法，重复跑不重复加**）；
-3. 检查后端镜像里有没有 docker CLI / compose 插件，没有就给两条现成的路：
-   下载带工具的镜像，或用源码重建；
+3. 检查后端镜像里有没有 docker CLI / compose 插件；
+   **本地已经有带工具镜像的话直接换掉并重建后端**（不用你抄命令，抄错 tag 的人太多了），
+   没有才给两条现成的路：下载带工具的镜像，或用源码重建；
 4. 打印验证命令。
 
 验证只要一条：

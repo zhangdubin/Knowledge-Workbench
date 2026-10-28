@@ -344,6 +344,8 @@ backups/snap-20260924-220600/
 | 全局统计 | `GET /api/stats` |
 | 实体类型 | `GET/POST/PUT/DELETE /api/entity-types` |
 | 记录 CRUD | `GET/POST/PUT/DELETE /api/records/...` |
+| 记录字段筛选 | `GET /api/records/type/{id}?filters={"字段key": 值}`（值按字段类型比较：数字比数字、布尔比 true/false） |
+| 知识库分组 | `GET/POST/PATCH/DELETE /api/note-groups`（分组归属存在记录的 `data.group_id`） |
 | 记录导出/导入 | `GET /api/records/type/{id}/export` · `POST /api/records/type/{id}/import` |
 | 回收站 | `GET /api/recycle` · `POST /api/recycle/types/{id}/restore` · `DELETE /api/recycle/types/{id}` · `POST /api/recycle/records/{id}/restore` |
 | 关系管理 | `GET/POST/DELETE /api/relations/...` |
@@ -390,6 +392,10 @@ backups/snap-20260924-220600/
   禁用控件按 WCAG 1.4.3 豁免对比度。
 - `node scripts/v29-verify-routes-render.cjs` —— **路由渲染冒烟**：19 个页面逐个打开，
   断言真的有内容、且没有 JS 运行时错误。
+- `node scripts/v31-verify-groups-and-app-page.cjs` —— **分组 + 应用独立页体检**
+- `node scripts/v31-verify-module-polish.cjs` —— **13 个模块的硬门槛巡检**（键盘可达 / 无障碍名称 / 触控目标 / 深色高亮）
+- `node scripts/v31-verify-module-behavior.cjs` —— **真的去点**（弹窗、权限勾选、骨架、高亮对比度）
+- `node scripts/verify-app-workspace.cjs` —— **应用独立页端到端**（真建一条记录、真删一条）
 - `node scripts/v30-verify-upgrade-dialog.cjs` —— **一键升级弹窗体检**：两种状态
   （能升级 / 不能升级）分别断言「结论明确、障碍都给了解决办法、四个阶段写清楚、
   有手动命令兜底」，外加圆角、阴影、对比度、按钮尺寸、溢出检查。
@@ -399,6 +405,50 @@ backups/snap-20260924-220600/
 第二条是踩坑补上的：v0.5.0 开发中出现过一次「编译通过、构建通过、单元测试全绿，
 但整页白屏」—— Apps.vue 用了 `watch` 却忘了从 vue 导入。编译器不管这个，
 vite 也不管，单测更管不到（单测测的是纯函数）。只有真的在浏览器里打开一次才会炸。
+
+## 🗂 知识库分组（v0.6.4 新增）
+
+知识库左侧有分组栏：**全部笔记 / 未分组 / 各分组（带颜色点与笔记数）**。
+可建、可改名、可换颜色、可排序、可删除；笔记能在分组之间挪。
+
+```text
+分组归属存在笔记记录的 data.group_id —— 与「父笔记」的 data.parent 同一套路子，
+所以不需要给任何既有表加列，升级时零迁移。
+```
+
+几个刻意的选择：
+
+| 行为 | 为什么 |
+|---|---|
+| 删分组**不删笔记**（变「未分组」）；也可以选「把笔记移到另一个分组」 | 删分组是整理，不是销毁 |
+| 移出分组是**把 data.group_id 这个键整个删掉**，不留 null | 留 null 会被前端当成「没有分组信息」，「未分组」里会漏一批 |
+| 分组名去空白后**忽略大小写**判重（`Work`/`work`/`WORK` 互撞） | 免得建出两个看起来一样的分组 |
+| 分组权限 = 知识库那一档（`notes` 页面位 + 笔记模型级） | 只读角色能看不能改 |
+
+接口：
+
+```text
+GET    /api/note-groups              → [{id, name, color, count, sort_order, ...}]
+POST   /api/note-groups              {name, color?}  → 201；重名 409
+PATCH  /api/note-groups/{id}         {name?, color?, sort_order?}
+DELETE /api/note-groups/{id}?move_to=<另一分组id>   → 组内笔记不删，只移出/搬走
+```
+
+## 🗂 应用中心：独立页面 + 数据模型可视化增删改查（v0.6.4 新增）
+
+点应用 → 进**独立页面** `/apps/<应用key>`，页面里直接基于数据模型干活：
+
+- **左侧模型栏**：该应用下的数据模型（带记录数），窄屏收起成下拉
+- **右侧记录区**：表格 / 卡片双视图，列 = 模型的字段定义
+  （日期会格式化、枚举渲染成标签、布尔显示是/否、外键显示名称而不是 id）
+- **筛选**：按枚举、布尔字段筛，**在服务端筛**（不是拉全量回来本地筛）
+- **新增 / 编辑**：表单按字段定义自动生成控件
+  （文本、多行、数字、日期、下拉、多选、开关、可搜索的关联选择、附件上传）
+- **删除**二次确认；记录详情与关联跳转都在页内完成
+
+实现上，记录相关的表格 / 表单 / 卡片抽成了公共组件
+（`frontend/src/components/record/`），「记录」页与应用页共用同一套 ——
+不会出现「两个地方行为不一样」。
 
 ## 📁 目录结构
 

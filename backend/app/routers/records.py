@@ -3,6 +3,8 @@
 每个接口都做「模型级」读写校验：只读角色能看不能改，
 被限制的模型连列表都拿不到（而不是拿到后由前端藏起来）。
 """
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -41,11 +43,31 @@ async def list_records(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     keyword: str | None = None,
+    group_id: int | None = Query(None, description="分组 id（data.group_id）；0 = 未分组；不传 = 不过滤"),
+    filters: str | None = Query(
+        None,
+        description=(
+            '字段筛选，JSON 字符串：{"字段key": 值} 或 {"字段key": [值1, 值2]}。'
+            '值按字段类型比较（数字比数字、布尔比 true/false、下拉比文本）。'
+            '为什么是 JSON 而不是 filter_xxx=xxx：字段 key 是用户自己定的，'
+            '不能假设它一定是合法的查询参数名。'
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(current_principal),
 ):
     ensure_model(principal, await _type_key(db, type_id), "read")
-    return await svc.list_records(db, type_id, page, page_size, keyword)
+    parsed: dict | None = None
+    if filters:
+        try:
+            raw = json.loads(filters)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "筛选参数不是合法的 JSON")
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "筛选参数必须是对象")
+        parsed = raw
+    return await svc.list_records(db, type_id, page, page_size, keyword,
+                                  filters=parsed, group_id=group_id)
 
 
 @router.get("/{record_id}")
@@ -65,7 +87,11 @@ async def create_record(
     principal: Principal = Depends(current_principal),
 ):
     ensure_model(principal, await _type_key(db, type_id), "write")
-    rec = await svc.create_record(db, type_id, payload.data)
+    try:
+        rec = await svc.create_record(db, type_id, payload.data)
+    except ValueError as e:
+        # 记录里的 group_id 指向不存在的分组 —— 挡在写库之前
+        raise HTTPException(400, str(e)) from None
     if not rec:
         raise HTTPException(404, "数据模型不存在")
     audit_svc.mark_created(request, rec.id)
@@ -78,7 +104,10 @@ async def update_record(
     principal: Principal = Depends(current_principal),
 ):
     ensure_model(principal, await _record_type_key(db, record_id), "write")
-    rec = await svc.update_record(db, record_id, payload.data)
+    try:
+        rec = await svc.update_record(db, record_id, payload.data)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
     if not rec:
         raise HTTPException(404, "记录不存在")
     return await svc.get_record(db, rec.id)

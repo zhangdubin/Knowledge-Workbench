@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4173 --host",
-    "test": "node tests/canvas-fill.test.mjs && node tests/markdown.test.mjs && node tests/notes.test.mjs && node tests/update.test.mjs && node tests/apps.test.mjs && node tests/model-fields.test.mjs && node tests/design.test.mjs"
+    "test": "node tests/canvas-fill.test.mjs && node tests/markdown.test.mjs && node tests/notes.test.mjs && node tests/update.test.mjs && node tests/apps.test.mjs && node tests/model-fields.test.mjs && node tests/records.test.mjs && node tests/design.test.mjs"
   },
   "dependencies": {
     "vue": "^3.5.13",

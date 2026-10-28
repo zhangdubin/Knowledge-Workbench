@@ -111,7 +111,7 @@
 
     <!-- 明细 -->
     <div class="card" style="padding:0;overflow:hidden">
-      <el-table :data="items" v-loading="loading" stripe class="data-table">
+      <el-table :data="items" v-loading="loading" class="data-table table-striped table-density-default">
         <el-table-column type="expand">
           <template #default="{ row }">
             <div class="row-detail">
@@ -158,11 +158,13 @@
         </el-table-column>
       </el-table>
 
-      <div v-if="!loading && !items.length" class="empty-state" style="border:none">
-        <div class="empty-icon"><el-icon :size="30"><Monitor /></el-icon></div>
-        <div class="empty-title">没有符合条件的记录</div>
-        <div class="empty-desc">换个时间范围或清空筛选条件再看看</div>
-      </div>
+      <EmptyState
+        v-if="!loading && !items.length"
+        icon="Monitor"
+        title="没有符合条件的记录"
+        description="换个时间范围或清空筛选条件再看看"
+        variant="plain"
+      />
     </div>
 
     <div v-if="total > pageSize" class="pager">
@@ -186,6 +188,7 @@ import { Api } from '../../api'
 import { formatTime } from '../../utils/format'
 import { axisStyle, chartTheme, tooltipStyle } from '../../utils/theme'
 import PageTitle from '../../components/PageTitle.vue'
+import EmptyState from '../../components/EmptyState.vue'
 import EChart from '../../components/EChart.vue'
 
 // 后端 action / resource 都是英文枚举，前端统一在这里翻译，

@@ -41,11 +41,13 @@
 
       <!-- 右：权限矩阵 -->
       <section class="role-detail">
-        <div v-if="!selected" class="empty-state" style="margin:0">
-          <div class="empty-icon"><el-icon :size="32"><Lock /></el-icon></div>
-          <div class="empty-title">选择一个角色</div>
-          <div class="empty-desc">左侧点选角色，即可查看并编辑它的权限范围</div>
-        </div>
+        <EmptyState
+          v-if="!selected"
+          icon="Lock"
+          title="选择一个角色"
+          description="左侧点选角色，即可查看并编辑它的权限范围"
+          variant="plain"
+        />
 
         <template v-else>
           <div class="card editor-head">
@@ -87,13 +89,13 @@
               </span>
             </div>
             <div class="check-grid">
-              <label v-for="p in meta.pages" :key="p.key" class="check-item"
-                     :class="{ on: draft.pages.includes(p.key), dis: draft.all }">
-                <el-checkbox :model-value="draft.pages.includes(p.key)" :disabled="draft.all"
-                             @change="v => togglePage(p.key, v)" />
+              <el-checkbox v-for="p in meta.pages" :key="p.key" class="check-item"
+                           :class="{ on: draft.pages.includes(p.key), dis: draft.all }"
+                           :model-value="draft.pages.includes(p.key)" :disabled="draft.all"
+                           @change="v => togglePage(p.key, v)">
                 <span class="ci-label">{{ p.label }}</span>
                 <code class="ci-key">{{ p.key }}</code>
-              </label>
+              </el-checkbox>
             </div>
           </div>
 
@@ -181,12 +183,13 @@
     </div>
 
     <!-- 新建角色 -->
-    <el-dialog v-model="createOpen" title="新建角色" width="520px"
-               class="rich-dialog" :close-on-click-modal="false">
-      <div class="dialog-summary">
-        <el-icon :size="18"><Lock /></el-icon>
-        <span>从一个现有角色复制权限作为起点，比从零勾选快得多，也不容易漏。</span>
-      </div>
+    <DialogShell
+      v-model="createOpen"
+      title="新建角色"
+      description="从一个现有角色复制权限作为起点，比从零勾选快得多，也不容易漏。"
+      :width="520"
+    >
+      <template #icon><el-icon><Lock /></el-icon></template>
       <el-form :model="form" label-width="90px">
         <el-form-item label="标识" required>
           <el-input v-model="form.key" placeholder="英文/下划线，如 auditor" />
@@ -209,7 +212,7 @@
         <el-button @click="createOpen = false">取消</el-button>
         <el-button type="primary" :loading="creating" @click="doCreate">创建</el-button>
       </template>
-    </el-dialog>
+    </DialogShell>
   </div>
 </template>
 
@@ -220,6 +223,8 @@ import { Api } from '../../api'
 import { entityIcon } from '../../utils/icons'
 import { useAuthStore } from '../../stores/auth'
 import PageTitle from '../../components/PageTitle.vue'
+import EmptyState from '../../components/EmptyState.vue'
+import DialogShell from '../../components/DialogShell.vue'
 
 const auth = useAuthStore()
 
@@ -479,15 +484,26 @@ onMounted(async () => {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 8px;
 }
-.check-item {
-  display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+/* 权限项本身就是 el-checkbox（它内部就是一个 <label>），
+   文字和 key 都放进它的默认插槽，于是整块是同一个可点区域：
+   点文字、点 key、点方框，行为一致 —— 之前 <label> 套 <label>，
+   点文字是没有反应的，用户会以为这一行坏了。 */
+.check-item.el-checkbox {
+  display: flex; align-items: center; gap: 6px; padding: 8px 10px; height: auto;
+  /* Element Plus 给复选框留了 30px 右外边距（那是给「复选框 + 文字」用的），
+     这里每一项都是独立的卡片，右边多出来的 30px 会让网格参差不齐 */
+  margin-right: 0;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--bg-card); cursor: pointer;
   transition: all var(--duration) var(--ease-out);
 }
-.check-item:hover { border-color: var(--primary-200); }
-.check-item.on { border-color: var(--primary-200); background: var(--primary-bg); }
-.check-item :deep(.el-checkbox) { margin-right: 0; height: auto; }
+.check-item.el-checkbox:hover { border-color: var(--primary-200); }
+.check-item.el-checkbox.on { border-color: var(--primary-200); background: var(--primary-bg); }
+.check-item :deep(.el-checkbox__label) {
+  display: flex; align-items: center; gap: 6px; flex: 1;
+  padding-left: 6px; font-size: var(--text-base); color: var(--text-primary);
+}
+.check-item :deep(.el-checkbox__input) { margin-right: 0; }
 .ci-label { flex: 1; font-size: var(--text-base); color: var(--text-primary); }
 .ci-key { font-size: var(--text-xs); color: var(--text-disabled); font-family: var(--font-mono); }
 

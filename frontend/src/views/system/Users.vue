@@ -11,7 +11,7 @@
     </PageTitle>
 
     <div class="card" style="padding:0;overflow:hidden">
-      <el-table :data="users" v-loading="loading" stripe class="data-table">
+      <el-table :data="users" v-loading="loading" class="data-table table-striped table-density-default">
         <el-table-column label="用户" min-width="200">
           <template #default="{ row }">
             <div class="user-cell">
@@ -63,23 +63,35 @@
               <el-icon><Key /></el-icon>重置密码
             </el-button>
             <el-button size="small" link type="danger" :disabled="row.id === auth.user?.id"
+                       :aria-label="`删除用户 ${row.display_name || row.username}`"
                        @click="del(row)">
               <el-icon><Delete /></el-icon>
             </el-button>
           </template>
         </el-table-column>
       </el-table>
-      <div v-if="!loading && !users.length" class="empty-state" style="border:none">
-        <div class="empty-title">还没有用户</div>
-      </div>
+      <EmptyState
+        v-if="!loading && !users.length"
+        icon="UserFilled"
+        title="还没有用户"
+        description="新建一个账号并分配角色，它就能登录并按角色权限访问数据。"
+        variant="plain"
+      >
+        <template #default>
+          <el-button type="primary" @click="openCreate">
+            <el-icon><Plus /></el-icon>新建用户
+          </el-button>
+        </template>
+      </EmptyState>
     </div>
 
-    <el-dialog v-model="dialogOpen" :title="form.id ? '编辑用户' : '新建用户'"
-               width="520px" class="rich-dialog" :close-on-click-modal="false">
-      <div class="dialog-summary">
-        <el-icon :size="18"><UserFilled /></el-icon>
-        <span>用户必须归属一个角色；角色里的权限决定了这个账号能访问的页面与数据范围。</span>
-      </div>
+    <DialogShell
+      v-model="dialogOpen"
+      :title="form.id ? '编辑用户' : '新建用户'"
+      description="用户必须归属一个角色；角色里的权限决定了这个账号能访问的页面与数据范围。"
+      :width="520"
+    >
+      <template #icon><el-icon><UserFilled /></el-icon></template>
       <el-form :model="form" label-width="90px">
         <el-form-item label="用户名" required>
           <el-input v-model="form.username" :disabled="!!form.id" placeholder="登录账号，英文/数字" />
@@ -105,7 +117,7 @@
         <el-button @click="dialogOpen = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </template>
-    </el-dialog>
+    </DialogShell>
   </div>
 </template>
 
@@ -116,6 +128,8 @@ import { Api } from '../../api'
 import { formatTime } from '../../utils/format'
 import { useAuthStore } from '../../stores/auth'
 import PageTitle from '../../components/PageTitle.vue'
+import EmptyState from '../../components/EmptyState.vue'
+import DialogShell from '../../components/DialogShell.vue'
 
 const auth = useAuthStore()
 const users = ref([])

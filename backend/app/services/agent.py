@@ -603,7 +603,12 @@ async def exec_write(db: AsyncSession, principal, name: str, args: dict) -> dict
         return {"ok": False, "error": f"模型「{clean['model_key']}」不存在"}
 
     if name == "create_record":
-        rec = await rec_svc.create_record(db, t.id, clean["data"])
+        try:
+            rec = await rec_svc.create_record(db, t.id, clean["data"])
+        except ValueError as e:
+            # 记录里的 group_id 指向不存在的分组：给 AI 一句人话，
+            # 而不是让一个 ValueError 变成 500
+            return {"ok": False, "error": str(e)}
         if not rec:
             return {"ok": False, "error": "写入失败：模型不存在或已在回收站"}
         result = {"ok": True, "action": "created", "model": t.key,
@@ -613,7 +618,10 @@ async def exec_write(db: AsyncSession, principal, name: str, args: dict) -> dict
         if not rec or rec.deleted_at:
             return {"ok": False, "error": f"记录 #{clean['record_id']} 不存在"}
         merged = {**(rec.data or {}), **clean["data"]}      # 只覆盖要改的字段
-        rec = await rec_svc.update_record(db, clean["record_id"], merged)
+        try:
+            rec = await rec_svc.update_record(db, clean["record_id"], merged)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
         if not rec:
             return {"ok": False, "error": "写入失败：记录不存在"}
         result = {"ok": True, "action": "updated", "model": t.key,

@@ -29,15 +29,15 @@
         </span>
       </div>
       <div class="suggest-chips">
-        <el-tag
+        <button
           v-for="s in SUGGESTIONS"
           :key="s"
           class="suggest-chip"
-          effect="plain"
+          type="button"
           @click="kw = s; search()"
         >
           {{ s }}
-        </el-tag>
+        </button>
       </div>
       <div class="search-hint">
         <el-icon><InfoFilled /></el-icon>
@@ -45,29 +45,43 @@
       </div>
     </div>
 
-    <!-- 加载中 -->
-    <div v-if="loading" class="empty-state" style="border:none;background:transparent">
-      <div class="empty-icon"><el-icon :size="28"><Loading /></el-icon></div>
-      <div class="empty-title">搜索中…</div>
+    <!-- 加载中：出结果之前给一块骨架，避免「点了搜索 → 页面空了 → 结果突然出现」的跳动 -->
+    <div v-if="loading" class="search-skeleton" aria-busy="true" aria-live="polite">
+      <div v-for="i in 4" :key="i" class="sk-row">
+        <el-skeleton animated>
+          <template #template>
+            <el-skeleton-item variant="circle" style="width: 36px; height: 36px" />
+            <div class="sk-lines">
+              <el-skeleton-item variant="text" style="width: 40%" />
+              <el-skeleton-item variant="text" style="width: 75%" />
+            </div>
+          </template>
+        </el-skeleton>
+      </div>
     </div>
 
     <!-- 无结果 -->
-    <div v-else-if="kw && !totalCount" class="empty-state">
-      <div class="empty-icon"><el-icon :size="32"><Search /></el-icon></div>
-      <div class="empty-title">没有找到与「{{ kw }}」相关的结果</div>
-      <div class="empty-desc">试试用更短的关键字，或检查拼写</div>
-      <div class="suggest-chips" style="justify-content:center;margin-top:12px">
-        <el-tag
-          v-for="s in SUGGESTIONS.slice(0, 4)"
-          :key="s"
-          class="suggest-chip"
-          effect="plain"
-          @click="kw = s; search()"
-        >
-          {{ s }}
-        </el-tag>
-      </div>
-    </div>
+    <EmptyState
+      v-else-if="kw && !totalCount"
+      icon="Search"
+      :title="`没有找到与「${kw}」相关的结果`"
+      description="试试用更短的关键字，或检查拼写"
+      variant="plain"
+    >
+      <template #default>
+        <div class="suggest-chips suggest-chips--center">
+          <button
+            v-for="s in SUGGESTIONS.slice(0, 4)"
+            :key="s"
+            class="suggest-chip"
+            type="button"
+            @click="kw = s; search()"
+          >
+            {{ s }}
+          </button>
+        </div>
+      </template>
+    </EmptyState>
 
     <!-- 结果 -->
     <div v-else-if="totalCount">
@@ -93,7 +107,12 @@
           v-for="d in docResults"
           :key="'doc' + d.id"
           class="result-item"
+          role="button"
+          tabindex="0"
+          :aria-label="`文件 ${d.title || d.filename}`"
           @click="openDoc(d)"
+          @keydown.enter.prevent="openDoc(d)"
+          @keydown.space.prevent="openDoc(d)"
         >
           <div class="result-icon" style="background:var(--warning-bg);color:var(--warning)">
             <el-icon :size="18"><component :is="docIcon(d)" /></el-icon>
@@ -135,7 +154,12 @@
           v-for="r in group.items"
           :key="r.record_id"
           class="result-item"
+          role="button"
+          tabindex="0"
+          :aria-label="`${r.entity_type_name} ${getDisplayName(r)}`"
           @click="go(r)"
+          @keydown.enter.prevent="go(r)"
+          @keydown.space.prevent="go(r)"
         >
           <div class="result-icon" :style="{ background: group.bg, color: group.color }">
             <el-icon :size="18"><component :is="group.icon" /></el-icon>
@@ -145,7 +169,6 @@
             <div class="result-snippet" v-html="highlight(r.snippet)"></div>
             <div class="result-meta">
               <el-tag size="small" effect="plain">{{ r.entity_type_name }}</el-tag>
-              <span class="result-id">#{{ r.record_id }}</span>
             </div>
           </div>
           <el-icon class="result-arrow"><ArrowRight /></el-icon>
@@ -163,6 +186,7 @@ import { formatSize } from '../utils/format'
 import { entityIcon } from '../utils/icons'
 import { highlightHtml } from '../utils/md'
 import PageTitle from '../components/PageTitle.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -182,16 +206,24 @@ function getDisplayName(r) {
   return r.data?.name || r.data?.title || r.data?.code || `#${r.record_id}`
 }
 
+/**
+ * 结果分组的配色。
+ *
+ * 之前这里是写死的十六进制（#3b82f6 / #10b981 / #f59e0b …），
+ * 两个问题：一是绕开了设计令牌，深色主题下这套浅色会糊在深底上；
+ * 二是这些蓝绿橙红并不在项目色板里，和别处的琥珀/靛蓝体系对不上。
+ * 现在统一映射到主色 + 四个语义色，深浅色主题都由令牌自己负责。
+ */
 function groupStyle(key) {
   const map = {
     note: { icon: 'Notebook', bg: 'var(--primary-bg)', color: 'var(--primary)' },
-    project: { icon: 'Document', bg: 'rgba(59,130,246,.10)', color: '#3b82f6' },
-    task: { icon: 'List', bg: 'rgba(59,130,246,.10)', color: '#3b82f6' },
-    customer: { icon: 'User', bg: 'rgba(16,185,129,.10)', color: '#10b981' },
-    opportunity: { icon: 'ShoppingCart', bg: 'rgba(245,158,11,.10)', color: '#f59e0b' },
-    order: { icon: 'Box', bg: 'rgba(245,158,11,.10)', color: '#f59e0b' },
-    contract: { icon: 'Files', bg: 'rgba(239,68,68,.10)', color: '#ef4444' },
-    payment: { icon: 'Money', bg: 'rgba(6,182,212,.10)', color: '#06b6d4' },
+    project: { icon: 'Document', bg: 'var(--info-bg)', color: 'var(--info)' },
+    task: { icon: 'List', bg: 'var(--info-bg)', color: 'var(--info)' },
+    customer: { icon: 'User', bg: 'var(--success-bg)', color: 'var(--success)' },
+    opportunity: { icon: 'ShoppingCart', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
+    order: { icon: 'Box', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
+    contract: { icon: 'Files', bg: 'var(--danger-bg)', color: 'var(--danger-text)' },
+    payment: { icon: 'Money', bg: 'var(--primary-bg)', color: 'var(--primary)' },
   }
   return map[key] || { icon: 'Document', bg: 'var(--primary-bg)', color: 'var(--primary)' }
 }
@@ -290,19 +322,40 @@ onMounted(() => {
   gap: 8px;
   flex-wrap: wrap;
 }
+.suggest-chips--center { justify-content: center; margin-top: 12px; }
+/* 建议词原来是 el-tag（span）+ click，鼠标能点、键盘够不着。
+   换成真正的 button：天然可聚焦、可回车触发，也不用跟标签样式较劲。 */
 .suggest-chip {
   cursor: pointer;
   padding: 6px 14px;
   font-size: var(--text-sm);
+  font-family: inherit;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
   border-radius: var(--radius-full);
   transition: all var(--duration-fast) var(--ease-out);
 }
 .suggest-chip:hover {
-  background: var(--primary-bg) !important;
-  border-color: var(--primary-light) !important;
-  color: var(--primary) !important;
+  background: var(--primary-bg);
+  border-color: var(--primary-light);
+  color: var(--primary);
   transform: translateY(-1px);
 }
+
+/* 搜索中的骨架：出结果之前占住高度，页面不会先塌下去再弹回来 */
+.search-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.sk-row { display: flex; align-items: center; gap: 14px; }
+.sk-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; }
 
 .result-stats {
   color: var(--text-secondary);
@@ -376,9 +429,12 @@ onMounted(() => {
 .result-id { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .result-arrow { color: var(--text-tertiary); flex-shrink: 0; }
 
+/* 命中高亮：颜色来自 --highlight-bg / --highlight-color，
+   深色主题下换成「暗底 + 亮字」，浅色主题下是「浅琥珀底 + 深琥珀字」，
+   两边都保持 AA 以上的对比度 —— 之前写死的浅棕配深棕在深色底下等于看不见。 */
 :deep(mark) {
-  background: rgba(245, 158, 11, 0.25);
-  color: #92400e;
+  background: var(--highlight-bg);
+  color: var(--highlight-color);
   padding: 0 2px;
   border-radius: 2px;
   font-weight: 700;

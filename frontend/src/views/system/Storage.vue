@@ -292,7 +292,7 @@
         </div>
       </div>
 
-      <el-table :data="backups" size="small" class="data-table" empty-text="还没有备份，点右上角「立即备份」或跑一次 backup.sh">
+      <el-table :data="backups" class="data-table table-striped table-density-compact" empty-text="还没有备份，点右上角「立即备份」或跑一次 backup.sh">
         <el-table-column prop="name" label="备份" min-width="210">
           <template #default="{ row }">
             <span class="mono">{{ row.name }}</span>
@@ -331,9 +331,14 @@
       </div>
 
       <!-- 还原确认 -->
-      <el-dialog v-model="restoreDlg" title="还原到这个快照" width="600px"
-                 :close-on-click-modal="false" :close-on-press-escape="!restoring"
-                 :show-close="!restoring">
+      <DialogShell
+        v-model="restoreDlg"
+        title="还原到这个快照"
+        description="系统会整体回到快照时刻 —— 快照之后的新增、修改、删除都会消失。"
+        :width="600"
+        :close-on-press-escape="!restoring"
+        :show-close="!restoring"
+      >
         <template v-if="restoreTarget">
           <div class="rs-summary">
             <div class="rs-row">
@@ -351,7 +356,6 @@
             </div>
           </div>
           <el-alert type="warning" :closable="false" class="rs-alert">
-            <p>系统会整体回到快照时刻 —— <b>快照之后的新增、修改、删除都会消失</b>。</p>
             <p>还原前会自动把当前状态存成一份<b>退路快照</b>（出现在下方列表里），
               后悔了随时可以再还原回来。</p>
             <p>还原期间（通常几秒，文件多时更久）其他用户的操作会被暂时挡住。</p>
@@ -371,7 +375,7 @@
             {{ restoring ? '正在还原…' : '确认还原' }}
           </el-button>
         </template>
-      </el-dialog>
+      </DialogShell>
     </div>
 
     <!-- 维护动作 -->
@@ -416,6 +420,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageTitle from '../../components/PageTitle.vue'
+import DialogShell from '../../components/DialogShell.vue'
 import EChart from '../../components/EChart.vue'
 // 注意必须是具名导入 { Api }：本模块的 default 是 axios 实例本身，
 // 写成 `import Api from '../../api'` 拿到的是 axios，`Api.storageReport` 是

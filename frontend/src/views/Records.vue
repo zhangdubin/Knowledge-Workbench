@@ -39,9 +39,20 @@
       </el-button>
     </div>
 
-    <!-- 列表 -->
+    <!-- 列表：与「应用独立页」共用同一套记录表格 -->
     <div class="card" style="padding:0;overflow:hidden">
-      <div v-if="!data.items?.length && !loading" class="empty-state" style="border:none;box-shadow:none">
+      <RecordTable
+        v-if="data.items?.length"
+        :records="data.items"
+        :columns="displayFields"
+        :labels="refLabels"
+        :loading="loading"
+        @edit="openEdit"
+        @remove="del"
+        @open="openDetail"
+        @graph="goRecordGraph"
+      />
+      <div v-else-if="!loading" class="empty-state" style="border:none;box-shadow:none">
         <div class="empty-icon"><el-icon :size="32"><Document /></el-icon></div>
         <div class="empty-title">暂无记录</div>
         <div class="empty-desc">该实体类型下还没有记录，点击「新建记录」开始录入第一条数据。</div>
@@ -51,134 +62,38 @@
           </el-button>
         </div>
       </div>
-      <el-table
-        v-else
-        :data="data.items || []"
-        v-loading="loading"
-        stripe
-        class="data-table"
-        @row-click="openDetail"
-        :row-style="{ cursor:'pointer' }"
-      >
-        <el-table-column label="标题" min-width="200">
-          <template #default="{ row }">
-            <span class="row-title">
-              {{ row.data.name || row.data.title || row.data.code || `#${row.id}` }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          v-for="f in displayFields"
-          :key="f.key"
-          :label="f.name"
-          :min-width="130"
-        >
-          <template #default="{ row }">
-            <component
-              :is="renderCell(f, row.data[f.key])"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="更新时间" width="160">
-          <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" link type="primary" @click.stop="openEdit(row)">
-              <el-icon><Edit /></el-icon>编辑
-            </el-button>
-            <el-button size="small" link @click.stop="goRecordGraph(row.id)">
-              <el-icon><Share /></el-icon>图谱
-            </el-button>
-            <el-button size="small" link type="danger" @click.stop="del(row)">
-              <el-icon><Delete /></el-icon>删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <el-pagination
+      <RecordPagination
         v-if="data.items?.length"
-        v-model:current-page="page"
-        v-model:page-size="pageSize"
+        :page="page"
+        :page-size="pageSize"
         :total="data.total || 0"
-        layout="total, prev, pager, next, jumper"
-        @current-change="load()"
-        @size-change="load(1)"
-        style="padding:16px 20px;justify-content:flex-end"
+        style="padding:16px 20px"
+        @update:page="load"
+        @update:page-size="onSizeChange"
       />
     </div>
 
-    <!-- 编辑/创建抽屉 -->
-    <el-drawer
+    <!-- 编辑/创建抽屉：表单按模型字段定义自动生成 -->
+    <RecordFormDrawer
       v-model="drawerOpen"
-      :title="editingRecord ? '编辑记录' : '新建记录'"
-      size="640px"
-      direction="rtl"
-      destroy-on-close
-    >
-      <div v-if="entityType">
-        <DynamicForm
-          :entity-type="entityType"
-          :all-types="allTypes"
-          v-model="formData"
-          :record-id="editingRecord?.id || null"
-          ref="formRef"
-        />
-      </div>
-      <template #footer>
-        <div style="padding:0 16px">
-          <el-button @click="drawerOpen = false">取消</el-button>
-          <el-button type="primary" @click="save">保存</el-button>
-        </div>
-      </template>
-    </el-drawer>
+      :entity-type="entityType"
+      :record="editingRecord"
+      :all-types="allTypes"
+      @saved="onSaved"
+    />
 
-    <!-- 详情侧栏（含关系） -->
-    <el-drawer
+    <!-- 详情侧栏：字段区与元信息用公共抽屉，关系/知识往 extra 插槽里塞 -->
+    <RecordDetailDrawer
       v-model="detailOpen"
-      :title="detailRecord ? `详情 · ${displayName(detailRecord)}` : '详情'"
+      :record="detailRecord"
+      :entity-type="entityType"
+      :labels="refLabels"
       size="640px"
-      direction="rtl"
-      destroy-on-close
+      @edit="openEdit"
+      @open-reference="goTargetRecord"
     >
-      <div v-if="detailRecord && entityType">
-        <div class="card" style="margin-bottom:12px">
-          <div class="card-title">
-            <span><el-icon :size="16"><Document /></el-icon> 字段</span>
-          </div>
-          <div class="detail-fields">
-            <div v-for="f in entityType.fields" :key="f.key" class="detail-field">
-              <div class="detail-field-label">{{ f.name }}</div>
-              <div class="detail-field-value">
-                <span v-if="f.type === 'boolean'" :class="detailRecord.data[f.key] ? 'status-yes' : 'status-no'">
-                  <span :class="['status-dot', detailRecord.data[f.key] ? 'success' : '']"></span>
-                  {{ detailRecord.data[f.key] ? '是' : '否' }}
-                </span>
-                <span v-else-if="f.type === 'file' || f.type === 'image'">
-                  <a
-                    v-for="a in detailRecord.data[f.key] || []"
-                    :key="a.id"
-                    :href="previewUrlOf(a)"
-                    target="_blank"
-                    rel="noopener"
-                    class="attachment-link"
-                  >
-                    <el-icon><Paperclip /></el-icon>{{ a.filename }}
-                  </a>
-                  <span v-if="!(detailRecord.data[f.key] || []).length" class="cell-empty">—</span>
-                </span>
-                <span v-else-if="f.type === 'reference'">
-                  <a class="cell-reference" @click="goTargetRecord(detailRecord.data[f.key])">
-                    {{ displayNameById(detailRecord.data[f.key], f) }}
-                  </a>
-                </span>
-                <span v-else-if="!detailRecord.data[f.key]" class="cell-empty">—</span>
-                <span v-else class="cell-text">{{ detailRecord.data[f.key] }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
+      <template #extra>
+        <div v-if="detailRecord && entityType">
         <div class="card" style="margin-bottom:12px">
           <div class="card-title">
             <span class="card-title-text">
@@ -251,17 +166,9 @@
           </div>
         </div>
 
-        <div class="card">
-          <div class="card-title">元信息</div>
-          <el-descriptions :column="1" border size="small">
-            <el-descriptions-item label="ID">#{{ detailRecord.id }}</el-descriptions-item>
-            <el-descriptions-item label="所属模型">{{ entityType.name }}</el-descriptions-item>
-            <el-descriptions-item label="创建时间">{{ formatTime(detailRecord.created_at) }}</el-descriptions-item>
-            <el-descriptions-item label="更新时间">{{ formatTime(detailRecord.updated_at) }}</el-descriptions-item>
-          </el-descriptions>
         </div>
-      </div>
-    </el-drawer>
+      </template>
+    </RecordDetailDrawer>
 
     <!-- 关联笔记弹窗 -->
     <el-dialog
@@ -339,14 +246,18 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, h } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../api'
-import DynamicForm from '../components/DynamicForm.vue'
 import PageTitle from '../components/PageTitle.vue'
 import RelationLinker from '../components/RelationLinker.vue'
-import { formatTime } from '../utils/format'
+import RecordTable from '../components/record/RecordTable.vue'
+import RecordFormDrawer from '../components/record/RecordFormDrawer.vue'
+import RecordDetailDrawer from '../components/record/RecordDetailDrawer.vue'
+import RecordPagination from '../components/record/RecordPagination.vue'
+import { useRecordFields } from '../components/record/useRecordFields'
+import { recordDisplayName } from '../utils/recordFields'
 
 const route = useRoute()
 const router = useRouter()
@@ -362,8 +273,6 @@ const pageSize = ref(20)
 
 const drawerOpen = ref(false)
 const editingRecord = ref(null)
-const formData = ref({})
-const formRef = ref(null)
 
 const detailOpen = ref(false)
 const detailRecord = ref(null)
@@ -381,49 +290,11 @@ const selectedNoteId = ref(null)
 const linking = ref(false)
 const materializing = ref(false)
 
-// 外键显示名缓存：`${typeKey}:${id}` -> label
-const refLabelCache = ref({})
-
-function previewUrlOf(att) {
-  return att?.preview_url || `/api/attachments/${att?.id}/preview`
-}
-
-// 用于列表显示的字段：排除 file/image/textarea/richtext
-const displayFields = computed(() => {
-  if (!entityType.value) return []
-  return entityType.value.fields.filter(f =>
-    !['file', 'image', 'textarea', 'richtext'].includes(f.type)
-  ).slice(0, 6)
+// 外键显示名缓存与「哪些字段显示成列」都走公共逻辑：
+// 应用页与记录页共用同一套，否则两个入口的列和外键显示会对不上
+const { displayFields, refLabels, loadRefLabels } = useRecordFields(entityType, {
+  allTypesRef: allTypes,
 })
-
-function renderCell(f, val) {
-  if (val === null || val === undefined || val === '') {
-    return h('span', { class: 'cell-empty' }, '—')
-  }
-  if (f.type === 'select') {
-    return h(ElTag, { size: 'small', type: 'primary', effect: 'light' }, () => String(val))
-  }
-  if (f.type === 'boolean') {
-    return val
-      ? h('span', { class: 'status-yes' }, [h('span', { class: 'status-dot success' }), ' 是'])
-      : h('span', { class: 'status-no' }, [h('span', { class: 'status-dot' }), ' 否'])
-  }
-  if (f.type === 'reference') {
-    const label = refLabelCache.value[`${f.options?.target}:${val}`] || `#${val}`
-    return h('span', { class: 'cell-reference' }, label)
-  }
-  if (f.type === 'number') {
-    return h('span', { class: 'cell-number' }, String(val))
-  }
-  if (['date', 'datetime'].includes(f.type)) {
-    return h('span', { class: 'cell-time' }, formatTime(val))
-  }
-  return h('span', { class: 'cell-text' }, String(val).slice(0, 60))
-}
-
-function displayName(r) {
-  return r.data?.name || r.data?.title || r.data?.code || `#${r.id}`
-}
 
 async function load(p) {
   if (p) page.value = p
@@ -454,33 +325,28 @@ async function loadRelations() {
 
 function openCreate() {
   editingRecord.value = null
-  formData.value = {}
   drawerOpen.value = true
 }
 
 function openEdit(row) {
   editingRecord.value = row
-  formData.value = { ...(row.data || {}) }
   drawerOpen.value = true
 }
 
-async function save() {
-  try {
-    if (editingRecord.value) {
-      await Api.updateRecord(editingRecord.value.id, formData.value)
-    } else {
-      await Api.createRecord(typeId.value, formData.value)
-    }
-    ElMessage.success('保存成功')
-    drawerOpen.value = false
-    load()
-  } catch (e) {}
+/** 表单抽屉保存成功后刷新列表 */
+function onSaved() {
+  load()
+}
+
+function onSizeChange(size) {
+  pageSize.value = size
+  load(1)
 }
 
 async function del(row) {
   try {
     await ElMessageBox.confirm(
-      `确定删除 "${displayName(row)}"？删除后进入回收站，可恢复。`,
+      `确定删除 "${recordDisplayName(row)}"？删除后进入回收站，可恢复。`,
       '确认', { type: 'warning' })
     await Api.deleteRecord(row.id)
     ElMessage.success('已移入回收站')
@@ -623,26 +489,8 @@ async function materialize() {
 }
 
 // ============ 外键显示名 ============
-
-async function loadRefLabels() {
-  if (!entityType.value) return
-  const refFields = entityType.value.fields.filter(f => f.type === 'reference')
-  for (const f of refFields) {
-    const tkey = f.options?.target
-    if (!tkey) continue
-    const et = allTypes.value.find(t => t.key === tkey)
-    if (!et) continue
-    try {
-      const r = await Api.listRecords(et.id, { page_size: 200 })
-      const next = { ...refLabelCache.value }
-      for (const rec of (r.items || [])) {
-        next[`${tkey}:${rec.id}`] = rec.data?.name || rec.data?.title
-          || rec.data?.code || `#${rec.id}`
-      }
-      refLabelCache.value = next
-    } catch (e) { /* 忽略 */ }
-  }
-}
+// 外键显示名的加载已经收进 useRecordFields（应用页与记录页共用），
+// 这里不再单独维护一份缓存，避免两边显示的名字对不上。
 
 async function delRelation(rid) {
   try {
@@ -678,16 +526,6 @@ function goTargetRecord(id) {
       router.push(`/records/${r.entity_type_id}?id=${r.id}`)
     }
   })
-}
-
-function displayNameById(id, field) {
-  if (!id) return '—'
-  const tkey = field?.options?.target
-  if (tkey) {
-    const cached = refLabelCache.value[`${tkey}:${id}`]
-    if (cached) return cached
-  }
-  return `#${id}`
 }
 
 function goRecordGraph(id) {

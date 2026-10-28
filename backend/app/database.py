@@ -249,6 +249,10 @@ async def init_db():
     except Exception as e:
         log.error("dashboard 设置列迁移失败，大屏设置可能不可用：%s", e)
 
+    # 注：知识库分组（note_group）**不需要迁移** —— 它是一张新表，
+    # create_all 会把缺的表建出来。分组归属存在记录 data JSON 里，
+    # 没有给任何既有表加列，所以这里没有 ALTER TABLE 的活。
+
     async with SessionLocal() as session:
         from .services.bootstrap import run_bootstrap
         await run_bootstrap(session)

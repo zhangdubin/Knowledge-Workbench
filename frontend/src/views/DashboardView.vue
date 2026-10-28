@@ -51,16 +51,18 @@
       />
     </div>
 
-    <div v-if="!loading && !layout.length && !edit" class="empty-state">
-      <div class="empty-icon"><el-icon :size="32"><DataLine /></el-icon></div>
-      <div class="empty-title">这个驾驶舱还是空的</div>
-      <div class="empty-desc">
-        {{ canWrite ? '点「编辑布局」进入自由画布，双击空白处就能新建第一张卡片' : '管理员还没有配置卡片' }}
-      </div>
-      <el-button v-if="canWrite" type="primary" style="margin-top:16px" @click="enterEdit">
-        <el-icon><EditPen /></el-icon>开始编辑
-      </el-button>
-    </div>
+    <EmptyState
+      v-if="!loading && !layout.length && !edit"
+      icon="DataLine"
+      title="这个驾驶舱还是空的"
+      :description="canWrite ? '点「编辑布局」进入自由画布，双击空白处就能新建第一张卡片' : '管理员还没有配置卡片'"
+    >
+      <template #default>
+        <el-button v-if="canWrite" type="primary" @click="enterEdit">
+          <el-icon><EditPen /></el-icon>开始编辑
+        </el-button>
+      </template>
+    </EmptyState>
 
     <!-- ============ 卡片配置 ============ -->
     <el-drawer v-model="editorOpen" :size="drawerSize" :with-header="false"
@@ -320,6 +322,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../api'
 import { useAuthStore } from '../stores/auth'
 import PageTitle from '../components/PageTitle.vue'
+import EmptyState from '../components/EmptyState.vue'
 import CockpitWidget from '../components/CockpitWidget.vue'
 import CockpitCanvas from '../components/CockpitCanvas.vue'
 import CockpitFullscreen from '../components/CockpitFullscreen.vue'

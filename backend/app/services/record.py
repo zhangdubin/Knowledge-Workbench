@@ -5,8 +5,36 @@ from typing import Any
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import EntityType, FieldDefinition, EntityRecord
+from ..models import EntityType, FieldDefinition, EntityRecord, NoteGroup
 from . import access
+
+
+# 记录里的分组号：data.group_id
+# 用 SQLAlchemy 的 JSON 索引（底层是 SQLite 的 json_extract）：
+# 分组筛选在库里做，不把上千条记录捞进内存再筛。
+_REC_GROUP_ID = EntityRecord.data["group_id"].as_integer()
+
+
+async def ensure_group_exists(db: AsyncSession, data: dict) -> None:
+    """记录里的 group_id 必须指向真实存在的分组
+
+    校验放在服务层而不是路由层：写记录的入口不止一个
+    （记录接口、AI 代执行、CSV 导入），从服务层统一把关，
+    才不会出现「换个入口就能写进一个不存在的分组」。
+
+    0 与缺省都表示「未分组」，不校验。
+    """
+    gid = (data or {}).get("group_id")
+    if gid is None or gid == "":
+        return
+    try:
+        gid = int(gid)
+    except (TypeError, ValueError):
+        raise ValueError("分组编号不合法") from None
+    if gid <= 0:
+        return
+    if not await db.get(NoteGroup, gid):
+        raise ValueError(f"分组 {gid} 不存在")
 
 
 def build_search_text(fields: list[FieldDefinition], data: dict[str, Any]) -> str:
@@ -28,6 +56,13 @@ async def create_record(
     et = await db.get(EntityType, type_id)
     if not et or et.deleted_at:
         return None
+    data = dict(data or {})
+    # 分组号要先验存在：指向已删分组的 id 不该被写进记录里，
+    # 否则它会变成一个谁也选不到、也删不掉的幽灵归属。
+    await ensure_group_exists(db, data)
+    if "group_id" in data and data["group_id"] is None:
+        # 显式 null = 未分组：整个键删掉（留 null 会被前端当成「没有分组信息」）
+        data.pop("group_id", None)
     # 取字段定义用于构造 search_text
     f_q = select(FieldDefinition).where(FieldDefinition.entity_type_id == type_id)
     fields = (await db.execute(f_q)).scalars().all()
@@ -49,11 +84,24 @@ async def update_record(
     rec = await db.get(EntityRecord, record_id)
     if not rec or rec.deleted_at:
         return None
-    rec.data = data
+    new_data = dict(data or {})
+    if "group_id" in new_data:
+        if new_data["group_id"] is None:
+            # 显式 null = 移出分组：整个键删掉，别留个 null
+            new_data.pop("group_id", None)
+        else:
+            await ensure_group_exists(db, new_data)
+    else:
+        # 没传 group_id = 不变：记录的数据是整份替换的，
+        # 不把原来的分组带过去的话，别的字段一改分组就掉了。
+        old_gid = (rec.data or {}).get("group_id")
+        if old_gid is not None:
+            new_data["group_id"] = old_gid
+    rec.data = new_data
     # 重建 search_text
     f_q = select(FieldDefinition).where(FieldDefinition.entity_type_id == rec.entity_type_id)
     fields = (await db.execute(f_q)).scalars().all()
-    rec.search_text = build_search_text(fields, data)
+    rec.search_text = build_search_text(fields, new_data)
     await db.commit()
     await db.refresh(rec)
     return rec
@@ -308,8 +356,9 @@ async def list_records(
     page_size: int = 50,
     keyword: str | None = None,
     filters: dict | None = None,
+    group_id: int | None = None,
 ) -> dict:
-    """分页查询记录，支持 keyword + 字段过滤"""
+    """分页查询记录，支持 keyword + 字段过滤 + 分组过滤"""
     q = select(EntityRecord).where(
         EntityRecord.entity_type_id == type_id,
         EntityRecord.deleted_at.is_(None),
@@ -319,14 +368,71 @@ async def list_records(
         like = f"%{keyword}%"
         q = q.where(EntityRecord.search_text.like(like))
 
-    # 过滤
+    if group_id is not None:
+        # group_id 存在 data JSON 里（知识库的分组就是靠它归属的）
+        if group_id:
+            q = q.where(_REC_GROUP_ID == group_id)
+        else:
+            # 0 = 未分组：键不存在（取值 NULL）与值为 0 都算未分组。
+            # 只判 NULL 的话，前端新建的「未分组」笔记（存的是 0）就漏了。
+            q = q.where(or_(_REC_GROUP_ID.is_(None), _REC_GROUP_ID == 0))
+
+    # 字段过滤
     if filters:
-        # SQLite 的 JSON 过滤：data 是 JSON 字符串，可用 json_extract 或 LIKE
-        # 为兼容 SQLite，简化用 LIKE 匹配
+        # 按**字段类型**生成条件，而不是一律 LIKE 匹配 JSON 文本。
+        #
+        # 为什么不一律 LIKE：
+        #   记录里的 data 是 JSON 字符串，LIKE 只能匹配文本形态的值。
+        #   数字 13800138000 存的是 `"phone": 13800138000`（不带引号），
+        #   布尔 true 存的是 `"active": true`（不是 "true"），
+        #   多选存的是 `"tags": ["a","b"]`（不是 "a"）。
+        #   一律按 `"k": "v"` 去 LIKE，这三种全都匹配不上 ——
+        #   筛选面板看着能选，选完一条都不剩，用户只会觉得「筛选坏了」。
+        #
+        # 所以这里查一次字段定义，拿到每个筛选字段的类型，
+        # 再按类型选比较方式（数字比数字、布尔比 1/0、文本比文本）。
+        f_q = select(FieldDefinition).where(FieldDefinition.entity_type_id == type_id)
+        defs = {d.key: d for d in (await db.execute(f_q)).scalars().all()}
         for k, v in filters.items():
-            if v is None or v == "":
+            vals = v if isinstance(v, (list, tuple)) else [v]
+            vals = [x for x in vals if x is not None and x != ""]
+            if not vals:
                 continue
-            q = q.where(EntityRecord.data.like(f'%"{k}": "{v}"%'))
+            ftype = defs[k].type if k in defs else "text"
+            if ftype == "number":
+                nums = []
+                for x in vals:
+                    try:
+                        nums.append(int(x))
+                    except (TypeError, ValueError):
+                        pass
+                if not nums:
+                    continue
+                q = q.where(EntityRecord.data[k].as_integer().in_(nums))
+            elif ftype == "boolean":
+                # SQLite 的 json_extract 把 true/false 取成 1/0
+                ints = [1 if x in (True, 1, "1", "true", "True") else 0 for x in vals]
+                q = q.where(EntityRecord.data[k].as_integer().in_(ints))
+            elif ftype == "multiselect":
+                # 多选的值在 JSON 里是数组，json_extract 取出的是整个数组文本。
+                # 要判「数组里含某一项」，只能退回 LIKE。
+                #
+                # 但有个坑：data 存的是 **ensure_ascii 的 JSON** ——
+                # 中文被转义成 \uXXXX，LIKE 拿中文原文去匹配是匹配不上的
+                # （「示例」在库里长成 "\u793a\u4f8b"）。
+                # 所以两种形态都试一遍：转义形态 + 原文形态。
+                cond = None
+                for x in vals:
+                    raw = str(x)
+                    esc = json.dumps(raw, ensure_ascii=True)[1:-1]
+                    c = or_(EntityRecord.data.like(f'%"{raw}"%'),
+                            EntityRecord.data.like(f'%"{esc}"%'))
+                    cond = c if cond is None else (cond & c)
+                if cond is not None:
+                    q = q.where(cond)
+            else:
+                # 文本 / 下拉 / 日期 / 外键：值都是字符串形态
+                q = q.where(EntityRecord.data[k].as_string().in_([str(x) for x in vals]))
 
     total_q = select(func.count()).select_from(q.subquery())
     total = (await db.execute(total_q)).scalar() or 0

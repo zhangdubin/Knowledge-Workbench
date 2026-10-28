@@ -1,10 +1,12 @@
 <template>
   <!--
-    应用详情抽屉：以前是一个独立页面，点进去就要离开列表、回退又要点一次。
-    改成抽屉后，浏览列表与查看详情可以同时进行 —— 这也是 Airtable / 飞书多维表格的常见做法。
+    应用快速预览抽屉
+    ---------------------------------------------------------------------------
+    点应用本体现在进「应用独立页」（AppWorkspace.vue），那里能基于数据模型
+    直接增删改查记录；这个抽屉留下来做「不离开列表先瞄一眼」的场合：
+    看模型数、记录数、关联与最近记录，两秒就能关掉。
 
-    兼容说明：旧地址 /apps/:appKey 仍然可用 —— 以路由方式打开时组件会自动
-    跳回 /apps?app=xxx，由应用中心打开同一个抽屉，不会留下半截页面。
+    它是纯组件，不带路由副作用 —— 谁想用就 v-model 打开。
   -->
   <el-drawer
     :model-value="modelValue"
@@ -49,11 +51,10 @@
 
       <!-- 主操作 -->
       <div class="ad-actions">
-        <el-button
-          type="primary"
-          :disabled="!canManage"
-          @click="newModel"
-        >
+        <el-button type="primary" @click="openWorkspace">
+          <el-icon><Grid /></el-icon>打开应用
+        </el-button>
+        <el-button :disabled="!canManage" @click="newModel">
           <el-icon><Plus /></el-icon>新建模型
         </el-button>
         <el-button :disabled="!canManage || !models.length" @click="addRecord">
@@ -169,9 +170,9 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import {
-  Clock, Close, Connection, Edit, EditPen, Files, Plus, Setting,
+  Clock, Close, Connection, Edit, EditPen, Files, Grid, Plus, Setting,
 } from '@element-plus/icons-vue'
 import { Api } from '../api'
 import { formatTime } from '../utils/format'
@@ -189,7 +190,6 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'edit', 'remove'])
 
-const route = useRoute()
 const router = useRouter()
 
 const localModels = ref([])
@@ -205,13 +205,12 @@ const description = computed(() => appDescription(props.app))
 const totalRecords = computed(() => models.value.reduce((s, m) => s + (m.record_count || 0), 0))
 const totalFields = computed(() => models.value.reduce((s, m) => s + (m.field_count || 0), 0))
 
-// 独立路由打开时（老地址 /apps/xxx）：跳回应用中心并由它打开同一个抽屉
-watch(() => props.modelValue, (v) => {
-  if (v === undefined) {
-    const key = route.params.appKey
-    router.replace({ path: '/apps', query: key ? { app: key } : {} })
-  }
-}, { immediate: true })
+// 抽屉内的「打开应用」跳到应用独立页：那里才是管理记录的地方
+function openWorkspace() {
+  if (!props.app) return
+  router.push(`/apps/${props.app.key}`)
+  close()
+}
 
 async function onOpen() {
   relations.value = []

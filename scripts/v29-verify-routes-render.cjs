@@ -82,6 +82,22 @@ const check = (cond, msg) => {
     await sleep(2500)
   }
 
+  // 登录必须真的成功。
+  //
+  // 为什么要加这一段：脚本原本登录完就直接往下跑，
+  // 账号口令一旦失效（改过密码、库被重建、账号被删），
+  // 登录会失败并被弹回 #/login —— 而后面每一页「打开」的都是登录页，
+  // 于是所有检查都落在同一张页面上，「7/7 无问题」是**假绿**。
+  // 踩过一次才发现，所以这里必须硬失败：测不到东西就别报通过。
+  const loggedIn = await page.evaluate(() => !String(location.hash).includes('/login'))
+  if (!loggedIn) {
+    console.log('✘ 登录失败（还停在登录页）—— 下面的检查全都会落在登录页上，结果没有意义')
+    console.log(`   账号: ${USER}`)
+    console.log('   用 KB_USER / KB_PASS 覆盖，或先跑 scripts/reset-admin-password.sh 重置口令')
+    await browser.close()
+    process.exit(1)
+  }
+
   let failed = 0
   const problems = []
 

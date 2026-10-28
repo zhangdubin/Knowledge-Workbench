@@ -24,9 +24,15 @@
       <div
         class="dropzone"
         :class="{ active: dragging }"
+        role="button"
+        tabindex="0"
+        aria-label="拖拽文件到此处上传，或按回车选择本地文件"
         @dragover.prevent="dragging = true"
         @dragleave.prevent="dragging = false"
         @drop.prevent="onDrop"
+        @click="onDropzoneClick"
+        @keydown.enter.prevent="fileInput?.click()"
+        @keydown.space.prevent="fileInput?.click()"
       >
         <div class="dz-icon-wrap">
           <el-icon><UploadFilled /></el-icon>
@@ -166,8 +172,7 @@
           <el-table
             :data="pagedFiles"
             v-loading="loading"
-            class="data-table"
-            stripe
+            class="data-table table-striped table-density-default"
             @row-click="previewFile"
             :row-style="{ cursor: 'pointer' }"
           >
@@ -197,8 +202,12 @@
                     :key="'lk' + l.link_id"
                     class="cell-reference"
                     style="cursor:pointer;margin-right:6px"
+                    role="button"
+                    tabindex="0"
                     :title="l.field_key ? '字段上传：' + l.field_key : '附件'"
                     @click.stop="goRecord(l.record_id)"
+                    @keydown.enter.stop.prevent="goRecord(l.record_id)"
+                    @keydown.space.stop.prevent="goRecord(l.record_id)"
                   >
                     {{ l.entity_type_icon || '' }}{{ l.record_label || '#' + l.record_id }}
                   </a>
@@ -207,8 +216,12 @@
                     :key="'rl' + r.link_id"
                     class="cell-reference"
                     style="cursor:pointer;margin-right:6px"
+                    role="button"
+                    tabindex="0"
                     :title="r.relation || ''"
                     @click.stop="goRelTarget(r)"
+                    @keydown.enter.stop.prevent="goRelTarget(r)"
+                    @keydown.space.stop.prevent="goRelTarget(r)"
                   >
                     {{ r.other_icon || '' }}{{ r.other_label || '#' + r.other_id }}
                   </a>
@@ -224,22 +237,26 @@
             <el-table-column label="操作" width="200" fixed="right">
               <template #default="{ row }">
                 <el-tooltip content="预览" placement="top" :show-after="400">
-                  <el-button size="small" link type="primary" @click.stop="previewFile(row)">
+                  <el-button size="small" link type="primary" :aria-label="`预览 ${row.filename}`"
+                             @click.stop="previewFile(row)">
                     <el-icon><View /></el-icon>
                   </el-button>
                 </el-tooltip>
                 <el-tooltip content="JSON 元数据" placement="top" :show-after="400">
-                  <el-button size="small" link @click.stop="showMeta(row)">
+                  <el-button size="small" link :aria-label="`查看 ${row.filename} 的 JSON 元数据`"
+                             @click.stop="showMeta(row)">
                     <el-icon><Share /></el-icon>
                   </el-button>
                 </el-tooltip>
                 <el-tooltip content="复制链接" placement="top" :show-after="400">
-                  <el-button size="small" link @click.stop="copyLink(row)">
+                  <el-button size="small" link :aria-label="`复制 ${row.filename} 的链接`"
+                             @click.stop="copyLink(row)">
                     <el-icon><Link /></el-icon>
                   </el-button>
                 </el-tooltip>
                 <el-tooltip content="删除" placement="top" :show-after="400">
-                  <el-button size="small" link type="danger" @click.stop="delFile(row)">
+                  <el-button size="small" link type="danger" :aria-label="`删除 ${row.filename}`"
+                             @click.stop="delFile(row)">
                     <el-icon><Delete /></el-icon>
                   </el-button>
                 </el-tooltip>
@@ -247,19 +264,20 @@
             </el-table-column>
           </el-table>
 
-          <div v-if="!loading && !filteredFiles.length" class="empty-state" style="border:none;background:transparent;padding:48px 24px">
-            <div class="empty-icon"><el-icon><FolderOpened /></el-icon></div>
-            <div class="empty-title">{{ files.length ? '没有匹配的文件' : '附件库还是空的' }}</div>
-            <div class="empty-desc">
-              {{ files.length ? '换个关键词或类型再试试' : '上传任意类型的文件，系统会自动生成 JSON 结构化元数据' }}
-            </div>
-            <div class="empty-actions">
+          <EmptyState
+            v-if="!loading && !filteredFiles.length"
+            icon="FolderOpened"
+            :title="files.length ? '没有匹配的文件' : '附件库还是空的'"
+            :description="files.length ? '换个关键词或类型再试试' : '上传任意类型的文件，系统会自动生成 JSON 结构化元数据'"
+            variant="plain"
+          >
+            <template #default>
               <el-button v-if="!files.length" type="primary" @click="fileInput?.click()">
                 <el-icon><UploadFilled /></el-icon>上传第一个文件
               </el-button>
               <el-button v-else @click="fileKeyword = ''; typeFilter = ''">清空筛选</el-button>
-            </div>
-          </div>
+            </template>
+          </EmptyState>
 
           <el-pagination
             v-if="filteredFiles.length > pageSize"
@@ -278,7 +296,12 @@
             v-for="f in pagedFiles"
             :key="f.id"
             class="file-tile"
+            role="button"
+            tabindex="0"
+            :aria-label="`预览 ${f.filename}`"
             @click="previewFile(f)"
+            @keydown.enter.prevent="previewFile(f)"
+            @keydown.space.prevent="previewFile(f)"
           >
             <div class="ft-thumb" :style="{ background: typeBg(f.mime) }">
               <img v-if="(f.mime || '').startsWith('image/')" :src="f.url" :alt="f.filename" loading="lazy" />
@@ -295,16 +318,22 @@
               </div>
             </div>
             <div class="ft-actions">
-              <el-button size="small" link @click.stop="showMeta(f)"><el-icon><Share /></el-icon></el-button>
-              <el-button size="small" link @click.stop="copyLink(f)"><el-icon><Link /></el-icon></el-button>
-              <el-button size="small" link type="danger" @click.stop="delFile(f)"><el-icon><Delete /></el-icon></el-button>
+              <el-button size="small" link :aria-label="`查看 ${f.filename} 的 JSON 元数据`"
+                         @click.stop="showMeta(f)"><el-icon><Share /></el-icon></el-button>
+              <el-button size="small" link :aria-label="`复制 ${f.filename} 的链接`"
+                         @click.stop="copyLink(f)"><el-icon><Link /></el-icon></el-button>
+              <el-button size="small" link type="danger" :aria-label="`删除 ${f.filename}`"
+                         @click.stop="delFile(f)"><el-icon><Delete /></el-icon></el-button>
             </div>
           </div>
-          <div v-if="!loading && !filteredFiles.length" class="empty-state" style="grid-column:1/-1">
-            <div class="empty-icon"><el-icon><FolderOpened /></el-icon></div>
-            <div class="empty-title">{{ files.length ? '没有匹配的文件' : '附件库还是空的' }}</div>
-            <div class="empty-desc">{{ files.length ? '换个关键词或类型再试试' : '上传任意类型的文件，系统会自动生成 JSON 元数据' }}</div>
-          </div>
+          <EmptyState
+            v-if="!loading && !filteredFiles.length"
+            icon="FolderOpened"
+            :title="files.length ? '没有匹配的文件' : '附件库还是空的'"
+            :description="files.length ? '换个关键词或类型再试试' : '上传任意类型的文件，系统会自动生成 JSON 元数据'"
+            variant="plain"
+            class="grid-span-all"
+          />
         </div>
 
         <el-pagination
@@ -337,7 +366,11 @@
             class="json-item"
             :class="{ open: expandedJson.has(f.id) }"
           >
-            <div class="json-head" @click="toggleJson(f)">
+            <div class="json-head" role="button" tabindex="0" :aria-expanded="expandedJson.has(f.id)"
+                 :aria-label="`展开 ${f.filename} 的 JSON 元数据`"
+                 @click="toggleJson(f)"
+                 @keydown.enter.prevent="toggleJson(f)"
+                 @keydown.space.prevent="toggleJson(f)">
               <span class="file-icon sm" :style="{ background: typeBg(f.mime), color: typeColor(f.mime) }">
                 <el-icon><component :is="typeIconOf(f)" /></el-icon>
               </span>
@@ -365,19 +398,21 @@
           </div>
         </div>
 
-        <div v-else class="empty-state">
-          <div class="empty-icon"><el-icon><MagicStick /></el-icon></div>
-          <div class="empty-title">还没有元数据</div>
-          <div class="empty-desc">上传文件后，系统会自动生成结构化 JSON 元数据（文件名、大小、抽取状态、关联记录…）</div>
-          <div class="empty-actions">
+        <EmptyState
+          v-else
+          icon="MagicStick"
+          title="还没有元数据"
+          description="上传文件后，系统会自动生成结构化 JSON 元数据（文件名、大小、抽取状态、关联记录…）"
+        >
+          <template #default>
             <el-button type="primary" @click="fileInput?.click()">
               <el-icon><UploadFilled /></el-icon>上传文件
             </el-button>
             <el-button @click="showJsonPlayground = true">
               <el-icon><MagicStick /></el-icon>打开试验场
             </el-button>
-          </div>
-        </div>
+          </template>
+        </EmptyState>
       </el-tab-pane>
 
       <!-- ============ 最近活动 ============ -->
@@ -402,17 +437,22 @@
                 <el-tag size="small" effect="plain">
                   {{ r.entity_type_icon }} {{ r.entity_type_name }}
                 </el-tag>
-                <a class="recent-link" @click="$router.push(`/records/${r.entity_type_id}?id=${r.record_id}`)">
+                <a class="recent-link" role="button" tabindex="0"
+                   @click="$router.push(`/records/${r.entity_type_id}?id=${r.record_id}`)"
+                   @keydown.enter.prevent="$router.push(`/records/${r.entity_type_id}?id=${r.record_id}`)"
+                   @keydown.space.prevent="$router.push(`/records/${r.entity_type_id}?id=${r.record_id}`)">
                   {{ r.data?.name || r.data?.title || r.data?.code || `#${r.record_id}` }}
                 </a>
               </div>
             </el-timeline-item>
           </el-timeline>
-          <div v-else class="empty-state" style="border:none;background:transparent">
-            <div class="empty-icon"><el-icon><Clock /></el-icon></div>
-            <div class="empty-title">暂无活动记录</div>
-            <div class="empty-desc">创建或编辑数据记录后，这里会显示最近的时间线</div>
-          </div>
+          <EmptyState
+            v-else
+            icon="Clock"
+            title="暂无活动记录"
+            description="创建或编辑数据记录后，这里会显示最近的时间线"
+            variant="plain"
+          />
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -786,7 +826,7 @@
       </div>
 
       <div v-loading="trashLoading" style="min-height:120px">
-        <el-table v-if="trashItems.length" :data="trashItems" stripe>
+        <el-table v-if="trashItems.length" :data="trashItems" class="table-striped table-density-default">
           <el-table-column label="文件" min-width="240">
             <template #default="{ row }">
               <div class="file-info">
@@ -832,6 +872,7 @@ import { Api, fileUrls, previewModeOf } from '../api'
 import { formatTime, formatSize } from '../utils/format'
 import JsonViewer from '../components/JsonViewer.vue'
 import PageTitle from '../components/PageTitle.vue'
+import EmptyState from '../components/EmptyState.vue'
 import AIAssistantDialog from '../components/AIAssistantDialog.vue'
 import RelationLinker from '../components/RelationLinker.vue'
 import MarkdownText from '../components/MarkdownText.vue'
@@ -1369,6 +1410,19 @@ async function onDrop(e) {
   await uploadFiles(e.dataTransfer.files)
 }
 
+/**
+ * 拖拽区整块可点。
+ *
+ * 之前的样式里 .dropzone 的光标就是手型（cursor: pointer），但整块并没有点击处理，
+ * 用户点上去没有任何反应 —— 光标在骗人。拖拽上传是鼠标用户的场景，
+ * 而点一下就弹出文件选择框是所有人都能用的路径。
+ */
+function onDropzoneClick(e) {
+  // 内层「浏览本地文件」按钮自己会触发，这里别重复触发，否则会弹出两个文件框
+  if (e.target.closest('.link-btn')) return
+  fileInput.value?.click()
+}
+
 async function uploadFiles(fileList) {
   const list = Array.from(fileList || [])
   if (!list.length) return
@@ -1558,6 +1612,8 @@ onMounted(async () => {
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: var(--space-3);
 }
+/* 空状态在网格里要占满整行，不然会被塞进第一格 */
+.grid-span-all { grid-column: 1 / -1; }
 .file-tile {
   background: var(--bg-card);
   border: 1px solid var(--border-light);

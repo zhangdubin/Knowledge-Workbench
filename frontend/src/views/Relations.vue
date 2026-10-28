@@ -23,24 +23,24 @@
     </div>
 
     <div class="card" style="padding:0;overflow:hidden">
-      <div v-if="!defs.length && !loading" class="empty-state" style="border:none;box-shadow:none">
-        <div class="empty-icon"><el-icon :size="32"><Connection /></el-icon></div>
-        <div class="empty-title">还没有关联定义</div>
-        <div class="empty-desc">
-          例如「项目 → 任务」，之后就能把具体任务挂到项目下面；<br />
-          也可以定义「合同 → 数据中心文件」，把扫描件挂到合同上。
-        </div>
-        <div class="empty-actions">
+      <EmptyState
+        v-if="!defs.length && !loading"
+        icon="Connection"
+        title="还没有关联定义"
+        description="例如「项目 → 任务」，之后就能把具体任务挂到项目下面；也可以定义「合同 → 数据中心文件」，把扫描件挂到合同上。"
+        variant="plain"
+      >
+        <template #default>
           <el-button v-if="canManage" type="primary" @click="openCreate">
             <el-icon><Plus /></el-icon>新建关联
           </el-button>
           <el-button v-if="!types.length" @click="$router.push('/types/new')">
             <el-icon><Files /></el-icon>先去建数据模型
           </el-button>
-        </div>
-      </div>
+        </template>
+      </EmptyState>
 
-      <el-table v-else :data="defs" v-loading="loading" stripe class="data-table">
+      <el-table v-else :data="defs" v-loading="loading" class="data-table table-striped table-density-default">
         <el-table-column label="关联名称" min-width="170">
           <template #default="{ row }">
             <div class="rel-name-cell">
@@ -101,19 +101,13 @@
     </div>
 
     <!-- 新建 / 编辑关联定义 -->
-    <el-dialog
+    <DialogShell
       v-model="dialogOpen"
       :title="form.id ? '编辑关联定义' : '新建关联定义'"
-      width="640px"
-      class="kb-dialog"
-      :close-on-click-modal="false"
+      description="两端各自选择「是什么」：业务记录要指定模型，数据中心文件覆盖全部已上传文件。"
+      :width="640"
     >
-      <div class="dialog-summary">
-        <el-icon><Connection /></el-icon>
-        <div>
-          两端各自选择「是什么」：业务记录要指定模型，数据中心文件覆盖全部已上传文件。
-        </div>
-      </div>
+      <template #icon><el-icon><Connection /></el-icon></template>
 
       <el-form :model="form" label-width="90px">
         <el-form-item label="关联名称" required>
@@ -174,7 +168,7 @@
           <el-icon><Check /></el-icon>{{ form.id ? '保存' : '创建' }}
         </el-button>
       </template>
-    </el-dialog>
+    </DialogShell>
   </div>
 </template>
 
@@ -184,6 +178,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../api'
 import { useAuthStore } from '../stores/auth'
 import PageTitle from '../components/PageTitle.vue'
+import EmptyState from '../components/EmptyState.vue'
+import DialogShell from '../components/DialogShell.vue'
 
 const auth = useAuthStore()
 

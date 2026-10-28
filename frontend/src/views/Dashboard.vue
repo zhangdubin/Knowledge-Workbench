@@ -41,7 +41,10 @@
           :key="s.title"
           class="onboard-item"
           :class="{ done: s.done }"
+          :role="s.done ? undefined : 'button'"
+          :tabindex="s.done ? undefined : 0"
           @click="!s.done && $router.push(s.to)"
+          @keydown="!s.done && onCardKey($event, s.to)"
         >
           <el-icon class="ob-check">
             <CircleCheckFilled v-if="s.done" />
@@ -142,16 +145,18 @@
           </div>
         </div>
 
-        <div v-else class="empty-state">
-          <div class="empty-icon"><el-icon :size="32"><Grid /></el-icon></div>
-          <div class="empty-title">还没有应用</div>
-          <div class="empty-desc">应用是一组数据模型的容器，创建后即可在应用下管理数据。</div>
-          <div class="empty-actions">
+        <EmptyState
+          v-else
+          icon="Grid"
+          title="还没有应用"
+          description="应用是一组数据模型的容器，创建后即可在应用下管理数据。"
+        >
+          <template #default>
             <el-button type="primary" @click="$router.push('/apps')">
               <el-icon><Plus /></el-icon>前往应用中心
             </el-button>
-          </div>
-        </div>
+          </template>
+        </EmptyState>
       </div>
 
       <!-- 最近活动 -->
@@ -167,7 +172,11 @@
             v-for="r in stats.recent.slice(0, 8)"
             :key="`${r.entity_type_key}-${r.record_id}`"
             class="recent-item"
+            role="button"
+            tabindex="0"
+            :aria-label="`${r.entity_type_name} ${r.data?.name || r.data?.title || r.data?.code || ''}`"
             @click="$router.push(`/records/${r.entity_type_id}?id=${r.record_id}`)"
+            @keydown="onCardKey($event, `/records/${r.entity_type_id}?id=${r.record_id}`)"
           >
             <div class="recent-icon">
               <el-icon :size="16"><component :is="entityIcon(r.entity_type_key)" /></el-icon>
@@ -184,11 +193,13 @@
           </div>
         </div>
 
-        <div v-else class="empty-state" style="border:none;background:transparent;padding:48px 20px">
-          <div class="empty-icon"><el-icon :size="32"><Clock /></el-icon></div>
-          <div class="empty-title">还没有数据</div>
-          <div class="empty-desc">开始你的第一条记录，这里会显示最近的活动</div>
-        </div>
+        <EmptyState
+          v-else
+          icon="Clock"
+          title="还没有数据"
+          description="开始你的第一条记录，这里会显示最近的活动"
+          variant="plain"
+        />
       </div>
     </div>
   </div>
@@ -200,6 +211,7 @@ import { useRouter } from 'vue-router'
 import { Api } from '../api'
 import { formatTime } from '../utils/format'
 import { entityIcon, appIcon } from '../utils/icons'
+import EmptyState from '../components/EmptyState.vue'
 
 const router = useRouter()
 
@@ -228,12 +240,13 @@ const quickLinks = [
   { path: '/library', name: '数据中心', desc: '统一文件管理 · 在线预览', icon: 'Coin', bg: 'var(--warning-bg)', color: 'var(--warning)' },
   { path: '/apps', name: '应用中心', desc: '模板一键建应用', icon: 'Grid', bg: 'var(--success-bg)', color: 'var(--success)' },
   { path: '/types', name: '数据模型', desc: '自定义实体类型与字段', icon: 'Files', bg: 'var(--danger-bg)', color: 'var(--danger)' },
-  { path: '/relations', name: '关联定义', desc: '配置模型之间的关系', icon: 'Connection', bg: 'rgba(122,106,208,.10)', color: '#7a6ad0' },
-  { path: '/knowledge/graph', name: '知识图谱', desc: '所有笔记的可视化网络', icon: 'DataAnalysis', bg: 'rgba(187,90,134,.10)', color: '#bb5a86' },
-  { path: '/graph', name: '关联图谱', desc: '业务实体的关联分析', icon: 'Share', bg: 'rgba(15,155,142,.10)', color: '#0f9b8e' },
-  { path: '/search', name: '全局搜索', desc: '跨实体的全文检索', icon: 'Search', bg: 'rgba(74,127,181,.10)', color: '#4a7fb5' },
+  // 配色全部走设计令牌：写死的十六进制在深色主题下会和整体色调脱节
+  { path: '/relations', name: '关联定义', desc: '配置模型之间的关系', icon: 'Connection', bg: 'var(--primary-bg)', color: 'var(--primary)' },
+  { path: '/knowledge/graph', name: '知识图谱', desc: '所有笔记的可视化网络', icon: 'DataAnalysis', bg: 'var(--info-bg)', color: 'var(--info)' },
+  { path: '/graph', name: '关联图谱', desc: '业务实体的关联分析', icon: 'Share', bg: 'var(--success-bg)', color: 'var(--success)' },
+  { path: '/search', name: '全局搜索', desc: '跨实体的全文检索', icon: 'Search', bg: 'var(--info-bg)', color: 'var(--info)' },
   { path: '/guide', name: '使用指南', desc: '五步跑通一个业务', icon: 'Compass', bg: 'var(--primary-bg)', color: 'var(--primary)' },
-  { path: '/ai-settings', name: 'AI 助手', desc: '配置模型 · 智能摘要问答', icon: 'MagicStick', bg: 'rgba(180,128,30,.11)', color: '#b4801e' },
+  { path: '/ai-settings', name: 'AI 助手', desc: '配置模型 · 智能摘要问答', icon: 'MagicStick', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
 ]
 
 // 上手清单：从真实数据推导完成状态

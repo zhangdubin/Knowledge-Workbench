@@ -15,7 +15,8 @@
 
     <div v-loading="loading" class="dash-grid">
       <div v-for="d in items" :key="d.id" class="dash-card" :class="{ pinned: d.pinned }"
-           @click="open(d)">
+           role="button" tabindex="0" :aria-label="`打开驾驶舱 ${d.name}`"
+           @click="open(d)" @keydown="onCardKey($event, d)">
         <div class="dc-top">
           <span class="dc-icon">{{ d.icon || '📊' }}</span>
           <div class="dc-title-block">
@@ -23,7 +24,9 @@
             <code class="dc-key">{{ d.key }}</code>
           </div>
           <el-tooltip :content="d.pinned ? '取消置顶' : '置顶到列表最前'" placement="top">
-            <button class="dc-pin" :class="{ on: d.pinned }" @click.stop="togglePin(d)">
+            <button class="dc-pin" :class="{ on: d.pinned }"
+                    :aria-label="d.pinned ? `取消置顶 ${d.name}` : `置顶 ${d.name}`"
+                    @click.stop="togglePin(d)">
               <el-icon :size="15"><StarFilled /></el-icon>
             </button>
           </el-tooltip>
@@ -55,22 +58,27 @@
       </button>
     </div>
 
-    <div v-if="!loading && !items.length" class="empty-state">
-      <div class="empty-icon"><el-icon :size="32"><DataLine /></el-icon></div>
-      <div class="empty-title">还没有驾驶舱</div>
-      <div class="empty-desc">从模板创建一个，再按需要增删卡片</div>
-      <el-button type="primary" style="margin-top:16px" @click="openTemplates">
-        <el-icon><MagicStick /></el-icon>从模板创建
-      </el-button>
-    </div>
+    <EmptyState
+      v-if="!loading && !items.length"
+      icon="DataLine"
+      title="还没有驾驶舱"
+      description="从模板创建一个，再按需要增删卡片"
+    >
+      <template #default>
+        <el-button type="primary" @click="openTemplates">
+          <el-icon><MagicStick /></el-icon>从模板创建
+        </el-button>
+      </template>
+    </EmptyState>
 
     <!-- 从模板 -->
-    <el-dialog v-model="tplOpen" title="从模板创建驾驶舱" width="620px"
-               class="rich-dialog" :close-on-click-modal="false">
-      <div class="dialog-summary">
-        <el-icon :size="18"><MagicStick /></el-icon>
-        <span>模板是可直接使用的成品，建好后卡片都能改：换数据源、改图表、调宽度、重排。</span>
-      </div>
+    <DialogShell
+      v-model="tplOpen"
+      title="从模板创建驾驶舱"
+      description="模板是可直接使用的成品，建好后卡片都能改：换数据源、改图表、调宽度、重排。"
+      :width="620"
+    >
+      <template #icon><el-icon><MagicStick /></el-icon></template>
       <div class="tpl-list">
         <label v-for="t in templates" :key="t.key" class="tpl-item"
                :class="{ on: tplForm.key === t.key }">
@@ -96,11 +104,10 @@
           创建并打开
         </el-button>
       </template>
-    </el-dialog>
+    </DialogShell>
 
     <!-- 新建空白 -->
-    <el-dialog v-model="blankOpen" title="新建空白驾驶舱" width="520px"
-               class="rich-dialog" :close-on-click-modal="false">
+    <DialogShell v-model="blankOpen" title="新建空白驾驶舱" :width="520">
       <el-form :model="blankForm" label-width="80px">
         <el-form-item label="标识" required>
           <el-input v-model="blankForm.key" placeholder="英文/下划线，如 ops_board" />
@@ -121,10 +128,10 @@
         <el-button @click="blankOpen = false">取消</el-button>
         <el-button type="primary" :loading="creating" @click="createBlank">创建并打开</el-button>
       </template>
-    </el-dialog>
+    </DialogShell>
 
     <!-- 重命名 / 改说明 -->
-    <el-dialog v-model="metaOpen" title="编辑信息" width="480px" class="rich-dialog">
+    <DialogShell v-model="metaOpen" title="编辑信息" :width="480">
       <el-form :model="metaForm" label-width="80px">
         <el-form-item label="名称">
           <el-input v-model="metaForm.name" />
@@ -140,7 +147,7 @@
         <el-button @click="metaOpen = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="saveMeta">保存</el-button>
       </template>
-    </el-dialog>
+    </DialogShell>
   </div>
 </template>
 
@@ -152,9 +159,19 @@ import { Api } from '../api'
 import { formatTime } from '../utils/format'
 import { useAuthStore } from '../stores/auth'
 import PageTitle from '../components/PageTitle.vue'
+import EmptyState from '../components/EmptyState.vue'
+import DialogShell from '../components/DialogShell.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
+
+/** 卡片整块可点，键盘也要能打开：Enter / 空格都算 */
+function onCardKey(e, d) {
+  if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault()
+    open(d)
+  }
+}
 
 const items = ref([])
 const templates = ref([])

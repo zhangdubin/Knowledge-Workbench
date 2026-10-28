@@ -70,6 +70,21 @@
             >#{{ t }}</button>
             <span v-if="!tags.length" class="nd-muted">（无标签）</span>
           </div>
+          <!-- 所属分组：下拉直接改，改完立刻落库 -->
+          <div v-if="groupsAvailable" class="nd-group-row">
+            <span
+              class="nd-group-dot"
+              :style="{ backgroundColor: groupColor }"
+              aria-hidden="true"
+            ></span>
+            <NoteGroupSelect
+              class="nd-group-select"
+              :model-value="noteGroupId"
+              :groups="groups"
+              aria-label="变更笔记所属分组"
+              @change="changeGroup"
+            />
+          </div>
           <div class="nd-meta-line">
             <span>更新于 {{ relativeOf('updated_at') }}</span>
             <span class="nd-dot">·</span>
@@ -245,6 +260,16 @@
                 <span v-else class="nd-muted">—</span>
               </span>
             </div>
+            <div v-if="groupsAvailable" class="nd-meta-row">
+              <span class="nd-meta-label">分组</span>
+              <span class="nd-meta-value">
+                <NoteGroupBadge
+                  :name="groupName"
+                  :color="groupColor"
+                  :muted="!noteGroupId"
+                />
+              </span>
+            </div>
             <div class="nd-meta-row">
               <span class="nd-meta-label">正链 / 反链</span>
               <span class="nd-meta-value">{{ outgoing.length }} / {{ backlinks.length }}</span>
@@ -312,6 +337,9 @@ import { noteTitle, relativeTime, renderNoteHtml } from '../utils/notes'
 import NoteEditor from '../components/NoteEditor.vue'
 import JsonViewer from '../components/JsonViewer.vue'
 import AIAssistantDialog from '../components/AIAssistantDialog.vue'
+import NoteGroupSelect from '../components/note/NoteGroupSelect.vue'
+import NoteGroupBadge from '../components/note/NoteGroupBadge.vue'
+import { useNoteGroups } from '../components/note/useNoteGroups'
 
 const route = useRoute()
 const router = useRouter()
@@ -341,6 +369,24 @@ const contentLength = computed(() => (record.value?.data?.content || '').length)
 const title = computed(() => noteTitle(record.value, noteId.value))
 const tags = computed(() => record.value?.data?.tags || [])
 
+// 分组（接口没上线时 groupsAvailable=false，分组相关的 UI 全部隐藏）
+const { groups, available: groupsAvailable, load: loadGroups, groupOf } = useNoteGroups()
+const noteGroupId = computed(() => {
+  const raw = Number(record.value?.data?.group_id || 0)
+  if (!raw) return 0
+  // 分组被删了（还留着一个野归属）→ 当未分组处理
+  return groupOf(raw) ? raw : 0
+})
+const groupName = computed(() => {
+  const id = noteGroupId.value
+  if (!id) return '未分组'
+  return groupOf(id)?.name || '未分组'
+})
+const groupColor = computed(() => {
+  const id = noteGroupId.value
+  return id ? (groupOf(id)?.color || '') : ''
+})
+
 const jsonSummary = computed(() => {
   const empty = { textLength: 0, nodeCount: 0, maxDepth: 0, directChildren: 0 }
   if (!record.value) return empty
@@ -369,6 +415,26 @@ async function load() {
     }
   }
   await loadTitleIndex()
+}
+
+/** 换分组：立刻落库（分组和正文是两回事，不必进编辑态） */
+async function changeGroup(id) {
+  const next = Number(id) || null
+  if ((next || 0) === noteGroupId.value) return
+  try {
+    // update 是整份 data 覆盖，所以先把原字段带上（parent / tags 等不能丢）。
+    // group_id: null = 移出分组（未分组）。
+    await Api.updateRecord(noteId.value, {
+      ...(record.value?.data || {}),
+      group_id: next,
+    })
+    ElMessage.success(`已移到「${next ? (groupOf(next)?.name || '未分组') : '未分组'}」`)
+    // 分组计数会变 → 顺手刷新一次（侧栏下次进来也会自己刷）
+    loadGroups(true)
+    await load()
+  } catch (e) {
+    ElMessage.error('变更分组失败：' + (e?.message || e))
+  }
 }
 
 // 关联的业务记录（由业务侧「关联知识 / 沉淀为笔记」反向而来）
@@ -529,6 +595,8 @@ function onKeydown(e) {
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
+  // 分组接口可能还没上线：不可用时安静降级（隐藏分组相关 UI）
+  await loadGroups(true)
   await load()
 })
 
@@ -646,6 +714,22 @@ html.dark .nd-tag { color: var(--primary-light); }
   font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
+
+/* 所属分组：色点 + 下拉 */
+.nd-group-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nd-group-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-disabled);
+}
+.nd-group-select { width: 150px; }
 .nd-dot { color: var(--border-strong); }
 .nd-muted { color: var(--text-tertiary); font-size: var(--text-sm); }
 

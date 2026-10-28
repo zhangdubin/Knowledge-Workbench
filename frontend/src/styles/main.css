@@ -32,6 +32,13 @@
   --danger-text: #ad3630;
   --info-text: #5b6273;
 
+  /* ---- 搜索命中高亮 ----
+     之前高亮是写死的 rgba(245,158,11,.25) + #92400e，只在浅色底下勉强能看；
+     到了深色主题，浅棕底 + 深棕字会糊成一团，等于「搜到了却看不出命中在哪」。
+     改成成对的令牌：底色负责「跳出来」，字色负责「读得清」（AA 4.5:1 以上）。 */
+  --highlight-bg: rgba(192, 124, 23, 0.16);
+  --highlight-color: #6b4204;
+
   /* ============ 中性色 · 冷灰层级 ============ */
   --bg: #f6f7f9;
   --bg-card: #ffffff;
@@ -218,6 +225,9 @@
   --el-color-success-light-8: var(--success-bg);
   --el-color-warning: var(--warning);
   --el-color-warning-light-9: var(--warning-bg);
+  /* Element Plus 的 warning-dark-2 默认是 #b88230，在白底上只有 3.35:1，达不到 AA。
+     它常被当成「浅色警告文字」来用（标签、提示行），所以直接指到 --warning-text。 */
+  --el-color-warning-dark-2: var(--warning-text);
   --el-color-danger: var(--danger);
   --el-color-danger-light-9: var(--danger-bg);
   /* 危险按钮的悬停/按下态：Element Plus 用 light-3/light-5 派生，
@@ -472,6 +482,10 @@ html.dark {
   --danger-text: #f0837a;
   --info-text: #a3abba;
 
+  /* 深色底上反过来：底色压暗、字色提亮，高亮块在深色里同样「跳出来」 */
+  --highlight-bg: rgba(223, 166, 63, 0.22);
+  --highlight-color: #f0c274;
+
   --bg: #0c0d12;
   --bg-card: #15171d;
   --bg-elevated: #1c1f27;
@@ -531,6 +545,9 @@ html.dark {
   --el-color-success-light-9: var(--success-bg);
   --el-color-warning: var(--warning);
   --el-color-warning-light-9: var(--warning-bg);
+  /* Element Plus 的 warning-dark-2 默认是 #b88230，在白底上只有 3.35:1，达不到 AA。
+     它常被当成「浅色警告文字」来用（标签、提示行），所以直接指到 --warning-text。 */
+  --el-color-warning-dark-2: var(--warning-text);
   --el-color-danger: var(--danger);
   --el-color-danger-light-9: var(--danger-bg);
   /* 深色底上危险色要提亮，否则 hover 反而变暗（看着像被禁用） */
@@ -1711,6 +1728,11 @@ html.dark .dialog-summary { background: var(--primary-bg); border-color: var(--b
   border-radius: var(--radius-sm);
   font-size: var(--text-sm);
   font-weight: 500;
+  /* 这类「跳到关联对象」的标签是能点的，触摸目标不能只有 19px 高 ——
+     行高本来就够，撑到 28px 不会把表格撑变形。 */
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
 }
 .status-yes { display: inline-flex; align-items: center; gap: 4px; color: var(--success); font-weight: 500; }
 .status-no { display: inline-flex; align-items: center; gap: 4px; color: var(--text-tertiary); }

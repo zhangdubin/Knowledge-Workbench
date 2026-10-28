@@ -18,7 +18,7 @@
         <h3>数据模型（{{ data.types.length }}）</h3>
         <span class="hint">恢复模型 = 字段、视图、关联定义原样回来；记录不受影响</span>
       </div>
-      <el-table :data="data.types" row-key="id">
+      <el-table :data="data.types" row-key="id" class="table-striped table-density-default">
         <el-table-column label="模型" min-width="200">
           <template #default="{ row }">
             <span class="type-icon">{{ row.icon || '📦' }}</span>
@@ -45,7 +45,7 @@
         <h3>记录（{{ data.records.length }}）</h3>
         <span class="hint">最多显示最近 200 条；恢复记录时若所属模型也在回收站，会一并恢复</span>
       </div>
-      <el-table :data="data.records" row-key="id">
+      <el-table :data="data.records" row-key="id" class="table-striped table-density-default">
         <el-table-column label="所属模型" width="160">
           <template #default="{ row }">
             <span class="type-icon">{{ row.entity_type_icon }}</span>{{ row.entity_type_name }}

@@ -240,6 +240,35 @@ class Document(Base):
     )
 
 
+# ============ 知识库：自定义分组 ============
+class NoteGroup(Base):
+    """笔记分组（知识库左侧的分组栏）
+
+    笔记本体不在这张表里 —— 笔记是「笔记」模型（entity_type key='note'）的
+    entity_record，分组归属存在那条记录的 data JSON 里（data.group_id），
+    和「父笔记」的 data.parent 是同一套路子：字段由模型自己定义，
+    记录里多带一个键，不需要为它单独加一列。
+
+    为什么分组要单独一张表，而不是拿记录的某个字段来分：
+    分组是**实体**，有稳定 id、能改名、能换颜色、能排序、能统计条数，
+    界面上要有确定的契约；而记录里的字段是模型自己定义的，
+    「分组」这种东西对别的模型不一定存在。
+
+    name 上的 unique 只是数据库层的兜底：真正的判重在应用层做
+    （strip + casefold），因为 SQLite 的 UNIQUE 是大小写敏感的，
+    光靠它拦不住「Work」与「work」并存。
+    """
+    __tablename__ = "note_group"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(40), nullable=False, unique=True)
+    color = Column(String(16), default="")      # 颜色值（如 #4f46e5），前端画色块用
+    description = Column(Text, default="")
+    sort_order = Column(Integer, default=0)     # 越小越靠前
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class DocumentLink(Base):
     """文档 ↔ 业务记录 的关联
 

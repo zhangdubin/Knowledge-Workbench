@@ -4,33 +4,33 @@
     <div class="gc-toolbar">
       <div class="gt-tools">
         <el-tooltip content="适应画布" placement="top">
-          <button class="gt-btn" @click="fit"><el-icon><FullScreen /></el-icon></button>
+          <button class="gt-btn" aria-label="适应画布" @click="fit"><el-icon><FullScreen /></el-icon></button>
         </el-tooltip>
         <el-tooltip content="放大" placement="top">
-          <button class="gt-btn" @click="zoom(1.25)"><el-icon><ZoomIn /></el-icon></button>
+          <button class="gt-btn" aria-label="放大" @click="zoom(1.25)"><el-icon><ZoomIn /></el-icon></button>
         </el-tooltip>
         <el-tooltip content="缩小" placement="top">
-          <button class="gt-btn" @click="zoom(0.8)"><el-icon><ZoomOut /></el-icon></button>
+          <button class="gt-btn" aria-label="缩小" @click="zoom(0.8)"><el-icon><ZoomOut /></el-icon></button>
         </el-tooltip>
         <el-tooltip content="重新计算布局" placement="top">
-          <button class="gt-btn" :class="{ on: physicsOn }" @click="relayout">
+          <button class="gt-btn" :class="{ on: physicsOn }" aria-label="重新计算布局" @click="relayout">
             <el-icon><RefreshRight /></el-icon>
           </button>
         </el-tooltip>
         <span class="gt-sep" />
         <el-tooltip content="显示名称 / 仅图标" placement="top">
-          <button class="gt-btn" :class="{ on: showLabels }" @click="toggleLabels">
+          <button class="gt-btn" :class="{ on: showLabels }" aria-label="显示名称" @click="toggleLabels">
             <el-icon><Postcard /></el-icon>
           </button>
         </el-tooltip>
         <el-tooltip content="显示关系名称" placement="top">
-          <button class="gt-btn" :class="{ on: showEdgeLabels }" @click="toggleEdgeLabels">
+          <button class="gt-btn" :class="{ on: showEdgeLabels }" aria-label="显示关系名称" @click="toggleEdgeLabels">
             <el-icon><Memo /></el-icon>
           </button>
         </el-tooltip>
         <span class="gt-sep" />
         <el-tooltip content="全选图例 / 只留中心" placement="top">
-          <button class="gt-btn" @click="toggleAllGroups"><el-icon><View /></el-icon></button>
+          <button class="gt-btn" aria-label="全选图例" @click="toggleAllGroups"><el-icon><View /></el-icon></button>
         </el-tooltip>
       </div>
       <div class="gt-hint">

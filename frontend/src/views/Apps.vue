@@ -175,11 +175,11 @@
           :selected="selectedKeys.includes(a.key)"
           :multi="multi"
           :can-manage="canManage"
-          @open="openDetail"
+          @open="openApp"
           @toggle="toggleSelect"
           @new-model="newModel"
           @add-record="addRecord"
-          @view-relations="openDetail"
+          @view-relations="openPreview"
           @edit="openEdit"
           @remove="removeApp"
         />
@@ -198,7 +198,7 @@
           :data="visibleApps"
           class="data-table"
           row-key="key"
-          @row-click="openDetail"
+          @row-click="openApp"
         >
           <el-table-column v-if="multi" width="52">
             <template #header>
@@ -263,8 +263,8 @@
           <el-table-column label="操作" width="170" fixed="right">
             <template #default="{ row }">
               <div class="cell-actions" @click.stop>
-                <el-tooltip content="查看详情" placement="top" :show-after="400">
-                  <el-button class="tb-act-btn" text @click="openDetail(row)">
+                <el-tooltip content="打开应用" placement="top" :show-after="400">
+                  <el-button class="tb-act-btn" text @click="openApp(row)">
                     <el-icon><View /></el-icon>
                   </el-button>
                 </el-tooltip>
@@ -290,7 +290,7 @@
       </div>
     </template>
 
-    <!-- ============ 应用详情（抽屉，不跳页） ============ -->
+    <!-- ============ 应用快速预览（抽屉；点应用本体是进独立页） ============ -->
     <AppDetail
       v-model="detailOpen"
       :app="detailApp"
@@ -715,7 +715,18 @@ function assignSelected(group) {
 
 // ============ 详情 / 快捷动作 ============
 
-function openDetail(app) {
+/**
+ * 点应用 → 进应用独立页
+ * 为什么不留在抽屉里：应用页是「基于数据模型管理业务数据」的地方，
+ * 记录、模型、统计都要占地方，抽屉塞不下也不该塞。
+ */
+function openApp(app) {
+  if (!app) return
+  router.push(`/apps/${app.key}`)
+}
+
+/** 快速预览：不离开列表就能瞄一眼模型与关联（抽屉） */
+function openPreview(app) {
   if (!app) return
   detailApp.value = app
   detailOpen.value = true
@@ -878,8 +889,8 @@ function openTemplateLibrary(mode = 'create') {
 
 function onTemplateCreated(r) {
   load()
-  // 建完直接把新应用打开，省得用户自己找
-  if (r?.app) openDetail({ ...r.app, entity_count: r.types?.length || 0, record_count: 0 })
+  // 建完直接进新应用的应用页，省得用户自己找
+  if (r?.app?.key) router.push(`/apps/${r.app.key}`)
 }
 
 // ============ AI 生成草稿 ============
@@ -1050,7 +1061,7 @@ async function save() {
       )
       dialogOpen.value = false
       await load()
-      openDetail({ ...r.app, entity_count: r.types?.length || 0, record_count: 0 })
+      if (r.app?.key) router.push(`/apps/${r.app.key}`)
     } else if (form.template && form.template !== 'blank') {
       const r = await Api.createAppFromTemplate({ ...form })
       applyLocalGroup(r.app?.key || form.key.trim(), form.group)
@@ -1060,7 +1071,7 @@ async function save() {
       )
       dialogOpen.value = false
       await load()
-      openDetail({ ...r.app, entity_count: r.types?.length || 0, record_count: 0 })
+      if (r.app?.key) router.push(`/apps/${r.app.key}`)
     } else {
       const r = await Api.createApp({
         key: form.key, name: form.name, icon: form.icon,
@@ -1141,11 +1152,11 @@ onMounted(() => {
   loadTemplates()
   loadGroups()
   document.addEventListener('keydown', onKeydown)
-  // 旧地址 /apps/xxx 会被详情抽屉接管，这里跟着打开对应的应用
+  // 带 ?app=xxx 进来时打开快速预览（老地址兼容）
   if (route.query.app) {
     const key = String(route.query.app)
     const hit = apps.value.find(a => a.key === key)
-    if (hit) openDetail(hit)
+    if (hit) openPreview(hit)
   }
 })
 
@@ -1153,12 +1164,12 @@ onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
 })
 
-// 路由上的 ?app= 变化时（例如从工作台跳过来）同步打开抽屉
+// 路由上的 ?app= 变化时（例如从工作台跳过来）同步打开预览抽屉
 watch(() => route.query.app, async (key) => {
   if (!key) return
   if (!apps.value.length) await load()
   const hit = apps.value.find(a => a.key === String(key))
-  if (hit) openDetail(hit)
+  if (hit) openPreview(hit)
 })
 </script>
 

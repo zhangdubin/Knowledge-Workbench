@@ -41,9 +41,27 @@ services:
       # 第二块盘的挂载位：把另一块物理盘 / NAS 挂到这里，
       # 「系统设置 → 备份目录」的下拉里就会直接出现它，点一下即可切换。
       - ${KB_BACKUP_ALT_HOST_DIR:-./backups-alt}:/mnt/kb-backup
+      # ==== 「一键升级」需要下面两行 ====
+      #
+      # install.sh 会在开启一键升级时把这两行的注释去掉；
+      # 不开启就保持注释状态（等同于没有这两行）。
+      #
+      # 为什么需要：
+      #   - docker.sock：后端要靠它驱动宿主机的 docker（load 镜像、compose up）
+      #   - 安装目录：离线包升级要在安装目录里执行 docker compose up -d，
+      #     容器里看不到安装目录就没法继续
+      #
+      # ⚠️ 挂 docker.sock 等于把宿主机的 root 权限交给容器。
+      #    只在自己的独占服务器上这么做。
+      # - ${KB_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      # - ${KB_INSTALL_HOST_DIR:-.}:/app/install
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data/kb.db
       - DATA_DIR=/app/data
+      # ==== 「一键升级」需要这一行 ====
+      # 告诉后端「安装目录在容器里的哪个位置」。
+      # 容器内路径固定是 /app/install —— 上面那条挂载把它映到那里。
+      # - KB_INSTALL_DIR=/app/install
       - KB_FILE_STORE=${KB_FILE_STORE:-fs}
       - KB_FILE_STORE_DIR=/app/files
       # 兜底值；界面上「系统设置 → 备份目录」优先级更高、且立即生效

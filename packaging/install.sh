@@ -51,6 +51,10 @@ usage() {
       --data-dir <路径>   数据根目录：data / files / backups 都放这里。
                           只在**全新安装**时生效；已有安装改位置请用
                           bash scripts/move-data.sh <新路径>
+      --no-upgrade-tools  不开启「一键升级」（默认开启）
+                          开启会让后端容器挂上 docker.sock 与安装目录，
+                          等于把宿主机的 root 权限交给容器；
+                          不开启就只能到「系统设置 → 升级与更新」里手动升级
       --skip-load         跳过镜像导入（镜像已在本地时用）
       --no-start          只装好文件与镜像，不启动容器
       --force             安装目录非空时也继续
@@ -89,6 +93,10 @@ OPT_DATA_DIR=""
 OPT_INSTANCE=""
 OPT_SKIP_LOAD=0
 OPT_NO_START=0
+# 「一键升级」默认开启：装完就能在前端点「开始升级」，
+# 不用再手工改编排文件。
+# 不开启的代价是「一键升级」按钮永远是灰的 —— 只能手动升级。
+OPT_UPGRADE_TOOLS=1
 OPT_FORCE=0
 OPT_DRY_RUN=0
 
@@ -100,6 +108,7 @@ while [ $# -gt 0 ]; do
     --password)        OPT_PASSWORD="${2:-}"; shift 2 ;;
     --instance)        OPT_INSTANCE="${2:-}"; shift 2 ;;
     --data-dir)        OPT_DATA_DIR="${2:-}"; shift 2 ;;
+    --no-upgrade-tools) OPT_UPGRADE_TOOLS=0; shift ;;
     --skip-load)       OPT_SKIP_LOAD=1; shift ;;
     --no-start)        OPT_NO_START=1; shift ;;
     --force)           OPT_FORCE=1; shift ;;
@@ -435,6 +444,73 @@ ENVEOF
   umask 022
   chmod 600 "$ENV_FILE"
   ok ".env 已生成（管理员口令：${ADMIN_PASSWORD}）"
+fi
+
+# ------------------------------------------------------------
+# 5.5 武装「一键升级」
+# ------------------------------------------------------------
+#
+# 为什么装的时候就要做，而不是让用户事后手工改：
+#   装完再改，用户面对的是「一串 YAML 报错」+「一个点不动的按钮」，
+#   十有八九就放弃了 —— 于是「一键升级」这个功能等于没有。
+#   而这一步我们在宿主机上、有 root 权限、知道安装目录在哪，
+#   顺手做掉最省事。
+#
+# 武装要做三件事：
+#   1. 后端镜像换成「带工具」的（docker CLI + compose 插件）
+#      —— 镜像在打包时就装进包里了，见下面第 6 步
+#   2. 编排文件里放开 docker.socket 与安装目录两条挂载
+#   3. 告诉后端安装目录在容器里的位置（KB_INSTALL_DIR）
+step "装配一键升级"
+
+if [ "$OPT_UPGRADE_TOOLS" -eq 0 ]; then
+  warn "按你的要求跳过了「一键升级」的装配"
+  note "后果：「系统设置 → 升级与更新」里的一键升级会是灰的，只能手动升级。"
+  note "想开的话，装好后跑：bash scripts/enable-one-click-upgrade.sh --dir $TARGET"
+else
+  # ---- 放开编排文件里的两行注释 ----
+  #
+  # 为什么用「注释掉的模板 + 安装时去掉注释」而不是直接改好：
+  #   用户可能用 --no-upgrade-tools 装，那就不该有这两行；
+  #   而 YAML 没有「按条件省略一段」的写法。
+  #   注释是唯一既保留模板、又能让脚本做决定的办法。
+  COMPOSE_TARGET="$TARGET/docker-compose.yml"
+  if [ -f "$COMPOSE_TARGET" ]; then
+    # 只放开我们自己写的那三行（以固定标记开头），不碰用户自己加的内容
+    sed -i.bak \
+      -e 's|^      # - \${KB_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock|      - ${KB_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock|' \
+      -e 's|^      # - \${KB_INSTALL_HOST_DIR:-.}:/app/install|      - ${KB_INSTALL_HOST_DIR:-.}:/app/install|' \
+      -e 's|^      # - KB_INSTALL_DIR=/app/install|      - KB_INSTALL_DIR=/app/install|' \
+      "$COMPOSE_TARGET"
+    rm -f "$COMPOSE_TARGET.bak"
+    ok "编排文件已放开 socket 与安装目录的挂载"
+  else
+    warn "找不到编排文件，跳过挂载装配：$COMPOSE_TARGET"
+  fi
+
+  # ---- .env 里补两个变量 ----
+  #
+  # 为什么装目录要用绝对路径：compose 的相对路径是相对**执行 compose 的目录**，
+  # 而自动升级是在容器里通过临时容器执行的 —— 那里必须靠绝对路径才找得到。
+  env_upsert() {
+    _k="$1"; _v="$2"
+    if grep -q "^${_k}=" "$ENV_FILE" 2>/dev/null; then
+      # 已有就改写（用 | 做分隔符，路径里可能有 /）
+      sed -i.bak "s|^${_k}=.*|${_k}=${_v}|" "$ENV_FILE"
+      rm -f "$ENV_FILE.bak"
+    else
+      printf '\n%s=%s\n' "$_k" "$_v" >> "$ENV_FILE"
+    fi
+  }
+  env_upsert KB_INSTALL_HOST_DIR "$TARGET"
+  env_upsert KB_DOCKER_SOCK "/var/run/docker.sock"
+  ok "已写入 KB_INSTALL_HOST_DIR=$TARGET"
+
+  printf "\n"
+  warn "注意：挂 docker.sock 等于把宿主机的 root 权限交给后端容器。"
+  note "只在自己的独占服务器上这么做；共享机器请改用 --no-upgrade-tools 重装。"
+  printf "\n"
+  ok "一键升级已装配好 —— 装完就能在「系统设置 → 升级与更新」里点「开始升级」"
 fi
 
 # ------------------------------------------------------------

@@ -126,8 +126,28 @@ fi
 for tag in $PLATFORMS; do
   say "导出 $tag 镜像（需要一两分钟）"
   OUT="$PKG/images/kb-workbench-images-$tag.tar.gz"
+
+  # 后端用**带工具**的那一版（docker CLI + compose 插件）。
+  #
+  # 为什么：装完的部署要能「一键升级」，后端就得能驱动宿主机的 docker。
+  # 少了这两个二进制，「开始升级」按钮永远是灰的 ——
+  # 而这正是离线包安装最容易踩空的地方（装的时候没人会想到要换镜像）。
+  #
+  # 顺带一提：带工具的镜像比普通版大 30MB 出头，
+  # 换来的是「装完就能一键升级」，值。
+  BACKEND_IMG="kb-workbench-backend:$tag"
+  if docker image inspect "kb-workbench-backend:tools-$tag" >/dev/null 2>&1; then
+    # 打成 :<arch> 的标签 —— install.sh 会按这个标签提升成 :latest
+    docker tag "kb-workbench-backend:tools-$tag" "kb-workbench-backend:$tag"
+    BACKEND_IMG="kb-workbench-backend:$tag"
+    say "  后端用带工具的镜像（tools-${tag}）"
+  else
+    printf "\033[1;33m! 本地没有 kb-workbench-backend:tools-%s —— 这一版的后端**不带** docker/compose，\033[0m\n" "$tag"
+    printf "\033[1;33m! 装完的部署开不了「一键升级」。先跑 ./scripts/build-offline-images.sh --tools-only 再重新打包。\033[0m\n"
+  fi
+
   docker save \
-      "kb-workbench-backend:$tag" \
+      "$BACKEND_IMG" \
       "kb-workbench-frontend:$tag" \
     | gzip > "$OUT"
   printf "  ✔ images/kb-workbench-images-%s.tar.gz (%s)\n" "$tag" "$(du -h "$OUT" | cut -f1)"

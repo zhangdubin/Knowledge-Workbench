@@ -92,6 +92,9 @@
   搬数据       bash scripts/move-data.sh /data/kb-workbench
   升级版本     拿到新版离线包，重复执行 install.sh 即可
                （会自动保留原有 .env 和全部数据）
+  一键升级     系统设置 → 升级与更新 → 一键升级
+               （新版离线包装好即带 docker/compose，
+                 装完就能用；详见下面「一键自动升级」）
 
   默认安装目录：macOS / Linux 是 ~/kb-workbench，Windows 是 %USERPROFILE%\kb-workbench
 
@@ -165,3 +168,31 @@
 
   迁移到新机器：在新机器上装好，然后把旧机器的 data/ 、files/ 两个目录
         整个拷过去替换即可（停止容器后操作）。
+
+
+【一键自动升级】
+
+  装完之后，在「系统设置 → 升级与更新」里点「一键升级」，
+  后端会自己在容器里完成：查 Release → 下载镜像包 → 导入 → 重建容器。
+
+  要装的东西（安装脚本已经替你做完了）：
+
+    · 后端镜像自带 docker CLI 与 compose 插件
+    · 后端容器挂上了 /var/run/docker.sock
+    · 后端容器能看到安装目录（/app/install）
+
+  ⚠️ 挂 docker.sock 等于把宿主机的 root 权限交给后端容器。
+     只在自己的独占服务器上这么做；共享机器请装的时候加
+     --no-upgrade-tools，一键升级就不会启用（只能手动升级）。
+
+  想反悔 / 后补：装好之后随时跑
+
+      bash scripts/enable-one-click-upgrade.sh --dir <安装目录>
+
+  这一条是幂等的，重复跑没有副作用。
+
+  想验证装好了没有：
+
+      docker exec <后端容器> kb-upgrade-selftest
+
+  五项全 [OK] 才算武装好（git / docker / docker.sock / compose / 部署目录）。

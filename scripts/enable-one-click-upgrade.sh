@@ -413,6 +413,42 @@ else
   [ "$HAS_DOCKER" = "0" ] && warn "后端镜像里没有 docker CLI"
   [ "$HAS_COMPOSE" = "0" ] && warn "后端镜像里没有 docker compose 插件（它是插件形态，装 docker CLI 不会自动带上）"
   echo ""
+
+  # ---- 本地已经有带工具的镜像？那就顺手换上，别让用户自己抄命令 ----
+  #
+  # 为什么自动做：让用户自己去敲那四行 docker 命令，
+  # 十有八九会在某一行上敲错（尤其是 tag 的名字），
+  # 然后卡在「我明明装了 docker 命令，怎么还是说没有」。
+  # 能在本机直接做完的事，就别写成说明书。
+  HOST_ARCH="$(docker info --format '{{.Architecture}}' 2>/dev/null | head -1)"
+  case "$HOST_ARCH" in
+    arm64|aarch64) TOOLS_TAG="arm64" ;;
+    amd64|x86_64)  TOOLS_TAG="amd64" ;;
+    *)             TOOLS_TAG="" ;;
+  esac
+  if [ -n "$TOOLS_TAG" ] && docker image inspect "kb-workbench-backend:tools-${TOOLS_TAG}" >/dev/null 2>&1; then
+    step "本地已有带工具的后端镜像，直接换上"
+    docker tag "kb-workbench-backend:tools-${TOOLS_TAG}" "kb-workbench-backend:latest"
+    ok "标签已指向 kb-workbench-backend:tools-${TOOLS_TAG}"
+    if ( cd "$INSTALL_DIR" && docker compose up -d --force-recreate backend ) >/dev/null 2>&1; then
+      ok "后端容器已重建（等它健康）"
+      sleep 3
+      if docker exec "$BACKEND_CONTAINER" sh -c 'command -v docker && docker compose version' >/dev/null 2>&1; then
+        HAS_DOCKER=1
+        HAS_COMPOSE=1
+        ok "工具已就位：docker CLI 与 compose 插件都在"
+      else
+        warn "重建后仍然没检测到工具，请手动看一眼：docker logs ${BACKEND_CONTAINER}"
+      fi
+    else
+      warn "重建后端失败，编排文件没动过，可自己再试："
+      note "cd ${INSTALL_DIR} && docker compose up -d --force-recreate backend"
+    fi
+  fi
+
+  if [ "$HAS_DOCKER" = "1" ] && [ "$HAS_COMPOSE" = "1" ]; then
+    ok "工具齐了 —— 现在可以点一键升级"
+  else
   echo "  两条路，选一条："
   echo ""
   echo "  (a) 下载带工具的后端镜像（离线机器走这条）"
@@ -429,6 +465,7 @@ else
   echo "      docker compose up -d --force-recreate backend"
   echo ""
   note "重建完记得再跑一次本脚本，它会重新检查工具并告诉你结果。"
+  fi
 fi
 
 echo ""

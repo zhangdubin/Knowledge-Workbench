@@ -294,7 +294,9 @@ async function main() {
     else bad(`笔记不见了 —— 删分组把笔记一起删了（HTTP ${rec.status}）`)
 
     await api('DELETE', `/api/note-groups/${g2.data.id}`)
+    // 两篇笔记都要删 —— 只删一篇的话，另一篇会留在用户的库里
     await api('DELETE', `/api/records/${noteId}`)
+    await api('DELETE', `/api/records/${n2.data.id}`)
     const rest = (await api('GET', '/api/note-groups')).data || []
     // 只管自己造的那两个 —— 别人的残留不该算成我的问题
     const mine = rest.filter((g) => g.name === TAG || g.name === TAG2)

@@ -298,11 +298,55 @@ gh() { curl --config "$CURL_CFG" "$@"; }
 # 找到 Release
 # ------------------------------------------------------------
 step "定位 Release"
-REL_JSON="$(gh "https://api.github.com/repos/$REPO/releases/tags/$TAG")" \
-  || die "拿不到 $TAG 的 Release 信息（tag 不存在？token 没权限？）"
-RID="$(printf '%s' "$REL_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
-[ -n "$RID" ] || die "GitHub 上找不到 $REPO 的 $TAG Release —— 先去网页上把这个 Release 建出来"
-ok "Release id: $RID"
+REL_JSON="$(gh "https://api.github.com/repos/$REPO/releases/tags/$TAG" 2>/dev/null || true)"
+RID="$(printf '%s' "$REL_JSON" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("id",""))
+except Exception: print("")' 2>/dev/null)"
+
+if [ -z "$RID" ]; then
+  # Release 还没有就建一个。
+  # 以前这步要人去网页上点，很容易卡在这儿 —— tag 推上去了，Release 没建，
+  # 脚本却只说一句「先去网页上建」，于是发布这一步就断了。
+  # 正文直接取 CHANGELOG 里这一版的说明，省得再抄一遍。
+  warn "$TAG 还没有 Release，正在创建"
+  NOTES=""
+  if [ -f CHANGELOG.md ]; then
+    NOTES="$(python3 - "$VERSION" <<'PYEOF'
+import io, re, sys
+version = sys.argv[1]
+s = io.open("CHANGELOG.md", encoding="utf-8").read()
+# 取 "## <version> — 日期" 到下一个 "## " 之间的内容
+m = re.search(r"^##\s*" + re.escape(version) + r"\b(.*?)(?=^##\s|\Z)", s, re.S | re.M)
+print(m.group(0).strip() if m else "")
+PYEOF
+)"
+  fi
+  [ -n "$NOTES" ] || NOTES="$TAG 发布"
+  # GitHub 的 API 要 JSON（-F 发的是 multipart，会报 "Problems parsing JSON"）
+  BODY_FILE="$(mktemp)"
+  python3 - "$TAG" "$NOTES" > "$BODY_FILE" <<'PYEOF'
+import json, sys
+tag, notes = sys.argv[1], sys.argv[2]
+print(json.dumps({
+    "tag_name": tag,
+    "name": f"KB Workbench {tag}",
+    "body": notes,
+    "draft": False,
+    "prerelease": False,
+}, ensure_ascii=False))
+PYEOF
+  CREATED="$(gh -X POST "https://api.github.com/repos/$REPO/releases" \
+    -H "Content-Type: application/json" \
+    --data-binary "@$BODY_FILE" || true)"
+  rm -f "$BODY_FILE"
+  RID="$(printf '%s' "$CREATED" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("id",""))
+except Exception: print("")' 2>/dev/null)"
+  [ -n "$RID" ] || die "创建 Release 失败：$CREATED"
+  ok "已创建 Release id: $RID"
+else
+  ok "Release id: $RID"
+fi
 
 # ------------------------------------------------------------
 # 上传

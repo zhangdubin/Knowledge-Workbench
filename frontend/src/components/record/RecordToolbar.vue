@@ -8,7 +8,8 @@
   -->
   <div class="rt-toolbar">
     <!-- 筛选器：只对枚举 / 布尔字段有意义（文本字段用上面的关键词搜更合适） -->
-    <el-popover v-if="filterFields.length" placement="bottom-end" :width="280" trigger="click">
+    <el-popover v-if="filterFields.length" placement="bottom-end" :width="280" trigger="click"
+      popper-class="rt-popper">
       <template #reference>
         <el-button class="rt-btn" aria-label="筛选">
           <el-icon><Filter /></el-icon>筛选
@@ -53,7 +54,7 @@
     </el-popover>
 
     <!-- 列显示设置 -->
-    <el-popover placement="bottom-end" :width="230" trigger="click">
+    <el-popover placement="bottom-end" :width="230" trigger="click" popper-class="rt-popper">
       <template #reference>
         <el-button class="rt-btn" aria-label="列显示设置">
           <el-icon><Operation /></el-icon>列
@@ -261,6 +262,14 @@ const activeFilterCount = computed(() => Object.values(props.filters || {}).filt
   font-size: var(--text-sm);
   color: var(--primary);
   font-weight: 600;
+}
+
+/* 弹层内容被 teleport 到 body，scoped 选择器够不着，
+   所以用 popper-class 精确限定到本组件的弹层，再在弹层里改占位符颜色。
+   为什么改：Element Plus 的占位符用的是 --text-disabled（对比度 3.05:1），
+   「全部」两个字在白底上几乎看不清 —— 占位符也是要读的字。 */
+:global(.rt-popper) {
+  --el-text-color-placeholder: var(--text-tertiary);
 }
 
 .rt-fade-enter-active, .rt-fade-leave-active { transition: opacity var(--duration-fast) var(--ease-out); }

@@ -14,7 +14,7 @@
       <el-button @click="importOpen = true">
         <el-icon><Upload /></el-icon>导入
       </el-button>
-      <el-button type="primary" @click="openCreate">
+      <el-button type="primary" :disabled="!canManage" @click="openCreate">
         <el-icon><Plus /></el-icon>新建记录
       </el-button>
     </PageTitle>
@@ -52,7 +52,7 @@
       />
       <div class="spacer"></div>
       <span class="badge badge-ghost">共 {{ data.total || 0 }} 条</span>
-      <el-button type="primary" @click="openCreate">
+      <el-button type="primary" :disabled="!canManage" @click="openCreate">
         <el-icon><Plus /></el-icon>新建记录
       </el-button>
     </div>
@@ -157,8 +157,7 @@ import RecordPagination from '../components/record/RecordPagination.vue'
 import RecordToolbar from '../components/record/RecordToolbar.vue'
 import RecordImportDialog from '../components/record/RecordImportDialog.vue'
 import { useRecordFields, useRecordView } from '../components/record/useRecordFields'
-import { recordDisplayName } from '../utils/recordFields'
-import { defaultColumnKeys } from '../utils/recordFields'
+import { recordDisplayName, defaultColumnKeys } from '../utils/recordFields'
 
 const route = useRoute()
 const router = useRouter()

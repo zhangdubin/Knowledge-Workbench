@@ -5,6 +5,8 @@ import {
   recordDisplayName, isBlankValue, validateRecordData, coerceFieldValue,
   coerceRecordData, recordMatchesKeyword, fieldMatchesFilter, filterRecords,
   referenceLabel, displayValue, fieldChoices,
+  defaultColumnKeys, filterColumnsByKeys, countActiveFilters, cleanFilterParams,
+  tableCandidateFields, TABLE_EXCLUDED_TYPES,
 } from '../src/utils/recordFields.js'
 
 let failed = 0
@@ -151,6 +153,61 @@ const FIELDS = [
     displayValue({ type: 'reference', options: { target: 'user' } }, 9, labels).text === '#9')
   assert('外键显示名查找', referenceLabel(labels, { options: { target: 'user' } }, 3) === '张三')
   assert('外键没有目标模型返回空', referenceLabel(labels, { options: {} }, 3) === '')
+}
+
+// ---------- 列显示设置：两页共用（记录页 / 应用独立页） ----------
+{
+  const COLS = [
+    { key: 'a', name: '甲', type: 'text' },
+    { key: 'b', name: '乙', type: 'select' },
+    { key: 'c', name: '丙', type: 'textarea' },
+    { key: 'd', name: '丁', type: 'file' },
+    { key: 'e', name: '戊', type: 'image' },
+    { key: 'f', name: '己', type: 'richtext' },
+    { key: 'g', name: '庚', type: 'number' },
+  ]
+  // 长文本与附件不进表格列（它们在卡片视图里看得到）
+  assert('长文本与附件不作为表格列',
+    JSON.stringify(tableCandidateFields(COLS).map(f => f.key)) === '["a","b","g"]',
+    JSON.stringify(tableCandidateFields(COLS).map(f => f.key)))
+  assert('排除类型就是那四种',
+    JSON.stringify(TABLE_EXCLUDED_TYPES) === '["file","image","textarea","richtext"]')
+
+  // 默认勾 8 个
+  const many = Array.from({ length: 12 }, (_, i) => ({ key: `k${i}`, name: `字段${i}`, type: 'text' }))
+  assert('默认最多 8 列', defaultColumnKeys(many).length === 8, String(defaultColumnKeys(many).length))
+  assert('默认列取前 8 个', defaultColumnKeys(many)[0] === 'k0')
+  assert('默认列跳过被排除的类型',
+    JSON.stringify(defaultColumnKeys(COLS)) === '["a","b","g"]')
+
+  // 按勾选过滤列
+  assert('按勾选过滤列',
+    JSON.stringify(filterColumnsByKeys(COLS, ['b', 'g']).map(f => f.key)) === '["b","g"]')
+  assert('一个都没勾就没有列', filterColumnsByKeys(COLS, []).length === 0)
+  assert('勾了不存在的 key 不出错', filterColumnsByKeys(COLS, ['zzz']).length === 0)
+}
+
+// ---------- 筛选条件计数与参数整理 ----------
+{
+  assert('没有筛选条件时计数为 0', countActiveFilters({}) === 0)
+  assert('有一个条件时计数为 1', countActiveFilters({ level: 'A' }) === 1)
+  assert('空串不算条件', countActiveFilters({ level: '' }) === 0)
+  assert('null 不算条件', countActiveFilters({ level: null }) === 0)
+  assert('空数组不算条件', countActiveFilters({ level: [] }) === 0)
+  assert('多选有值算条件', countActiveFilters({ level: ['A'] }) === 1)
+  assert('false 也算条件（布尔筛选用）', countActiveFilters({ signed: false }) === 1)
+
+  assert('空条件整理成空对象', JSON.stringify(cleanFilterParams({})) === '{}')
+  assert('剔掉空串与 null',
+    JSON.stringify(cleanFilterParams({ a: '', b: null, c: undefined })) === '{}')
+  assert('剔掉空数组',
+    JSON.stringify(cleanFilterParams({ level: [] })) === '{}')
+  assert('保留有效条件',
+    JSON.stringify(cleanFilterParams({ level: 'A' })) === '{"level":"A"}')
+  assert('保留多选数组',
+    JSON.stringify(cleanFilterParams({ level: ['A', 'B'] })) === '{"level":["A","B"]}')
+  assert('保留 false（布尔筛选用）',
+    JSON.stringify(cleanFilterParams({ signed: false })) === '{"signed":false}')
 }
 
 console.log(failed ? `\n❌ ${failed} 项断言未通过` : '\n✅ 记录字段逻辑全部通过')

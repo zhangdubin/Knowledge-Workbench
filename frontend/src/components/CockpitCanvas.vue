@@ -8,6 +8,14 @@
     @dblclick="onDblClick"
     @wheel="onWheel"
   >
+    <!-- 窄屏下一屏装不下时的提示：
+         缩放有下限（字要认得出），剩下的宽度靠拖。
+         不给提示的话，用户看到「右边少了一半」会以为页面坏了。 -->
+    <div v-if="clipped" class="cv-clip-hint">
+      <el-icon><Pointer /></el-icon>
+      画布比屏幕宽，<b>左右拖动</b>可以看全
+    </div>
+
     <div ref="scrollEl" class="cv-scroll">
       <div class="cv-space" :style="spaceStyle">
         <div ref="contentEl" class="cv-content" :style="contentStyle">
@@ -151,6 +159,7 @@ const guideV = ref([])
 const guideH = ref([])
 const viewport = ref({ w: 1440, h: 900 })
 let userZoomed = false                 // 用户手动缩放过就不再自动适应，免得抢操作
+const clipped = ref(false)             // 窄屏下一屏装不下（提示用户可以拖）
 let ro = null
 
 // ---------- 几何 ----------
@@ -160,6 +169,14 @@ function cur(w, i) {
   return (live.value && live.value.index === i) ? live.value : w
 }
 
+// 卡片实际渲染出来的尺寸（DOM 量出来的）
+//
+// 为什么需要：老布局里卡片没有显式的 x/y/w/h（那是 span 布局时代留下的），
+// contentSize 会用 MIN_CANVAS_W=1180 兜底 —— 但卡片实际只占 ~414px 宽。
+// 于是 fit() 算出 356/1180=0.3，缩放被压到下限 30%，
+// 手机上整个画布缩成一小团，字根本看不清（实测缩放显示 30%、字高 3.6px）。
+//
+// 所以：布局里没有显式几何时，用量出来的真实尺寸算，别拿 1180 猜。
 const content = computed(() => {
   const items = props.layout.map((w, i) => (live.value && live.value.index === i ? { ...w, ...live.value } : w))
   // 大屏投放态：布局由 CockpitFullscreen 按视口宽度排好，评估候选时用的就是
@@ -281,8 +298,18 @@ function fit(mode = props.fitMode) {
   // 在 1200px 的屏上留 6px 缝。dock 显示的是 round(zoom*100)%，不受影响。
   // fill（大屏投放）的底线是「绝不裁剪」：内容极端超比例时（如 4K 设计稿
   // 投到 720p）也要能继续缩小，通用下限 0.3 会破坏 contain 保证。
-  const floor = mode === 'fill' ? 0.1 : 0.3
+  // 缩放下限。
+  //
+  // 桌面浏览（width）要跟着容器缩 —— 内容 1496px 塞进 364px 的手机，
+  // 按比例缩是 0.24，但那样字只有 3.6px 高，根本看不清。
+  // 所以窄屏给一个「还认得出字」的下限（0.62），
+  // 剩下的宽度让用户横向拖 —— 拖得动比看不清强。
+  // 桌面端没有这个限制（内容本来就放得下）。
+  const narrow = el.clientWidth < 640
+  const floor = mode === 'fill' ? 0.1 : (narrow ? 0.62 : 0.3)
   zoom.value = Math.min(2, Math.max(floor, Math.round(next * 1000) / 1000))
+  // 缩放被下限顶住时说明「一屏装不下」，给个提示告诉用户可以拖
+  clipped.value = narrow && content.value.w * zoom.value > el.clientWidth + 8
   nextTick(() => { el.scrollLeft = 0; el.scrollTop = 0 })
 }
 
@@ -525,7 +552,10 @@ function onKeydown(e) {
 
 watch(() => props.fitMode, () => { userZoomed = false; measure() })
 watch(() => props.edit, v => { if (!v) selected.value = -1 })
-watch(() => props.layout.length, () => { if (!userZoomed) measure() })
+watch(() => props.layout.length, () => { if (!userZoomed) nextTick(measure) })
+// 布局内容变了（不只是长度）也要重量一次：
+// 老布局的卡片是先渲染再补几何的，只盯 length 会错过。
+watch(() => props.layout, () => { if (!userZoomed) nextTick(measure) }, { deep: true })
 
 onMounted(() => {
   measure()
@@ -573,6 +603,27 @@ defineExpose({ fit, setZoom, zoom })
 .cv-content { position: relative; }
 
 /* 编辑态的网格底：粗线每 32px（对齐吸附步长的高亮），细线每 8px */
+.cv-clip-hint {
+  position: absolute;
+  top: 8px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 9500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.cv-clip-hint b { color: var(--primary-dark); }
+html.dark .cv-clip-hint b { color: var(--primary-light); }
+
 .cv-grid {
   position: absolute; top: 0; left: 0;
   pointer-events: none;

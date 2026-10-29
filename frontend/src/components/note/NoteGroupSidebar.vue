@@ -15,7 +15,9 @@
   >
     <div class="ng-side-head">
       <span class="ng-side-title">分组</span>
-      <span class="ng-side-count">{{ groups.length }}</span>
+      <!-- 分组数是「有几个分组」，跟上面的笔记数不是一回事，
+           放在标题后面容易被当成「分组里有多少笔记」 -->
+      <span class="ng-side-count">{{ groups.length }} 个分组</span>
     </div>
 
     <nav class="ng-side-list" aria-label="分组列表">
@@ -44,6 +46,10 @@
         <span class="ng-side-name">未分组</span>
         <span class="ng-side-num">{{ ungroupedCount }}</span>
       </button>
+
+      <!-- 「全部 / 未分组」是总览，下面才是真正的分组列表 ——
+           用一条分隔线把两层分开，否则「未分组」看起来像个分组 -->
+      <div class="ng-side-sep" aria-hidden="true"></div>
 
       <!-- 各分组 -->
       <div
@@ -85,6 +91,12 @@
           </template>
         </el-dropdown>
       </div>
+
+      <!-- 一个分组都没有时给句提示，
+           免得侧栏只有「全部 / 未分组」两行，看着像坏了 -->
+      <p v-if="!groups.length" class="ng-side-hint">
+        还没有分组。<br />按项目、客户或年度建几个，笔记就能各归各位。
+      </p>
     </nav>
 
     <!-- 新建分组：小窗（名称 + 预设色） -->
@@ -400,21 +412,22 @@ function pick(id) {
 
 <style scoped>
 .ng-sidebar {
-  width: 236px;
+  width: 232px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 10px 8px;
+  padding: 12px 8px 8px;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-card);
   align-self: start;
   position: sticky;
   top: var(--space-4);
-  /* 分组少的时候也保持侧栏的样子（不是缩成一小条文字） */
-  min-height: 320px;
-  max-height: calc(100vh - var(--space-10));
+  /* 分组少的时候侧栏就矮一点 —— 不要撑出一大片空白。
+     （原来写死 min-height:320px + 列表 flex:1，
+       两个分组也能把每行撑到 111px，一大片空白） */
+  max-height: calc(100vh - var(--space-8));
 }
 
 .ng-side-head {
@@ -428,6 +441,19 @@ function pick(id) {
   font-weight: 600;
   color: var(--text-secondary);
 }
+.ng-side-sep {
+  height: 1px;
+  background: var(--border-light);
+  margin: 7px 8px;
+}
+
+.ng-side-hint {
+  margin: 10px 8px 4px;
+  font-size: var(--text-xs);
+  line-height: 1.7;
+  color: var(--text-tertiary);
+}
+
 .ng-side-count {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
@@ -439,7 +465,8 @@ function pick(id) {
   flex-direction: column;
   gap: 1px;
   overflow-y: auto;
-  flex: 1;
+  /* 不要 flex:1 —— 分组少的时候会把每一行拉高撑出一片空白 */
+  flex: 0 1 auto;
   min-height: 0;
 }
 

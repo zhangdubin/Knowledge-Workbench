@@ -647,6 +647,9 @@ onUnmounted(() => {
 }
 .breadcrumb {
   font-size: 12.5px;
+  /* 别让面包屑被挤成竖排（一两个字一行） */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .breadcrumb :deep(.el-breadcrumb__inner) {
   color: var(--text-tertiary);
@@ -754,6 +757,12 @@ onUnmounted(() => {
 }
 
 /* ============ 响应式 ============ */
+/* 面包屑在窄屏上是多余的：顶栏已经有页面标题了，
+   挤在那儿只会被压成竖排（一两个字一行，很难看） */
+@media (max-width: 960px) {
+  .breadcrumb { display: none; }
+}
+
 @media (max-width: 768px) {
   .sidebar,
   .sidebar-footer {

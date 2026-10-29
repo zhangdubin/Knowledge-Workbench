@@ -126,12 +126,17 @@ async function main() {
         return r.width > 2 && r.height > 2
       })
       if (!hit) return null
-      // 一路上溯，直到宽度像个侧栏（120~320px）且高度够高
+      // 一路上溯，直到宽度像个侧栏（120~340px）
+      //
+      // 原来还要求「高度 > 260px」，那是在拿高度当「像个侧栏」的代理指标 ——
+      // 其实那个高度正是 bug 本身：列表 flex:1 + min-height:320px，
+      // 两个分组也能把每行撑到 111px。现在侧栏按内容收缩，
+      // 高度随分组数量变，所以只验宽度和结构。
       let node = hit
       for (let i = 0; i < 6 && node.parentElement; i++) {
         const p = node.parentElement
         const r = p.getBoundingClientRect()
-        if (r.width >= 110 && r.width <= 340 && r.height > 260) return { w: Math.round(r.width), h: Math.round(r.height) }
+        if (r.width >= 110 && r.width <= 340 && r.height > 60) return { w: Math.round(r.width), h: Math.round(r.height) }
         node = p
       }
       return { w: Math.round(hit.getBoundingClientRect().width), h: Math.round(hit.getBoundingClientRect().height), narrow: true }
@@ -142,6 +147,22 @@ async function main() {
       bad('分组侧栏宽度不正常（像个普通文字块，不是侧栏）')
     } else {
       ok(`分组侧栏在位（${sidebar.w}×${sidebar.h}）`)
+    }
+
+    // 1.1b 侧栏每一行都要是「一行」的高度
+    //
+    // 踩过的坑：侧栏列表写了 flex:1，容器又写死 min-height:320px，
+    // 结果两个分组也能把每行撑到 111px —— 一屏两个巨大的空白块，
+    // 看着像页面加载坏了。分组少的时候，侧栏就该矮下去。
+    const rowHeights = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('.ng-side-item')).map((e) => Math.round(e.getBoundingClientRect().height))
+    )
+    if (!rowHeights.length) {
+      bad('侧栏里一个分组项都没有')
+    } else if (Math.max(...rowHeights) > 48) {
+      bad(`侧栏分组项被拉高了（最高 ${Math.max(...rowHeights)}px）—— 分组少的时候不该撑出一片空白`)
+    } else {
+      ok(`侧栏分组项高度正常（${rowHeights.join('/')}px）`)
     }
 
     // 1.2 有「新建分组」的入口

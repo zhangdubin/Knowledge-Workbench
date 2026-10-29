@@ -71,6 +71,28 @@ def git(*args: str) -> str:
     ).stdout.strip()
 
 
+def git_bytes(*args: str) -> bytes:
+    return subprocess.run(
+        ["git", *args], capture_output=True, check=True
+    ).stdout
+
+
+def git_show(commit: str, path: str) -> bytes:
+    """取某个提交里某个文件的原始内容（二进制安全）。
+
+    为什么不用 open(path)：对齐远端时会 reset --hard，
+    工作区那时已经是父提交的内容了 —— 读磁盘拿到的是旧内容。
+    """
+    return git_bytes("show", f"{commit}:{path}")
+
+
+def git_has_path(commit: str, path: str) -> bool:
+    """这个提交里有没有这个路径。"""
+    r = subprocess.run(["git", "ls-tree", commit, "--", path],
+                       capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
+
 def align_local_to(remote_sha: str) -> bool:
     """把远端 commit 在本地复刻出来，并把本地分支指过去。
 
@@ -212,9 +234,9 @@ def main() -> int:
         # ---- 2. 逐个建 blob ----
         entries = []
         for name in names:
-            # 本地已经删掉的文件（git diff 会列出来，但磁盘上没有了）：
+            # 本地已经删掉的文件（git diff 会列出来，但提交里没有了）：
             # tree 里要写 sha=null 才会真的删掉，不能跳过 —— 跳过了远端还留着旧文件
-            if not os.path.exists(name):
+            if not git_has_path(local_sha, name):
                 entries.append({
                     "path": name,
                     "mode": "100644",
@@ -223,8 +245,12 @@ def main() -> int:
                 })
                 print(f"  del  {name[:46]:<48} (已删除)")
                 continue
-            with open(name, "rb") as f:
-                content = base64.b64encode(f.read()).decode("ascii")
+            # ⚠️ 内容必须从**提交对象**里取，不能读磁盘。
+            # 上面对齐远端时会 reset --hard，工作区就变成了父提交的内容 ——
+            # 这时候读磁盘拿到的是**旧内容**，推上去的也是旧的
+            # （踩过一次：改完 UI 提交了、推送了，
+            #   远端却还是改之前的代码，本地也被 reset 掉了）。
+            content = base64.b64encode(git_show(local_sha, name)).decode("ascii")
             blob = api("POST", f"/repos/{REPO}/git/blobs",
                        {"content": content, "encoding": "base64"})
             # mode 要按本地实际的来（100755 可执行 / 100644 普通）。

@@ -22,89 +22,93 @@
       ></div>
 
       <div class="notes-main">
-        <!-- 页头：紧凑，不再用大图标砖（Obsidian 的文件列表是克制的） -->
-        <div class="notes-head">
-          <div class="notes-head-main">
+        <!-- 页头 + 工具栏合成一块「头部卡片」：
+             原来标题、搜索、视图切换是三条各自独立的带子，
+             看着像三段不相干的东西拼在一起。 -->
+        <div class="notes-header">
+          <div class="notes-head">
+            <div class="notes-head-main">
+              <button
+                class="notes-group-toggle"
+                type="button"
+                aria-label="打开分组栏"
+                @click="drawerOpen = true"
+              >
+                <el-icon><FolderOpened /></el-icon>分组
+              </button>
+              <h2 class="notes-head-title">知识库</h2>
+              <span class="notes-head-count">{{ filterHint || `共 ${data.total || 0} 条笔记` }}</span>
+            </div>
+            <div class="notes-head-actions">
+              <span v-if="targetGroupName" class="notes-target">
+                新建到 <b>{{ targetGroupName }}</b>
+              </span>
+              <el-button text size="small" @click="$router.push('/knowledge/graph')">
+                <el-icon><DataAnalysis /></el-icon>知识图谱
+              </el-button>
+              <el-button type="primary" size="small" @click="openCreate">
+                <el-icon><Plus /></el-icon>新建笔记
+                <kbd class="notes-kbd">⌘N</kbd>
+              </el-button>
+            </div>
+          </div>
+
+          <!-- 工具栏：搜索 + 视图 -->
+          <div class="notes-toolbar">
+            <div class="notes-search">
+              <el-icon class="notes-search-icon"><Search /></el-icon>
+              <input
+                ref="searchRef"
+                v-model="keyword"
+                class="notes-search-input"
+                type="search"
+                placeholder="搜索标题与正文…"
+                aria-label="搜索笔记"
+                @input="onSearchInput"
+                @keydown.enter="load(1)"
+                @keydown.down.prevent="moveCursor(1)"
+                @keydown.up.prevent="moveCursor(-1)"
+              />
+              <kbd v-if="!keyword" class="notes-search-kbd">/</kbd>
+            </div>
+            <div class="notes-toolbar-right">
+              <!-- 当前分组（窄屏没有侧栏时，这里是唯一的分组入口） -->
+              <NoteGroupSelect
+                v-if="groupsAvailable"
+                :model-value="groupId === null ? 0 : groupId"
+                class="notes-group-select"
+                :groups="groups"
+                aria-label="按分组筛选"
+                @change="onGroupSelect"
+              />
+              <el-segmented
+                v-model="viewMode"
+                size="small"
+                :options="[
+                  { label: '列表', value: 'list' },
+                  { label: '网格', value: 'grid' },
+                ]"
+              />
+            </div>
+          </div>
+
+          <!-- 标签筛选：chips，点击即筛 -->
+          <div v-if="allTags.length" class="notes-tagbar">
             <button
-              class="notes-group-toggle"
+              class="notes-tagchip is-all"
+              :class="{ 'is-on': !tagFilter }"
               type="button"
-              aria-label="打开分组栏"
-              @click="drawerOpen = true"
-            >
-              <el-icon><FolderOpened /></el-icon>分组
-            </button>
-            <h2 class="notes-head-title">知识库</h2>
-            <span class="notes-head-count">{{ filterHint || `共 ${data.total || 0} 条笔记` }}</span>
+              @click="setTagFilter('')"
+            >全部</button>
+            <button
+              v-for="t in allTags"
+              :key="t"
+              class="notes-tagchip"
+              :class="{ 'is-on': tagFilter === t }"
+              type="button"
+              @click="setTagFilter(t)"
+            >#{{ t }}</button>
           </div>
-          <div class="notes-head-actions">
-            <span v-if="targetGroupName" class="notes-target">
-              新建到 <b>{{ targetGroupName }}</b>
-            </span>
-            <el-button text size="small" @click="$router.push('/knowledge/graph')">
-              <el-icon><DataAnalysis /></el-icon>知识图谱
-            </el-button>
-            <el-button type="primary" size="small" @click="openCreate">
-              <el-icon><Plus /></el-icon>新建笔记
-              <kbd class="notes-kbd">⌘N</kbd>
-            </el-button>
-          </div>
-        </div>
-
-        <!-- 工具栏：搜索 + 视图 -->
-        <div class="notes-toolbar">
-          <div class="notes-search">
-            <el-icon class="notes-search-icon"><Search /></el-icon>
-            <input
-              ref="searchRef"
-              v-model="keyword"
-              class="notes-search-input"
-              type="search"
-              placeholder="搜索标题与正文…"
-              aria-label="搜索笔记"
-              @input="onSearchInput"
-              @keydown.enter="load(1)"
-              @keydown.down.prevent="moveCursor(1)"
-              @keydown.up.prevent="moveCursor(-1)"
-            />
-            <kbd v-if="!keyword" class="notes-search-kbd">/</kbd>
-          </div>
-          <div class="notes-toolbar-right">
-            <!-- 当前分组（窄屏没有侧栏时，这里是唯一的分组入口） -->
-            <NoteGroupSelect
-              v-if="groupsAvailable"
-              :model-value="groupId === null ? 0 : groupId"
-              class="notes-group-select"
-              :groups="groups"
-              aria-label="按分组筛选"
-              @change="onGroupSelect"
-            />
-            <el-segmented
-              v-model="viewMode"
-              size="small"
-              :options="[
-                { label: '列表', value: 'list' },
-                { label: '网格', value: 'grid' },
-              ]"
-            />
-          </div>
-        </div>
-
-        <!-- 标签筛选：chips，点击即筛 -->
-        <div v-if="allTags.length" class="notes-tagbar">
-          <button
-            class="notes-tagchip is-all"
-            :class="{ 'is-on': !tagFilter }"
-            type="button"
-            @click="setTagFilter('')"
-          >全部</button>
-          <button
-            v-for="t in allTags"
-            :key="t"
-            class="notes-tagchip"
-            :class="{ 'is-on': tagFilter === t }"
-            type="button"
-            @click="setTagFilter(t)"
-          >#{{ t }}</button>
         </div>
 
         <!-- 内联快速新建：不是弹窗，标题栏直接能打字 -->
@@ -171,13 +175,20 @@
               <div class="note-row-snippet">{{ snippetOf(n) }}</div>
             </div>
             <div class="note-row-meta">
-              <NoteGroupBadge
+              <!-- 正在按某个分组看的时候，每行都挂同一个分组标签是纯噪音。
+                   但位置要留着（占位），不然时间的竖线会一列列地抖。 -->
+              <span
                 v-if="groupsAvailable"
-                class="note-row-group"
-                :name="groupNameOf(groupIdOfNote(n))"
-                :color="groupColorOfNote(n)"
-                :muted="!groupIdOfNote(n)"
-              />
+                class="note-row-group-slot"
+                :class="{ 'is-hidden': inFilteredGroup(n) }"
+              >
+                <NoteGroupBadge
+                  v-if="!inFilteredGroup(n)"
+                  :name="groupNameOf(groupIdOfNote(n))"
+                  :color="groupColorOfNote(n)"
+                  :muted="!groupIdOfNote(n)"
+                />
+              </span>
               <span class="note-row-time" :title="formatTime(n.updated_at)">
                 {{ relativeOf(n) }}
               </span>
@@ -372,6 +383,14 @@ function groupNameOf(id) {
 function groupColorOfNote(n) {
   const gid = groupIdOfNote(n)
   return gid ? (groupOf(gid)?.color || '') : ''
+}
+
+/** 这篇笔记是不是正在看的那个分组里的？
+ *  是的话就别在每行重复挂同一个分组标签了 —— 一屏 20 行全是「未分组」，
+ *  看着像故障，其实只是没用的重复。 */
+function inFilteredGroup(n) {
+  if (groupId.value === null) return false
+  return groupIdOfNote(n) === groupId.value
 }
 
 async function load(p) {
@@ -674,19 +693,43 @@ watch(() => route.query.group, (v) => {
 
 <style scoped>
 .notes-page {
-  padding: var(--space-6) var(--space-8);
-  max-width: 1320px;
+  padding: var(--space-5) var(--space-6) var(--space-6);
+  /* 铺满可用宽度：知识库是主工作区，不该缩在中间一小条。
+     （原来 max-width:1320px + 内部 grid 236px+1fr，
+       在宽屏上内容只占中间 1000px，两侧一大片空白） */
+  width: 100%;
+  max-width: 1560px;
   margin: 0 auto;
+  /* 撑满视口高度：列表区自己滚动，分页钉在底部。
+     不这样的话，笔记少的时候下面就是一大片空白 */
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 两栏：分组侧栏 + 笔记主区 */
 .notes-layout {
   display: grid;
-  grid-template-columns: 236px minmax(0, 1fr);
+  grid-template-columns: 232px minmax(0, 1fr);
   gap: var(--space-5);
   align-items: start;
+  flex: 1;
+  min-height: 0;
 }
-.notes-main { min-width: 0; }
+.notes-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 页头 + 工具栏 + 标签条：合成一块头部卡片 */
+.notes-header {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 14px 16px 12px;
+  margin-bottom: var(--space-4);
+}
 
 /* 页头 */
 .notes-head {
@@ -694,7 +737,7 @@ watch(() => route.query.group, (v) => {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-3);
   flex-wrap: wrap;
 }
 .notes-head-main {
@@ -764,6 +807,8 @@ html.dark .notes-target { color: var(--primary-light); }
   gap: var(--space-3);
   margin-bottom: var(--space-3);
 }
+/* 标签条是头部的最后一块，贴着卡片底 */
+.notes-header .notes-tagbar { margin-bottom: 0; }
 .notes-search {
   position: relative;
   display: flex;
@@ -869,15 +914,23 @@ html.dark .notes-tagchip.is-on { color: var(--primary-light); }
   border-radius: var(--radius-md);
   background: var(--bg-card);
   overflow: hidden;
+  /* 列表占满剩余高度（笔记少时不会在下面留一大片空白） */
+  flex: 1;
+  min-height: 0;
+  align-content: start;
 }
 .notes-list:focus { outline: none; }
 
 .note-row {
   position: relative;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 9px 12px 10px;
+  display: grid;
+  /* 图标 | 正文 | 右侧信息列
+     右侧一列固定宽度 —— 归属/时间/删除按钮上下对齐成一条竖线，
+     不会因为标题长短而东倒西歪 */
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  padding: 11px 14px 12px;
   border-bottom: 1px solid var(--border-light);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
@@ -905,7 +958,6 @@ html.dark .notes-tagchip.is-on { color: var(--primary-light); }
 .note-row.is-active .note-row-icon { color: var(--primary); }
 
 .note-row-body {
-  flex: 1;
   min-width: 0;
 }
 .note-row-top {
@@ -921,7 +973,9 @@ html.dark .notes-tagchip.is-on { color: var(--primary-light); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 60%;
+  /* 标题不再卡在 60% —— 右边那一列宽度固定，正文列自然就宽了 */
+  max-width: none;
+  min-width: 0;
 }
 .note-row-empty {
   flex-shrink: 0;
@@ -964,16 +1018,29 @@ html.dark .note-chip { color: var(--primary-light); }
 .note-row-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 10px;
   flex-shrink: 0;
-  margin-top: 1px;
+  /* 固定一列宽度：归属标签、时间、删除按钮成一条竖线对齐。
+     宽度给得松一点，标签出现/消失时右边不会跟着跳 */
+  min-width: 150px;
 }
-.note-row-group { max-width: 120px; }
+/* 分组标签的位置给它留出来（没有标签时留白），
+   这样「有没有分组」不会把时间列推来推去 */
+.note-row-group-slot {
+  display: inline-flex;
+  align-items: center;
+  max-width: 110px;
+  flex: 0 0 auto;
+}
+.note-row-group-slot.is-hidden { visibility: hidden; }
 .note-row-time {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  min-width: 62px;
+  text-align: right;
 }
 .note-row-del {
   border: none;
@@ -997,11 +1064,25 @@ html.dark .note-chip { color: var(--primary-light); }
   background: var(--border-light);
 }
 .notes-list.is-grid .note-row {
-  flex-direction: column;
+  /* 网格视图改成单列堆叠（.note-row 已经是 grid 了，
+     这里把三列摊平成一列） */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'icon'
+    'body'
+    'meta';
   gap: 6px;
   padding: 12px 14px;
   background: var(--bg-card);
   border-bottom: none;
+}
+.notes-list.is-grid .note-row-icon { grid-area: icon; }
+.notes-list.is-grid .note-row-body { grid-area: body; }
+.notes-list.is-grid .note-row-meta {
+  grid-area: meta;
+  width: 100%;
+  justify-content: space-between;
+  min-width: 0;
 }
 .notes-list.is-grid .note-row.is-active { background: var(--primary-bg); }
 .notes-list.is-grid .note-row-top { flex-wrap: wrap; gap: 4px 8px; }
@@ -1014,7 +1095,6 @@ html.dark .note-chip { color: var(--primary-light); }
   -webkit-box-orient: vertical;
   min-height: 3em;
 }
-.notes-list.is-grid .note-row-meta { width: 100%; justify-content: space-between; }
 
 /* 空状态 */
 .notes-empty {
@@ -1045,6 +1125,7 @@ html.dark .note-chip { color: var(--primary-light); }
 .notes-pager {
   margin-top: var(--space-4);
   justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 /* ============ 窄屏：侧栏变抽屉 ============ */
@@ -1080,5 +1161,11 @@ html.dark .note-chip { color: var(--primary-light); }
   .notes-toolbar { flex-wrap: wrap; }
   .notes-search { max-width: none; }
   .notes-toolbar-right { margin-left: 0; width: 100%; justify-content: space-between; }
+
+  /* 窄屏：右侧信息列别占那么宽 —— 标题正文才是主角 */
+  .note-row-meta { min-width: 0; gap: 8px; }
+  .note-row-group-slot { max-width: 90px; }
+  .note-row-time { min-width: 0; }
+  .notes-page { padding: var(--space-4) var(--space-4) var(--space-5); }
 }
 </style>

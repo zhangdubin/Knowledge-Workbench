@@ -54,6 +54,14 @@ class RewriteIn(BaseModel):
     style: str = "polish"
 
 
+class MeetingIn(BaseModel):
+    text: str
+
+
+class BeautifyIn(BaseModel):
+    text: str
+
+
 class TitleIn(BaseModel):
     content: str
 
@@ -171,6 +179,24 @@ async def tags(payload: TagsIn) -> dict:
         raise HTTPException(400, "文本为空")
     t = await ai_svc.extract_tags(payload.text, payload.max_tags)
     return {"tags": t}
+
+
+@router.post("/meeting-minutes", dependencies=_AI)
+async def meeting_minutes(payload: MeetingIn) -> dict:
+    """会议记录 → 结构化纪要（议题 / 讨论要点 / 决议 / 待办）"""
+    if not payload.text.strip():
+        raise HTTPException(400, "文本为空")
+    result = await ai_svc.meeting_minutes(payload.text)
+    return {"text": result}
+
+
+@router.post("/beautify-layout", dependencies=_AI)
+async def beautify_layout(payload: BeautifyIn) -> dict:
+    """针对内容给出具体的排版改进建议"""
+    if not payload.text.strip():
+        raise HTTPException(400, "文本为空")
+    result = await ai_svc.beautify_layout(payload.text)
+    return {"text": result}
 
 
 @router.post("/rewrite", dependencies=_AI)

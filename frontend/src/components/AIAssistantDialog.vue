@@ -138,6 +138,8 @@ const title = computed(() => {
     rewrite: '✏️ AI 改写',
     title: '📝 AI 生成标题',
     ask: '🤖 AI 智能问答',
+    meeting: '🗒️ 会议纪要整理',
+    layout: '🎨 排版美化建议',
   }
   return titles[props.task] || 'AI'
 })
@@ -151,7 +153,8 @@ const isTagOutput = computed(() => props.task === 'tags')
 const loading = ref(false)
 const rewriteStyle = ref('polish')
 const config = ref(null)
-const showApply = computed(() => ['rewrite', 'title', 'tags', 'summarize'].includes(props.task))
+// 会议纪要也能「应用到笔记」—— 整理完直接存进笔记里
+const showApply = computed(() => ['rewrite', 'title', 'tags', 'summarize', 'meeting'].includes(props.task))
 
 const placeholder = computed(() => {
   const map = {
@@ -159,6 +162,8 @@ const placeholder = computed(() => {
     tags: '请粘贴要提取标签的文本...',
     rewrite: '请粘贴要改写的文本...',
     title: '请粘贴要生成标题的内容...',
+    meeting: '把会议记录粘贴进来 —— 谁说了什么、定了什么、谁要做什么\n（原始记录越乱越好，AI 会帮你整理成议题 / 讨论要点 / 决议 / 待办）',
+    layout: '把要排版的正文粘贴进来 —— AI 会指出具体哪一段该怎么改',
   }
   return map[props.task] || ''
 })
@@ -205,6 +210,12 @@ async function run() {
     } else if (props.task === 'title') {
       resp = await Api.aiTitle(input.value)
       output.value = resp.title
+    } else if (props.task === 'meeting') {
+      resp = await Api.aiMeetingMinutes(input.value)
+      output.value = resp.text
+    } else if (props.task === 'layout') {
+      resp = await Api.aiBeautifyLayout(input.value)
+      output.value = resp.text
     } else if (props.task === 'ask') {
       const ctx = askScope.value === 'auto'
         ? props.contextItems.map(i => typeof i === 'string' ? i : (i.snippet || i.content || ''))

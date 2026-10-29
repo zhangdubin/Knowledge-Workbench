@@ -13,7 +13,10 @@
     class="data-table rt"
     :row-style="{ cursor: 'pointer' }"
     @row-click="(row) => $emit('open', row)"
+    @selection-change="(rows) => $emit('selection-change', rows)"
   >
+    <el-table-column v-if="selection" type="selection" width="46" reserve-selection />
+
     <el-table-column v-if="showTitle" label="记录" min-width="200" fixed="left">
       <template #default="{ row }">
         <button type="button" class="rt-title" @click.stop="$emit('open', row)">
@@ -106,9 +109,11 @@ const props = defineProps({
   canManage: { type: Boolean, default: true },
   showTitle: { type: Boolean, default: true },
   showUpdated: { type: Boolean, default: true },
+  // 是否显示多选列（批量删除用）
+  selection: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['edit', 'remove', 'open', 'graph'])
+const emit = defineEmits(['edit', 'remove', 'open', 'graph', 'selection-change'])
 
 const tableRef = ref(null)
 // 三个图标按钮 + 一点留白，够放下又不会挤掉列宽

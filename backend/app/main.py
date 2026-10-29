@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .config import settings
 from .database import SessionLocal, init_db
 from .routers import (    entity_types, records, relations, attachments, apps, search, notes, jsontree, ai,
-    knowledge, documents, note_groups, auth, system, dashboards, recycle,
+    knowledge, documents, note_groups, nav_items, auth, system, dashboards, recycle,
 )
 from .services.audit import AuditMiddleware
 from .services.auth import current_principal
@@ -201,7 +201,7 @@ app.include_router(auth.router)
 PROTECTED = [
     entity_types, records, relations, attachments, documents,
     apps, search, notes, knowledge, jsontree, ai, dashboards, recycle,
-    note_groups,
+    note_groups, nav_items,
 ]
 for mod in PROTECTED:
     app.include_router(mod.router, dependencies=[Depends(current_principal)])

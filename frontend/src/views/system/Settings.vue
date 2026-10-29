@@ -541,7 +541,7 @@
     <div class="card">
       <div class="card-title">
         <span class="card-title-text">
-          <el-icon class="title-ico"><Info /></el-icon>关于系统
+          <el-icon class="title-ico"><InfoFilled /></el-icon>关于系统
         </span>
       </div>
       <div class="about-rows">

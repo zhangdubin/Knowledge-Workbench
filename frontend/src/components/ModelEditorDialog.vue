@@ -1157,6 +1157,17 @@ async function checkJson() {
 }
 .fld-del:hover { background: var(--danger-bg); color: var(--danger); }
 
+/* 窄屏：字段行改成两行 —— 字段名一行，标记与删除按钮一行靠右。
+   原来是一行 nowrap，390px 下「必填/唯一」和删除按钮被挤出屏幕 144px，
+   手机上根本没法删字段（得先猜到这一行能横着拖）。 */
+@media (max-width: 720px) {
+  .fld { flex-wrap: wrap; }
+  .fld-main { flex: 1 1 100%; }
+  .fld-type { flex: 1 1 auto; width: auto; min-width: 0; }
+  .fld-flags { flex: 0 0 auto; margin-left: auto; }
+  .fld-del { margin-left: var(--space-1); }
+}
+
 .fld-sub {
   display: flex;
   gap: var(--space-3);

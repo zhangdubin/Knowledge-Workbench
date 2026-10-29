@@ -195,6 +195,12 @@ export const Api = {
   // 健康
   health: () => api.get('/api/health'),
 
+  // 左侧导航的自定义项
+  listNavItems: () => api.get('/api/nav-items'),
+  createNavItem: (data) => api.post('/api/nav-items', data),
+  updateNavItem: (id, data) => api.patch(`/api/nav-items/${id}`, data),
+  deleteNavItem: (id) => api.delete(`/api/nav-items/${id}`),
+
   // 应用（自定义 CRUD）
   listApps: () => api.get('/api/apps'),
   createApp: (data) => api.post('/api/apps', data),
@@ -359,6 +365,10 @@ export const Api = {
   aiSummarize: (text) => api.post('/api/ai/summarize', { text }),
   aiTags: (text, max_tags = 5) => api.post('/api/ai/tags', { text, max_tags }),
   aiRewrite: (text, style = 'polish') => api.post('/api/ai/rewrite', { text, style }),
+  // 会议记录 → 结构化纪要（议题/讨论要点/决议/待办）
+  aiMeetingMinutes: (text) => api.post('/api/ai/meeting-minutes', { text }),
+  // 针对内容给排版改进建议
+  aiBeautifyLayout: (text) => api.post('/api/ai/beautify-layout', { text }),
   aiTitle: (content) => api.post('/api/ai/title', { content }),
   // document_ids 为空且 auto_retrieve 为真时，服务端自动混合检索相关文件与笔记
   aiAsk: (question, context, opts = {}) =>

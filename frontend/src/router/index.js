@@ -41,6 +41,8 @@ const routes = [
       { path: 'system/recycle', name: 'sys-recycle', component: () => import('../views/system/Recycle.vue'), meta: { title: '回收站', perm: 'system' } },
       { path: 'system/storage', name: 'sys-storage', component: () => import('../views/system/Storage.vue'), meta: { title: '存储与备份', perm: 'system' } },
       { path: 'system/settings', name: 'sys-settings', component: () => import('../views/system/Settings.vue'), meta: { title: '系统设置', perm: 'system' } },
+      // 导航管理（自定义左侧导航项）
+      { path: 'system/nav', name: 'sys-nav', component: () => import('../views/NavManager.vue'), meta: { title: '导航管理', perm: 'system' } },
       // AI
       { path: 'ai-settings', name: 'ai-settings', component: () => import('../views/AISettings.vue'), meta: { title: 'AI 设置', perm: 'ai' } },
       // 使用指南

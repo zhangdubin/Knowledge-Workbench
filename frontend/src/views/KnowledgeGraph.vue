@@ -53,7 +53,7 @@
       :edges="graph.edges"
       :loading="loading"
       :truncated="!!graph.truncated"
-      height="600px"
+      height="calc(100vh - 340px)"
       :color-by="colorBy"
       empty-hint="还没有笔记，或者笔记之间还没有用 [[双链]] 互相引用"
       @select="openNote"
@@ -72,6 +72,10 @@
         <div class="tip">
           <span class="tip-k">连线</span>
           <span class="tip-v">在正文里写 [[笔记标题]] 就会生成双向链接，虚线表示它没有方向</span>
+        </div>
+        <div class="tip">
+          <span class="tip-k">看关系名</span>
+          <span class="tip-v">把鼠标放到节点或连线上，关系名会浮出来；一屏全挂反而看不清</span>
         </div>
         <div class="tip">
           <span class="tip-k">孤立节点</span>

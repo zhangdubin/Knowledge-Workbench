@@ -1,0 +1,166 @@
+/* ============================================================
+   手机端排版（≤768px）
+   ------------------------------------------------------------
+   为什么单独一个文件：顶栏挤在一起、弹窗浮在半空、表格横向溢出、
+   统计卡占掉半屏 —— 这些都是「跨页面」的问题。拆到各个 .vue 里改，
+   结果是每页只改一半，还互相不一致。这里集中收口。
+
+   导入顺序：本文件在 main.css 之后引入（见 main.js），
+   所以本文件的规则能覆盖 main.css 里同名的手机规则。
+   为什么不在 main.css 里 @import：CSS 规定 @import 必须写在文件最前面，
+   Vite 会把它内联到 main.css 的开头 —— 那样本文件反而会被 main.css 压住
+   （层叠看的是源码顺序），改了就等于没改。
+
+   规则只用设计令牌，不写死颜色：深浅色主题都成立。
+   ============================================================ */
+
+@media (max-width: 768px) {
+  /* ============ 弹窗：手机上整屏 ============
+     原来各页面的弹窗是固定 px 宽，被压成 100vw-24px 后仍然是个
+     「浮在页面上的小窗」：上下各留一条天空，正文区只剩一小截，
+     长表单要来回滑，还容易和背后的页面混在一起。
+     现在整屏占满：标题固定在顶部、正文自己滚、底部动作固定在底部，
+     和手机上原生页面的心智一致。 */
+  .el-overlay-dialog {
+    padding: 0 !important;
+    overflow: hidden;
+  }
+  .el-dialog {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100vh;
+    height: 100dvh;
+    margin: 0 !important;
+    border-radius: 0;
+    box-shadow: none;
+    display: flex;
+    flex-direction: column;
+  }
+  .el-dialog__header {
+    flex: 0 0 auto;
+    padding: 14px 46px 10px 16px !important;
+  }
+  .el-dialog__headerbtn {
+    top: 12px !important;
+    right: 12px !important;
+  }
+  .el-dialog__body {
+    flex: 1 1 auto;
+    max-height: none !important;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 16px !important;
+  }
+  .el-dialog__footer {
+    flex: 0 0 auto;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom)) !important;
+    background: var(--bg-card);
+  }
+  /* 弹窗里不要再套一层滚动条：正文区已经是唯一的滚动容器了 */
+  .el-dialog.dialog-shell .shell-body {
+    max-height: none;
+    overflow: visible;
+  }
+
+  /* ============ 抽屉：正文别贴边 ============
+     抽屉宽度 main.css 已经改成 100%（全屏），这里只把内边距收一点，
+     让内容在 390px 的屏上多出一两列。 */
+  .el-drawer:not(.mobile-drawer):not(.agent-drawer) .el-drawer__body {
+    padding: 16px !important;
+  }
+  .el-drawer:not(.mobile-drawer):not(.agent-drawer) .el-drawer__header {
+    padding: 14px 16px !important;
+  }
+
+  /* ============ 表格：手机上少留一点空白 ============
+     表格内容比屏幕宽是常态（页面本身不溢出，表格内部横向滚）。
+     这里把单元格内边距收窄，让一屏能多看到一列内容。 */
+  .el-table .cell {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .el-table__body-wrapper {
+    -webkit-overflow-scrolling: touch;
+  }
+  /* 固定在右侧的操作列：手机上宽度常常过半，给它一个更明显的边界 */
+  .el-table .el-table-fixed-column--right {
+    box-shadow: -6px 0 10px -8px var(--border);
+  }
+
+  /* ============ 悬停才出现的按钮：手机上要常驻 ============
+     触摸设备没有 hover，「鼠标移上去才浮现」的操作按钮等于永远点不到：
+     手机上删不掉笔记、改不了驾驶舱、也点不到文件卡片上的操作。
+     用 !important 是为了压过组件里的 scoped 规则。 */
+  .ft-actions,
+  .dc-actions,
+  .note-row-del,
+  .ng-side-more {
+    opacity: 1 !important;
+  }
+}
+
+@media (max-width: 640px) {
+  /* ============ 统计卡片：四个挤成一行 ============
+     之前是 2×2 两行（174px），在 844px 的屏上等于四分之一的屏幕，
+     底下的图谱/列表被顶到看不见。改成一行四个（57px），
+     图谱能往上提 120px。
+     图标在这里被收起来了 —— 85px 宽的卡里塞不下图标 + 数字 + 标签，
+     颜色线索改由顶部的一道色条承担，信息一点没丢。 */
+  .stat-grid {
+    grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+    gap: 8px;
+    margin-bottom: var(--space-4);
+  }
+  .stat-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 10px 10px 12px;
+    border-top: 2px solid var(--primary);
+  }
+  .stat-card .icon { display: none; }
+  .stat-card .value {
+    font-size: 20px;
+    letter-spacing: -0.4px;
+  }
+  .stat-card .label {
+    font-size: 12px;
+  }
+  .stat-card.success { border-top-color: var(--success); }
+  .stat-card.warning { border-top-color: var(--warning); }
+  .stat-card.danger { border-top-color: var(--danger); }
+  .stat-card.info { border-top-color: var(--info); }
+}
+
+/* ============ 分页器 ============
+   Element Plus 的分页器默认是 nowrap + 右对齐，
+   一旦页码多起来（审计日志 41 页），它会比容器宽 ——
+   而右对齐 + overflow:visible 的组合，多出来的部分是从**左边**被推出屏幕的，
+   于是「上一页 / 第 1 页」永远点不到，用户只能看到最后几页。
+
+   实测：审计日志分页器宽 647px，390px 视口下 10 个控件有 7 个在屏幕外。
+   同一套 el-pagination 在知识库、数据中心、记录页、应用页还有 4 处，
+   数据量一涨同样会坏 —— 所以在这里统一处理，一处改全好。
+*/
+@media (max-width: 640px) {
+  .el-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    row-gap: 8px;
+  }
+  /* 这些在窄屏是负担：条目数、每页条数、跳页输入框 */
+  .el-pagination__total,
+  .el-pagination__sizes,
+  .el-pagination__jump {
+    display: none !important;
+  }
+  /* 页码按钮收窄一点，能多放下两个 */
+  .el-pagination button,
+  .el-pagination .el-pager li {
+    min-width: 26px;
+    height: 26px;
+    line-height: 26px;
+    padding: 0 4px;
+  }
+}

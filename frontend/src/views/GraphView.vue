@@ -77,7 +77,7 @@
       :edges="graph.edges"
       :loading="loading"
       :truncated="!!graph.truncated"
-      height="620px"
+      height="calc(100vh - 340px)"
       color-by="type"
       :empty-hint="emptyHint"
       @select="openNode"
@@ -104,6 +104,10 @@
         <div class="tip">
           <span class="tip-k">虚线无箭头</span>
           <span class="tip-v">笔记之间的双向链接（wiki 链接），本身没有方向</span>
+        </div>
+        <div class="tip">
+          <span class="tip-k">看关系名</span>
+          <span class="tip-v">把鼠标放到节点或连线上，相关的关系名会浮出来；一屏全挂反而看不清</span>
         </div>
         <div class="tip">
           <span class="tip-k">点图例</span>

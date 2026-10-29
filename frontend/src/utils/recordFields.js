@@ -243,3 +243,65 @@ export function displayValue(field, value, labels = {}) {
   }
   return { kind: 'text', text: String(value) }
 }
+
+/**
+ * 默认显示哪些列
+ *
+ * 为什么长文本与附件不进表格：表格宽度有限，一个长文本列会把其它列全挤没；
+ * 而这些字段在卡片视图里看得到，所以不是「丢掉」，是换个地方呈现。
+ */
+export const TABLE_EXCLUDED_TYPES = ['file', 'image', 'textarea', 'richtext']
+export const DEFAULT_COLUMN_LIMIT = 8
+
+/** 可以显示成表格列的候选字段（长文本与附件排除在外） */
+export function tableCandidateFields(fields = []) {
+  return (fields || []).filter(f => !TABLE_EXCLUDED_TYPES.includes(f?.type))
+}
+
+/**
+ * 默认勾选的列（字段 key 列表）
+ *
+ * 为什么默认只勾 8 个：字段多的模型（如「文献」有 11 个字段）全塞进表格，
+ * 横向滚动会滚到用户放弃。默认给 8 个，剩下的让用户在「列显示设置」里自己加。
+ */
+export function defaultColumnKeys(fields = [], limit = DEFAULT_COLUMN_LIMIT) {
+  return tableCandidateFields(fields).slice(0, limit).map(f => f.key)
+}
+
+/**
+ * 按用户勾选的 key 过滤出真正的列
+ * @param {Array} fields 候选字段
+ * @param {Array} keys 勾选的字段 key
+ */
+export function filterColumnsByKeys(fields = [], keys = []) {
+  const set = new Set(keys || [])
+  return (fields || []).filter(f => set.has(f.key))
+}
+
+/**
+ * 当前有几个筛选条件生效
+ * 空串、空数组、null 都不算 —— 筛选器里「选了又清空」不该显示成有条件
+ */
+export function countActiveFilters(filters = {}) {
+  return Object.values(filters || {}).filter(v =>
+    v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length)).length
+}
+
+/**
+ * 把筛选状态整理成能发给接口的参数
+ *
+ * 为什么空值要剔掉：接口收到 {"level": []} 会当成「筛 level 等于空数组」，
+ * 结果一条都查不出来 —— 用户看到的却是「这个模型没有数据」。
+ */
+export function cleanFilterParams(filters = {}) {
+  const out = {}
+  for (const [k, v] of Object.entries(filters || {})) {
+    if (v === undefined || v === null || v === '') continue
+    if (Array.isArray(v)) {
+      if (v.length) out[k] = v
+    } else {
+      out[k] = v
+    }
+  }
+  return out
+}

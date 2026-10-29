@@ -269,6 +269,37 @@ class NoteGroup(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+# ============ 自定义导航项 ============
+class NavItem(Base):
+    """左侧导航的自定义项
+
+    内置导航（工作台 / 知识库 / 应用中心…）是写死在前端的，
+    但每个部署要的东西不一样：有人要把自己的一堆文档入口挂在侧栏，
+    有人要把某个应用顶到最前面。
+
+    所以另开一张表存**用户自己加的**导航项，内置项仍然由前端提供 ——
+    两边在前端合并（自定义项插在最后，或按 order 排）。
+
+    为什么不做「内置项也能改」：
+    内置项的 perm 是权限判定的一部分，删了会让某些页面没人能进，
+    还得再存一份权限配置 —— 复杂度暴涨。给一个「自定义项」已经够用了。
+
+    path 是站内路径（如 /apps/customer），必须是相对路径且不以 // 开头，
+    免得被塞进外站地址。
+    """
+    __tablename__ = "nav_item"
+
+    id = Column(Integer, primary_key=True)
+    label = Column(String(64), nullable=False)
+    path = Column(String(256), nullable=False)
+    icon = Column(String(32), default="")        # Element Plus 图标名（如 Grid）
+    group_name = Column(String(32), default="自定义")   # 挂在哪个分组下
+    description = Column(String(256), default="")
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class DocumentLink(Base):
     """文档 ↔ 业务记录 的关联
 
@@ -483,4 +514,5 @@ __all__ = [
     "RelationDef", "RelationRecord", "Attachment", "View", "App",
     "Document", "DocumentLink", "DocumentChunk", "SysMeta",
     "Dashboard", "Role", "User", "UserSession", "AuditLog",
+    "NoteGroup", "NavItem",
 ]

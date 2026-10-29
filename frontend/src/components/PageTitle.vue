@@ -29,20 +29,20 @@
  *     按钮不会被挤成两行或者溢出屏幕
  */
 import { computed } from 'vue'
-import {
-  Odometer, Notebook, Coin, Grid, Files, Share, DataAnalysis,
-  Search, MagicStick, Document, EditPen, UserFilled, Lock, Key,
-  Monitor, DataLine, Connection, Setting,
-} from '@element-plus/icons-vue'
+import * as ElementPlusIcons from '@element-plus/icons-vue'
 
-// 允许的图标集合 = ICON_MAP 的键；新增图标只要两处同步即可。
-// 白名单写死在这里（而不是引用模块变量）是因为 defineProps 会被提升到
-// setup() 之外，validator 里只能出现字面量。
-const ICON_MAP = {
-  Odometer, Notebook, Coin, Grid, Files, Share, DataAnalysis, Search, MagicStick,
-  Document, EditPen, UserFilled, Lock, Key, Monitor, DataLine, Connection, Setting,
-}
-
+// 图标直接用整个 Element Plus 图标包，不再维护 ICON_MAP。
+//
+// 为什么改：原来有一份 ICON_MAP + 一份 validator 数组，两处都得同步 ——
+// 而「新增图标只要两处同步即可」这句注释骗了人（实际漏一处就静默回退成工作台图标）。
+// 踩过：回收站与导航管理两个页面的标题图标长得一模一样（都是工作台那个表盘），
+// 用户看到的是「图标一样」，不是「报错了」，这种症状比报错更难查。
+//
+// 现在图标本身从包里取 —— 以后用任何 Element Plus 图标都不会再漏。
+//
+// ⚠️ validator 里只能用**字面量**：defineProps 会被提升到 setup() 之外，
+//    不能引用模块里的变量（引用了直接编译报错，整个组件 500）。
+//    所以这里校验的是「图标名长得像不像图标名」，真正的存在性交给 computed 兜底。
 const props = defineProps({
   title: { type: String, required: true },
   /** 描述。subtitle 是旧名字，仍然可用，两个都传时以 description 为准 */
@@ -51,16 +51,11 @@ const props = defineProps({
   iconKey: {
     type: String,
     default: 'Odometer',
-    validator: v => [
-      'Odometer', 'Notebook', 'Coin', 'Grid', 'Files', 'Share',
-      'DataAnalysis', 'Search', 'MagicStick', 'Document', 'EditPen',
-      'UserFilled', 'Lock', 'Key', 'Monitor', 'DataLine', 'Connection',
-      'Setting',
-    ].includes(v),
+    validator: v => typeof v === 'string' && /^[A-Z][A-Za-z0-9]*$/.test(v),
   },
 })
 
-const icon = computed(() => ICON_MAP[props.iconKey] || 'Odometer')
+const icon = computed(() => ElementPlusIcons[props.iconKey] || ElementPlusIcons.Odometer)
 const descText = computed(() => props.description || props.subtitle)
 </script>
 

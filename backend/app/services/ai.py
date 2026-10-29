@@ -210,10 +210,43 @@ async def chat_mock(messages: list[dict]) -> str:
         return last + "\n\n（已润色）"
     if "扩写" in sys or "expand" in sys.lower():
         return last + "\n\n进一步说明：此内容涉及关键业务逻辑，建议关注相关上下游关联。"
+    if "会议纪要" in sys or "meeting" in sys.lower():
+        return _meeting_mock(last)
+    if "排版" in sys or "layout" in sys.lower():
+        return _layout_mock(last)
     if "问答" in sys or "qa" in sys.lower():
         return "这是一个本地 mock 回复，未配置 LLM API。要获得智能问答，请在 AI 设置页配置 API Key。"
 
     return f"（Mock）收到你的内容：「{last[:50]}...」"
+
+
+def _meeting_mock(text: str) -> str:
+    """会议纪要 mock：按行提取要点，凑出一个像样的纪要骨架"""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    head = lines[:1]
+    points = [l for l in lines[1:] if len(l) > 3][:8]
+    out = ["## 会议纪要", ""]
+    if head:
+        out += [f"**议题**：{head[0]}", ""]
+    out += ["### 讨论要点", ""]
+    out += [f"- {p}" for p in points] if points else ["- （未识别到要点，请配置 AI 后重新生成）"]
+    out += ["", "### 待办事项", "", "- （待补充）"]
+    return "\n".join(out)
+
+
+def _layout_mock(text: str) -> str:
+    """排版建议 mock：给出几条通用建议"""
+    return "\n".join([
+        "## 排版建议",
+        "",
+        "1. **标题层级**：每节用 `##`，子条目用 `-`，别混用数字编号和符号列表",
+        "2. **段落长度**：超过 4 行就拆段，重点句单独成段",
+        "3. **表格**：字段多于 4 个就改用表格，两列以下就用列表",
+        "4. **强调**：关键结论用 `**粗体**`，只强调一次，别整段加粗",
+        "5. **代码与命令**：用代码块包起来，并标明语言",
+        "",
+        "> 配置 AI 后可获得针对具体内容的逐段排版建议。",
+    ])
 
 
 # ============ 业务功能封装 ============
@@ -256,6 +289,59 @@ async def rewrite(text: str, style: str = "polish") -> str:
     sys_prompt = style_map.get(style, style_map["polish"])
     return await chat_real([
         {"role": "system", "content": sys_prompt + " 直接返回改写后的内容。"},
+        {"role": "user", "content": text},
+    ])
+
+
+async def meeting_minutes(text: str) -> str:
+    """会议纪要整理
+
+    把一段散的会议记录整理成结构化纪要：议题、讨论要点、决议、待办。
+
+    为什么专门做这个：会议记录最大的问题是「读完了不知道谁要做什么」，
+    所以固定输出「待办事项」这一节 —— 每条待办都要求带负责人和动作，
+    没有负责人就写「未指定」，宁可写出来让人补，也别漏掉。
+    """
+    return await chat_real([
+        {"role": "system", "content": (
+            "你是会议纪要整理助手。请把下面的会议记录整理成结构化纪要，"
+            "严格使用以下 Markdown 结构，不要增减章节：\n\n"
+            "## 会议纪要\n\n"
+            "**时间**：从原文里找；找不到就写「未注明」\n"
+            "**参会人**：从原文里找；找不到就写「未注明」\n"
+            "**议题**：一句话概括\n\n"
+            "### 讨论要点\n\n"
+            "- 每条一个要点，按讨论顺序\n\n"
+            "### 决议\n\n"
+            "- 已经拍板的事；没有就写「本次无明确决议」\n\n"
+            "### 待办事项\n\n"
+            "- 格式：`- [ ] 动作（负责人，期限）`；负责人/期限原文没有就写「未指定」\n\n"
+            "要求：只整理原文里有的内容，不要编造；不要输出开场白或结束语。"
+        )},
+        {"role": "user", "content": text},
+    ])
+
+
+async def beautify_layout(text: str) -> str:
+    """排版美化建议
+
+    针对具体内容给出可执行的排版建议，而不是泛泛而谈
+    「建议使用标题」这种废话 —— 每条建议都要指出**哪一段**、**怎么改**。
+    """
+    return await chat_real([
+        {"role": "system", "content": (
+            "你是文档排版顾问。请针对下面这段内容给出具体的排版改进建议。\n\n"
+            "输出格式：\n\n"
+            "## 排版建议\n\n"
+            "逐条给出，每条包含：\n"
+            "1. **问题**：引用原文里具体的一小段（≤20 字）\n"
+            "2. **建议**：具体怎么改（改成什么结构、拆成几段、用什么标记）\n"
+            "3. **理由**：一句话说明为什么要改（对阅读/检索/结构化有什么好处）\n\n"
+            "要求：\n"
+            "- 建议要针对这段内容本身，不要给通用模板\n"
+            "- 不要重写内容，只讲排版\n"
+            "- 最后可以补一节「建议的最终结构」，用缩进列表给出改完之后的骨架"
+        )},
         {"role": "user", "content": text},
     ])
 

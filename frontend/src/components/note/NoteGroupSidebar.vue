@@ -17,7 +17,7 @@
       <span class="ng-side-title">分组</span>
       <!-- 分组数是「有几个分组」，跟上面的笔记数不是一回事，
            放在标题后面容易被当成「分组里有多少笔记」 -->
-      <span class="ng-side-count">{{ groups.length }} 个分组</span>
+      <span class="ng-side-count">{{ groups.length }} 个</span>
     </div>
 
     <nav class="ng-side-list" aria-label="分组列表">
@@ -50,6 +50,12 @@
       <!-- 「全部 / 未分组」是总览，下面才是真正的分组列表 ——
            用一条分隔线把两层分开，否则「未分组」看起来像个分组 -->
       <div class="ng-side-sep" aria-hidden="true"></div>
+
+      <!-- 分组列表标题：告诉用户「⋯」那个按钮能干什么 -->
+      <div v-if="groups.length" class="ng-side-sub">
+        <span>我的分组</span>
+        <span class="ng-side-sub-tip">悬停可重命名 / 改颜色</span>
+      </div>
 
       <!-- 各分组 -->
       <div
@@ -445,6 +451,23 @@ function pick(id) {
   height: 1px;
   background: var(--border-light);
   margin: 7px 8px;
+}
+
+.ng-side-sub {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 8px 4px;
+  font-size: 10px;
+  /* 不能用 --text-disabled：那是 3.05:1，达不到 4.5:1 的正文对比度。
+     这行是给用户看的说明文字，不是装饰。 */
+  color: var(--text-tertiary);
+  letter-spacing: 0.2px;
+}
+.ng-side-sub-tip {
+  font-size: 10px;
+  color: var(--text-tertiary);
 }
 
 .ng-side-hint {

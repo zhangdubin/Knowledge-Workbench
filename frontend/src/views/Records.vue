@@ -19,7 +19,11 @@
       </el-button>
     </PageTitle>
 
-    <!-- 工具栏 -->
+    <!--
+      工具条：搜索 + 筛选 + 列显示 + 视图切换
+      后三个是 RecordToolbar（与应用独立页共用同一个组件），
+      以前只有应用页有，用户会觉得「记录页功能少」——
+    -->
     <div class="toolbar">
       <el-input
         v-model="keyword"
@@ -32,6 +36,20 @@
         <template #prefix><el-icon><Search /></el-icon></template>
       </el-input>
       <el-button @click="load(1)">搜索</el-button>
+      <RecordToolbar
+        v-model:filters="filters"
+        v-model:visible-keys="visibleKeys"
+        v-model:view-mode="viewMode"
+        :filter-fields="filterFields"
+        :choices-map="choicesMap"
+        :display-fields="displayFields"
+        :default-keys="defaultKeys"
+        :selected-count="selected.length"
+        :can-manage="canManage"
+        @change="load(1)"
+        @clear-selection="clearSelection"
+        @batch-remove="batchRemove"
+      />
       <div class="spacer"></div>
       <span class="badge badge-ghost">共 {{ data.total || 0 }} 条</span>
       <el-button type="primary" @click="openCreate">
@@ -41,17 +59,32 @@
 
     <!-- 列表：与「应用独立页」共用同一套记录表格 -->
     <div class="card" style="padding:0;overflow:hidden">
-      <RecordTable
-        v-if="data.items?.length"
-        :records="data.items"
-        :columns="displayFields"
-        :labels="refLabels"
-        :loading="loading"
-        @edit="openEdit"
-        @remove="del"
-        @open="openDetail"
-        @graph="goRecordGraph"
-      />
+      <template v-if="data.items?.length">
+        <RecordTable
+          v-if="viewMode === 'table'"
+          :records="data.items"
+          :columns="columns"
+          :labels="refLabels"
+          :loading="loading"
+          :can-manage="canManage"
+          selection
+          @edit="openEdit"
+          @remove="del"
+          @open="openDetail"
+          @graph="goRecordGraph"
+          @selection-change="onSelectionChange"
+        />
+        <RecordCardGrid
+          v-else
+          :records="data.items"
+          :fields="cardFields"
+          :labels="refLabels"
+          :can-manage="canManage"
+          @edit="openEdit"
+          @remove="del"
+          @open="openDetail"
+        />
+      </template>
       <div v-else-if="!loading" class="empty-state" style="border:none;box-shadow:none">
         <div class="empty-icon"><el-icon :size="32"><Document /></el-icon></div>
         <div class="empty-title">暂无记录</div>
@@ -93,155 +126,18 @@
       @open-reference="goTargetRecord"
     >
       <template #extra>
-        <div v-if="detailRecord && entityType">
-        <div class="card" style="margin-bottom:12px">
-          <div class="card-title">
-            <span class="card-title-text">
-              <el-icon class="title-ico"><Connection /></el-icon>关联关系
-            </span>
-            <el-button size="small" @click="addRelationDialog = true">
-              <el-icon><Plus /></el-icon>添加关联
-            </el-button>
-          </div>
-          <div v-if="relations.length">
-            <div v-for="r in relations" :key="r.link_id" class="relation-item">
-              <span class="rel-name">{{ r.relation }}</span>
-              <span class="dir-badge" :class="r.direction">{{ r.direction === 'out' ? '指向' : '来自' }}</span>
-              <a class="rel-other" @click="goOther(r)">
-                <span class="ro-ico">{{ r.other_icon || '📦' }}</span>
-                {{ r.other_label }}
-                <el-tag v-if="r.other_kind === 'document'" size="small" effect="plain" type="info">文件</el-tag>
-              </a>
-              <el-button size="small" type="danger" text @click="delRelation(r.link_id)">
-                <el-icon><Delete /></el-icon>
-              </el-button>
-            </div>
-          </div>
-          <div v-else class="empty-hint">
-            <span>暂无关联</span>
-            <el-button link type="primary" size="small" @click="$router.push('/relations')">
-              去「关联定义」配置关系
-            </el-button>
-          </div>
-        </div>
-
-        <!-- 关联知识（记录 ↔ 知识库） -->
-        <div v-if="!knowledge.is_note" class="card" style="margin-bottom:12px">
-          <div class="card-title">
-            <span class="card-title-text">
-              <el-icon class="title-ico"><Notebook /></el-icon>关联知识
-              <span v-if="knowledge.notes?.length" class="badge badge-ghost">{{ knowledge.notes.length }}</span>
-            </span>
-            <div class="card-actions">
-              <el-button size="small" @click="openNoteLink">
-                <el-icon><Link /></el-icon>关联笔记
-              </el-button>
-              <el-button size="small" type="primary" plain :loading="materializing" @click="materialize">
-                <el-icon><MagicStick /></el-icon>沉淀为笔记
-              </el-button>
-            </div>
-          </div>
-
-          <div v-if="knowledge.notes?.length" class="kb-note-list">
-            <div v-for="n in knowledge.notes" :key="n.note_id" class="kb-note-item">
-              <div class="kb-note-icon"><el-icon><Notebook /></el-icon></div>
-              <div class="kb-note-body">
-                <div class="kb-note-title">
-                  <a @click="$router.push(`/notes/${n.note_id}`)">{{ n.title }}</a>
-                  <el-tag v-for="t in (n.tags || []).slice(0, 3)" :key="t" size="small" effect="plain">#{{ t }}</el-tag>
-                  <el-tag v-if="n.empty" size="small" type="info">空笔记</el-tag>
-                </div>
-                <div class="kb-note-snippet">{{ n.snippet || '（暂无内容）' }}</div>
-              </div>
-              <el-button size="small" text @click="$router.push(`/notes/${n.note_id}`)">
-                <el-icon><View /></el-icon>
-              </el-button>
-              <el-button size="small" type="danger" text @click="unlinkNote(n.note_id)">
-                <el-icon><Delete /></el-icon>
-              </el-button>
-            </div>
-          </div>
-          <div v-else class="empty-hint">
-            <span>还没有关联任何笔记。业务记录挂接知识库后，可在知识图谱中一起呈现。</span>
-          </div>
-        </div>
-
-        </div>
+        <!-- 关联关系 + 关联知识：与应用页共用同一个面板（以前只有记录页有） -->
+        <RecordRelationsPanel v-if="detailRecord" :record="detailRecord" />
       </template>
     </RecordDetailDrawer>
 
-    <!-- 关联笔记弹窗 -->
-    <el-dialog
-      v-model="noteLinkDialog"
-      title="关联知识库笔记"
-      width="560px"
-      class="rich-dialog"
-      :close-on-click-modal="false"
-    >
-      <div class="dialog-summary">
-        <el-icon :size="18"><Notebook /></el-icon>
-        <span>把当前记录与知识库中的笔记挂接起来。关联后，可在笔记详情与关联图谱中双向看到。</span>
-      </div>
-      <div class="form-section" style="margin-bottom:0">
-        <div class="form-section-title">选择笔记</div>
-        <el-select
-          v-model="selectedNoteId"
-          filterable
-          remote
-          reserve-keyword
-          clearable
-          placeholder="输入关键词搜索笔记…"
-          :remote-method="searchNotes"
-          :loading="noteSearching"
-          style="width:100%"
-        >
-          <el-option v-for="o in noteOptions" :key="o.id" :label="o.label" :value="o.id" />
-        </el-select>
-        <div class="form-hint" style="margin-top:8px">
-          找不到？先去
-          <a style="color:var(--primary);cursor:pointer" @click="$router.push('/notes')">知识库</a>
-          新建笔记，或点「沉淀为笔记」由当前记录自动生成。
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="noteLinkDialog = false">取消</el-button>
-        <el-button type="primary" :loading="linking" @click="linkNote">
-          <el-icon><Link /></el-icon>建立关联
-        </el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 添加关联（记录端 / 文件端统一由 RelationLinker 处理） -->
-    <RelationLinker
-      v-model="addRelationDialog"
-      :defs="relationDefs"
-      self-kind="record"
-      :self-id="detailRecord?.id"
-      :self-label="detailRecord ? (detailRecord.data?.name || detailRecord.data?.title || `#${detailRecord.id}`) : ''"
-      @linked="reloadRelations"
+    <!-- 批量导入：与应用独立页共用同一个弹窗 -->
+    <RecordImportDialog
+      v-model="importOpen"
+      :type-id="entityType?.id"
+      :type-name="entityType?.name"
+      @imported="load(1)"
     />
-
-    <!-- 批量导入 -->
-    <el-dialog v-model="importOpen" title="批量导入记录" width="620px">
-      <el-alert type="info" :closable="false" style="margin-bottom:14px"
-        title="CSV 列头需用字段 Key（先「导出 CSV」看一眼格式最稳）；JSON 支持数组或 {items:[]}" />
-      <div style="margin-bottom:10px">
-        <input type="file" accept=".csv,.json,.txt" @change="onImportFile" />
-      </div>
-      <el-input
-        v-model="importText"
-        type="textarea"
-        :rows="10"
-        placeholder="或直接把 CSV / JSON 内容粘贴到这里…"
-      />
-      <template #footer>
-        <span style="float:left;color:var(--el-text-color-secondary);font-size:12px">
-          逐行校验：合法行照常入库，错误行会报出位置和原因
-        </span>
-        <el-button @click="importOpen = false">取消</el-button>
-        <el-button type="primary" :loading="importing" @click="doImport">开始导入</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -250,17 +146,23 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../api'
+import { useAuthStore } from '../stores/auth'
 import PageTitle from '../components/PageTitle.vue'
-import RelationLinker from '../components/RelationLinker.vue'
 import RecordTable from '../components/record/RecordTable.vue'
+import RecordCardGrid from '../components/record/RecordCardGrid.vue'
 import RecordFormDrawer from '../components/record/RecordFormDrawer.vue'
 import RecordDetailDrawer from '../components/record/RecordDetailDrawer.vue'
+import RecordRelationsPanel from '../components/record/RecordRelationsPanel.vue'
 import RecordPagination from '../components/record/RecordPagination.vue'
-import { useRecordFields } from '../components/record/useRecordFields'
+import RecordToolbar from '../components/record/RecordToolbar.vue'
+import RecordImportDialog from '../components/record/RecordImportDialog.vue'
+import { useRecordFields, useRecordView } from '../components/record/useRecordFields'
 import { recordDisplayName } from '../utils/recordFields'
+import { defaultColumnKeys } from '../utils/recordFields'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 const typeId = computed(() => parseInt(route.params.typeId))
 
 const entityType = ref(null)
@@ -276,34 +178,44 @@ const editingRecord = ref(null)
 
 const detailOpen = ref(false)
 const detailRecord = ref(null)
-const relations = ref([])
 
-const addRelationDialog = ref(false)
-const relationDefs = ref([])
+const importOpen = ref(false)
 
-// 知识关联（记录 ↔ 笔记）
-const knowledge = ref({ notes: [], is_note: false, note_type: null })
-const noteLinkDialog = ref(false)
-const noteOptions = ref([])
-const noteSearching = ref(false)
-const selectedNoteId = ref(null)
-const linking = ref(false)
-const materializing = ref(false)
+// 批量删除：选中的记录
+const selected = ref([])
 
 // 外键显示名缓存与「哪些字段显示成列」都走公共逻辑：
 // 应用页与记录页共用同一套，否则两个入口的列和外键显示会对不上
-const { displayFields, refLabels, loadRefLabels } = useRecordFields(entityType, {
-  allTypesRef: allTypes,
+const { displayFields, cardFields, filterFields, choicesMap, refLabels, loadRefLabels } =
+  useRecordFields(entityType, { allTypesRef: allTypes })
+
+// 筛选 / 列显示 / 视图切换：与应用独立页共用同一份状态逻辑
+const {
+  filters, visibleKeys, viewMode, columns, resetForType, filterParams,
+} = useRecordView(entityType)
+
+// 默认勾选的列（恢复默认时用）
+const defaultKeys = computed(() => defaultColumnKeys(entityType.value?.fields || []))
+
+// 这个模型的记录能不能写：与应用独立页同一把尺子
+const canManage = computed(() => {
+  const t = entityType.value
+  if (!t) return false
+  return auth.canModel(t.key, 'write')
 })
 
 async function load(p) {
   if (p) page.value = p
   loading.value = true
   try {
+    const active = filterParams()
     data.value = await Api.listRecords(typeId.value, {
       page: page.value,
       page_size: pageSize.value,
-      keyword: keyword.value,
+      keyword: keyword.value || undefined,
+      // 筛选交给服务端：本地筛要把记录整个拉下来（上限 500 条），
+      // 超过这个数后面的记录筛不到，分页数字也是假的
+      filters: Object.keys(active).length ? JSON.stringify(active) : undefined,
     })
   } finally {
     loading.value = false
@@ -317,10 +229,6 @@ async function loadEntityType() {
   ])
   entityType.value = et
   allTypes.value = all
-}
-
-async function loadRelations() {
-  relationDefs.value = await Api.listRelationDefs()
 }
 
 function openCreate() {
@@ -356,153 +264,65 @@ async function del(row) {
   }
 }
 
+// ============ 批量删除 ============
+
+function onSelectionChange(rows) {
+  selected.value = rows || []
+}
+
+function clearSelection() {
+  selected.value = []
+}
+
+/**
+ * 批量删除
+ *
+ * 后端没有批量删除接口（只有 DELETE /api/records/{id}），
+ * 所以这里顺序调用单条删除 —— 顺序而不是并发，是为了别把后端打爆。
+ */
+async function batchRemove() {
+  const rows = selected.value
+  if (!rows.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${rows.length} 条记录吗？删除后可在回收站找回。`,
+      '批量删除',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  let ok = 0
+  let failed = 0
+  for (const row of rows) {
+    try {
+      await Api.deleteRecord(row.id)
+      ok++
+    } catch {
+      failed++
+    }
+  }
+  clearSelection()
+  if (failed) {
+    ElMessage.warning(`成功删除 ${ok} 条，${failed} 条失败`)
+  } else {
+    ElMessage.success(`已删除 ${ok} 条记录`)
+  }
+  load()
+}
+
 // ============ 导入 / 导出 ============
-const importOpen = ref(false)
-const importText = ref('')
-const importFormat = ref('csv')
-const importing = ref(false)
 
 function doExport() {
   // 走原生链接让浏览器处理下载（带 cookie 的同源请求）
   window.open(Api.exportRecordsUrl(typeId.value), '_blank')
 }
 
-async function doImport() {
-  if (!importText.value.trim()) {
-    ElMessage.warning('内容为空')
-    return
-  }
-  importing.value = true
-  try {
-    const r = await Api.importRecords(typeId.value, importText.value, importFormat.value)
-    const parts = [`新增 ${r.created} 条`]
-    if (r.failed) parts.push(`失败 ${r.failed} 行`)
-    if (r.warnings?.length) parts.push(r.warnings.join('；'))
-    if (r.failed) {
-      ElMessage.warning({
-        message: parts.join('；') + '。详情：' + r.errors.slice(0, 3).map(e => `第${e.row}行 ${e.reason}`).join(' / '),
-        duration: 8000,
-      })
-    } else {
-      ElMessage.success(parts.join('；'))
-    }
-    importOpen.value = false
-    importText.value = ''
-    load(1)
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || '导入失败')
-  } finally {
-    importing.value = false
-  }
-}
-
-function onImportFile(ev) {
-  const file = ev.target.files?.[0]
-  if (!file) return
-  const reader = new FileReader()
-  reader.onload = () => {
-    importText.value = String(reader.result || '')
-    importFormat.value = file.name.toLowerCase().endsWith('.json') ? 'json' : 'csv'
-  }
-  reader.readAsText(file)
-  ev.target.value = ''
-}
-
 async function openDetail(row) {
   detailRecord.value = await Api.getRecord(row.id)
-  relations.value = await Api.relationsForRecord(row.id)
   detailOpen.value = true
-  // 异步补齐，不阻塞抽屉打开
-  loadKnowledge(row.id)
+  // 关联关系与关联知识由 RecordRelationsPanel 自己加载（它 watch 记录变化）
   loadRefLabels()
-}
-
-// ============ 知识关联 ============
-
-async function loadKnowledge(recordId) {
-  try {
-    knowledge.value = await Api.getRecordKnowledge(recordId)
-  } catch (e) {
-    knowledge.value = { notes: [], is_note: false, note_type: null }
-  }
-}
-
-function openNoteLink() {
-  selectedNoteId.value = null
-  noteOptions.value = []
-  noteLinkDialog.value = true
-  searchNotes('')
-}
-
-async function searchNotes(q) {
-  const ntId = knowledge.value.note_type?.id
-  if (!ntId) return
-  noteSearching.value = true
-  try {
-    const r = await Api.listRecords(ntId, { keyword: q || '', page_size: 50 })
-    // 已关联的笔记不再出现在候选里
-    const linked = new Set((knowledge.value.notes || []).map(n => n.note_id))
-    noteOptions.value = (r.items || [])
-      .filter(x => !linked.has(x.id))
-      .map(x => ({ id: x.id, label: x.data?.title || `#${x.id}` }))
-  } catch (e) {
-    noteOptions.value = []
-  } finally {
-    noteSearching.value = false
-  }
-}
-
-async function linkNote() {
-  if (!selectedNoteId.value) {
-    ElMessage.warning('请先选择一条笔记')
-    return
-  }
-  linking.value = true
-  try {
-    await Api.linkKnowledge(detailRecord.value.id, selectedNoteId.value)
-    ElMessage.success('已关联')
-    noteLinkDialog.value = false
-    await loadKnowledge(detailRecord.value.id)
-  } finally {
-    linking.value = false
-  }
-}
-
-async function unlinkNote(noteId) {
-  try {
-    await Api.unlinkKnowledge(detailRecord.value.id, noteId)
-    ElMessage.success('已解除关联')
-    await loadKnowledge(detailRecord.value.id)
-  } catch (e) { /* 拦截器已提示 */ }
-}
-
-async function materialize() {
-  materializing.value = true
-  try {
-    const r = await Api.noteFromRecord(detailRecord.value.id)
-    ElMessage.success('已生成笔记并关联')
-    await loadKnowledge(detailRecord.value.id)
-    router.push(`/notes/${r.note_id}`)
-  } catch (e) { /* 拦截器已提示 */ } finally {
-    materializing.value = false
-  }
-}
-
-// ============ 外键显示名 ============
-// 外键显示名的加载已经收进 useRecordFields（应用页与记录页共用），
-// 这里不再单独维护一份缓存，避免两边显示的名字对不上。
-
-async function delRelation(rid) {
-  try {
-    await Api.deleteRelationRecord(rid)
-    relations.value = relations.value.filter(r => r.link_id !== rid)
-    ElMessage.success('已删除')
-  } catch {}
-}
-
-async function reloadRelations() {
-  if (!detailRecord.value) return
-  relations.value = await Api.relationsForRecord(detailRecord.value.id)
 }
 
 /** 关联对象的跳转：文件进数据中心，记录进对应模型 */
@@ -538,7 +358,8 @@ function goGraph() {
 
 onMounted(async () => {
   await loadEntityType()
-  await loadRelations()
+  // 换模型时重置视图状态：上一个模型的列名对不上新模型
+  resetForType()
   await load(1)
   loadRefLabels()
   // 如果 URL 带 id，自动打开详情
@@ -550,11 +371,9 @@ onMounted(async () => {
 
 watch(typeId, async () => {
   await loadEntityType()
+  resetForType()
   await load(1)
 })
-
-// 监听行点击：详情还是编辑？用 modifier 区分？简化：双击详情，点击编辑
-// 这里改成默认点击编辑，详情按钮触发
 </script>
 
 <style scoped>
@@ -674,7 +493,10 @@ watch(typeId, async () => {
 }
 .kb-note-body { flex: 1; min-width: 0; }
 .kb-note-title {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
   font-weight: 600;
 }
 .kb-note-title a { color: var(--primary); cursor: pointer; }

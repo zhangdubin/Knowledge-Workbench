@@ -895,8 +895,17 @@ onMounted(() => {
   background: var(--bg-subtle); margin-bottom: 14px;
 }
 .bk-cli-row { display: flex; gap: 12px; align-items: baseline; font-size: 12.5px; }
-.bk-cli-row code { background: var(--bg-card); flex: none; }
-.bk-cli-row span { color: var(--text-tertiary); }
+/* 长命令自己横滑，不要把整页撑破。
+   原来 flex:none + 487px 宽的 <code>，把 .el-main 撑到 587px，
+   手机上整页要左右晃，「crontab 每日 02:00 自动备份」那行说明完全跑到屏幕外。 */
+.bk-cli-row code {
+  background: var(--bg-card);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+.bk-cli-row span { color: var(--text-tertiary); flex: none; }
 
 /* ---- 还原确认对话框 ---- */
 .rs-summary { border: 1px solid var(--border-light); border-radius: 8px;

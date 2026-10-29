@@ -1030,8 +1030,12 @@ html.dark .note-chip { color: var(--primary-light); }
 .note-row-group-slot {
   display: inline-flex;
   align-items: center;
-  max-width: 110px;
-  flex: 0 0 auto;
+  /* 固定宽度 + 左对齐：不同长度的组名，色点仍在同一条竖线上。
+     （原来靠右对齐，标签一长一短，色点就东倒西歪，看着很乱） */
+  width: 96px;
+  flex: 0 0 96px;
+  justify-content: flex-start;
+  overflow: hidden;
 }
 .note-row-group-slot.is-hidden { visibility: hidden; }
 .note-row-time {
@@ -1148,6 +1152,10 @@ html.dark .note-chip { color: var(--primary-light); }
     bottom: 0;
     z-index: 200;
     width: 258px;
+    /* align-self: start 是桌面上「分组少就矮一点」的选择，
+       但它会让抽屉在手机上也只长到内容高度（实测 245px），
+       变成一个悬在半空的小面板 —— 抽屉就该是整列高 */
+    align-self: stretch;
     max-height: none;
     border-radius: 0;
     border-left: none;
@@ -1167,5 +1175,37 @@ html.dark .note-chip { color: var(--primary-light); }
   .note-row-group-slot { max-width: 90px; }
   .note-row-time { min-width: 0; }
   .notes-page { padding: var(--space-4) var(--space-4) var(--space-5); }
+}
+
+/* ============ 手机：页头与工具栏的排版 ============
+   之前 .notes-head 是个会换行的 flex 容器：换行之后动作按钮区
+   因为 justify-content: space-between 被甩到卡片最左边（x=33），
+   而标题在分组按钮后面（x=108），两者对不齐，看着像散架。
+   现在改成网格：标题、计数、动作各占明确的格子，
+   动作区的左边缘正好和标题对齐，右边缘和卡片对齐。 */
+@media (max-width: 768px) {
+  .notes-head {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    column-gap: var(--space-3);
+    row-gap: 10px;
+    align-items: center;
+  }
+  /* 主区这三个元素直接进网格，不再是嵌套的 flex 盒 */
+  .notes-head-main { display: contents; }
+  .notes-group-toggle { grid-area: 1 / 1; }
+  .notes-head-title { grid-area: 1 / 2; }
+  .notes-head-count { grid-area: 1 / 3; }
+  .notes-head-actions {
+    grid-area: 2 / 2 / 3 / 4;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  /* ⌘N 是给键盘用的，手机上没意义，还占地方 */
+  .notes-kbd { display: none; }
+
+  /* 搜索框独占一行，视图切换/分组另起一行 */
+  .notes-search { flex: 1 0 100%; }
+  .notes-toolbar-right { gap: var(--space-2); }
 }
 </style>

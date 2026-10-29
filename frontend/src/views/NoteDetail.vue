@@ -37,6 +37,12 @@
               <el-dropdown-item command="title">
                 <el-icon><EditPen /></el-icon>生成标题
               </el-dropdown-item>
+              <el-dropdown-item command="layout" divided>
+                <el-icon><Brush /></el-icon>美化排版
+              </el-dropdown-item>
+              <el-dropdown-item command="meeting">
+                <el-icon><Memo /></el-icon>整理会议纪要
+              </el-dropdown-item>
             </template>
           </el-dropdown>
           <el-popconfirm
@@ -325,9 +331,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowLeft, ArrowRight, Back, Check, Collection, Connection, DataBoard,
-  Document, Edit, EditPen, FolderOpened, InfoFilled, Loading, MagicStick, Notebook,
-  PriceTag, Right, Share, Top,
+  ArrowLeft, ArrowRight, Back, Brush, Check, Collection, Connection, DataBoard,
+  Document, Edit, EditPen, FolderOpened, InfoFilled, Loading, MagicStick, Memo,
+  Notebook, PriceTag, Right, Share, Top,
 } from '@element-plus/icons-vue'
 import { Api } from '../api'
 import { formatTime } from '../utils/format'

@@ -34,6 +34,17 @@
       </el-menu>
 
       <div class="sidebar-footer">
+        <!-- 自定义导航：管理员能直接在这里加一项，不用去「导航管理」页 -->
+        <button
+          v-if="canManageNav"
+          type="button"
+          class="collapse-btn nav-add-btn"
+          title="给左侧导航加一项"
+          @click="goNavManager"
+        >
+          <el-icon><Plus /></el-icon>
+          <span v-show="!collapsed">自定义导航</span>
+        </button>
         <button
           type="button"
           class="collapse-btn"
@@ -219,17 +230,19 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, onMounted, onUnmounted } from 'vue'
+import { computed, reactive, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AgentChat from './AgentChat.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Collection, Menu } from '@element-plus/icons-vue'
+import { Collection, Menu, Plus } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { isDark, toggleTheme } from '../utils/theme'
+import { useNavItems, mergeNavGroups } from '../composables/useNavItems'
 
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
+const navItems = useNavItems()
 
 // 导航表：perm 与后端 PAGES 对应；feature 是更细的操作级权限
 // （比如「系统管理」页要进得去，还得有 user_manage 才看得到用户管理）
@@ -256,20 +269,31 @@ const NAV = [
     { path: '/system/audit', label: '审计日志', icon: 'DocumentChecked', perm: 'system', feature: 'audit_view' },
     { path: '/system/recycle', label: '回收站', icon: 'Delete', perm: 'system', feature: 'model_manage' },
     { path: '/system/storage', label: '存储与备份', icon: 'Coin', perm: 'system', feature: 'storage_manage' },
+    { path: '/system/nav', label: '导航管理', icon: 'Menu', perm: 'system', feature: 'system_config' },
     { path: '/system/settings', label: '系统设置', icon: 'Setting', perm: 'system', feature: 'system_config' },
     { path: '/guide', label: '使用指南', icon: 'Compass', perm: 'guide' },
     { path: '/ai-settings', label: 'AI 设置', icon: 'MagicStick', perm: 'ai' },
   ] },
 ]
 
-const navGroups = computed(() => NAV
-  .map(g => ({
-    title: g.title,
-    items: g.items.filter(i => auth.canPage(i.perm) && (!i.feature || auth.can(i.feature))),
-  }))
-  .filter(g => g.items.length))
+const navGroups = computed(() => mergeNavGroups(
+  NAV
+    .map(g => ({
+      title: g.title,
+      items: g.items.filter(i => auth.canPage(i.perm) && (!i.feature || auth.can(i.feature))),
+    }))
+    .filter(g => g.items.length),
+  navItems.items.value,
+  (perm) => auth.canPage(perm),
+))
 
 const avatarText = computed(() => (auth.displayName || '?').slice(0, 1))
+
+// 有系统配置权限才能改导航（跟后端 require_feature('system_config') 对齐）
+const canManageNav = computed(() => auth.can('system_config'))
+function goNavManager() {
+  router.push('/system/nav')
+}
 
 // ---- 侧边栏折叠 ----
 // 折叠状态存到 localStorage：这是「工作台形状」的偏好，
@@ -411,6 +435,14 @@ function handleKey(e) {
 onMounted(async () => {
   readCollapse()
   await auth.bootstrap()
+  // 自定义导航项：登录后拉一次。拉失败也不影响内置导航（composable 里兜住了）。
+  //
+  // 不能只在 onMounted 里拉：Layout 在登录页就已经挂载了，
+  // 那时还没登录、拉不到东西；等用户登录完，组件不会重新挂载，
+  // 于是自定义项永远不出现（踩过）。
+  // 所以监听登录状态，登录了就拉一次。
+  if (auth.isLoggedIn) navItems.load()
+  watch(() => auth.isLoggedIn, (v) => { if (v) navItems.load() })
   window.addEventListener('keydown', handleKey)
   checkMobile()
   window.addEventListener('resize', checkMobile)
@@ -773,14 +805,26 @@ onUnmounted(() => {
     display: inline-flex;
   }
 
+  /* ---- 顶栏在手机上的排版 ----
+     之前右组是 flex: 1 0 0（按比例分到一半宽度），但它自己的内容
+     （搜索框 min-width 96 + AI 按钮 + 主题按钮 + 头像）要 232px，
+     塞进 181px 的盒子里就会向左溢出、压在页面标题上（实测压住 63px）。
+     现在：顶栏允许换行，右组用 display:contents 让子元素直接参与顶栏布局，
+     搜索框收成一个放大镜图标，点开才展开独占一整行。 */
   .topbar {
-    height: 54px;
-    padding: 0 12px 0 16px;
+    height: auto;
+    min-height: 54px;
+    padding: 0 10px 0 12px;
+    flex-wrap: wrap;
+    align-content: center;
+    justify-content: flex-start;
+    column-gap: 8px;
+    row-gap: 8px;
   }
 
   .topbar-left {
     gap: 8px;
-    flex: 1;
+    flex: 1 1 auto;
     min-width: 0;
   }
 
@@ -795,25 +839,50 @@ onUnmounted(() => {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
-  }
-
-  .topbar-right {
-    gap: 8px;
-    flex: 1 0 0;
-    justify-content: flex-end;
+    flex: 1 1 auto;
     min-width: 0;
   }
 
-  .search-input {
-    width: auto;
-    flex: 1;
-    min-width: 96px;
-    max-width: 240px;
+  /* 右组不再是一个盒子：它的子元素直接排进顶栏，
+     这样搜索框才能换到第二行，而不是把三个按钮顶出边界 */
+  .topbar-right {
+    display: contents;
   }
 
+  /* 顶栏从左到右：菜单 → 标题 → 搜索 → AI → 主题 → 头像 */
+  .topbar-right > .el-button,
+  .topbar-right > .el-dropdown {
+    order: 20;
+  }
+
+  .search-input {
+    order: 10;
+    width: 34px;
+    flex: 0 0 34px;
+    min-width: 0;
+    max-width: none;
+  }
+
+  /* 展开：独占一整行，宽度给满。
+     order 调到 30（按钮是 20）：这样它换行时不会把 AI/主题/头像挤到第三行 */
   .search-input.focused {
-    width: auto;
+    order: 30;
+    width: 100%;
+    flex: 1 0 100%;
+    max-width: none;
+  }
+
+  /* 收起时只留放大镜图标：文字输入框透明，
+     点一下（拿到焦点）就展开成整行输入框 */
+  .search-input:not(.focused) :deep(.el-input__inner) {
+    opacity: 0;
+  }
+  .search-input:not(.focused) :deep(.el-input__clear) {
+    display: none;
+  }
+  .search-input:not(.focused) :deep(.el-input__wrapper) {
+    padding-left: 7px;
+    padding-right: 7px;
   }
 
   .search-input :deep(.el-input__wrapper) {

@@ -144,6 +144,7 @@
 </template>
 
 <script setup>
+import PageTitle from '../components/PageTitle.vue'
 import { ref } from 'vue'
 
 const STORAGE = [

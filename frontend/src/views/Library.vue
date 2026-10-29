@@ -189,12 +189,12 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="大小" width="110">
+            <el-table-column v-if="!narrow" label="大小" width="110">
               <template #default="{ row }">
                 <span class="cell-number">{{ formatSize(row.size) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="关联记录" width="260">
+            <el-table-column v-if="!narrow" label="关联记录" width="260">
               <template #default="{ row }">
                 <template v-if="(row.links || []).length || (row.relations || []).length">
                   <a
@@ -229,12 +229,12 @@
                 <span v-else class="cell-empty">未关联</span>
               </template>
             </el-table-column>
-            <el-table-column label="上传时间" width="170">
+            <el-table-column v-if="!narrow" label="上传时间" width="170">
               <template #default="{ row }">
                 <span class="cell-time">{{ formatTime(row.created_at) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="200" fixed="right">
+            <el-table-column label="操作" :width="narrow ? 148 : 200" fixed="right">
               <template #default="{ row }">
                 <el-tooltip content="预览" placement="top" :show-after="400">
                   <el-button size="small" link type="primary" :aria-label="`预览 ${row.filename}`"
@@ -860,7 +860,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref, computed, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -890,7 +890,18 @@ const uploading = ref([])
 const files = ref([])
 const fileKeyword = ref('')
 const typeFilter = ref('')
-const viewMode = ref('list')
+// 手机上默认用卡片视图：列表视图的内容宽 1020px（文件/大小/关联记录/
+// 上传时间/操作），塞进 390px 的屏里只能横着滑，滑到哪一列都认不出来。
+const narrowMq = window.matchMedia('(max-width: 768px)')
+const narrow = ref(narrowMq.matches)
+function syncNarrow() {
+  narrow.value = narrowMq.matches
+}
+syncNarrow()
+narrowMq.addEventListener('change', syncNarrow)
+onBeforeUnmount(() => narrowMq.removeEventListener('change', syncNarrow))
+
+const viewMode = ref(narrow.value ? 'grid' : 'list')
 const loading = ref(false)
 const page = ref(1)
 const pageSize = ref(24)

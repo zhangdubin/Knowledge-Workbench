@@ -34,6 +34,21 @@
         <el-button :disabled="!canManageModel" @click="newModel">
           <el-icon><Plus /></el-icon>新建模型
         </el-button>
+        <!--
+          记录操作：导出 / 导入 / 图谱
+          以前这一排只有「新建模型 / 录入记录」，记录本身的进出与查看入口全缺，
+          用户会以为「应用里的记录只能录不能导」——
+          现在与「记录页」完全对齐。
+        -->
+        <el-button :disabled="!currentType" @click="doExport">
+          <el-icon><Download /></el-icon>导出 CSV
+        </el-button>
+        <el-button :disabled="!currentType" @click="importOpen = true">
+          <el-icon><Upload /></el-icon>导入
+        </el-button>
+        <el-button :disabled="!currentType" @click="openTypeGraph">
+          <el-icon><Share /></el-icon>关联图谱
+        </el-button>
         <el-button type="primary" :disabled="!canManage || !currentType" @click="createRecord">
           <el-icon><EditPen /></el-icon>录入记录
         </el-button>
@@ -122,72 +137,24 @@
             @clear="reload"
           />
 
-          <!-- 筛选器：只对枚举 / 布尔字段有意义 -->
-          <el-popover v-if="filterFields.length" placement="bottom-end" :width="260" trigger="click">
-            <template #reference>
-              <el-button>
-                <el-icon><Filter /></el-icon>筛选
-                <span v-if="activeFilterCount" class="aw-filter-badge">{{ activeFilterCount }}</span>
-              </el-button>
-            </template>
-            <div class="aw-filters">
-              <div v-for="f in filterFields" :key="f.key" class="aw-filter">
-                <div class="aw-filter-label">{{ f.name }}</div>
-                <el-select
-                  v-if="f.type === 'boolean'"
-                  v-model="filters[f.key]"
-                  clearable
-                  placeholder="全部"
-                  @change="onFilterChange"
-                >
-                  <el-option label="是" :value="true" />
-                  <el-option label="否" :value="false" />
-                </el-select>
-                <el-select
-                  v-else
-                  v-model="filters[f.key]"
-                  clearable
-                  multiple
-                  collapse-tags
-                  collapse-tags-tooltip
-                  placeholder="全部"
-                  @change="onFilterChange"
-                >
-                  <el-option
-                    v-for="c in choicesMap[f.key] || []"
-                    :key="c"
-                    :label="c"
-                    :value="c"
-                  />
-                </el-select>
-              </div>
-              <div v-if="activeFilterCount" class="aw-filter-clear">
-                <el-button text @click="clearFilters">清空筛选</el-button>
-              </div>
-            </div>
-          </el-popover>
-
-          <!-- 列显示设置 -->
-          <el-popover placement="bottom-end" :width="220" trigger="click">
-            <template #reference>
-              <el-button aria-label="列显示设置">
-                <el-icon><Operation /></el-icon>列
-              </el-button>
-            </template>
-            <div class="aw-cols">
-              <div class="aw-cols-title">显示哪些字段</div>
-              <el-checkbox
-                v-for="f in displayFields"
-                :key="f.key"
-                v-model="visibleKeys"
-                :value="f.key"
-                class="aw-col-item"
-              >{{ f.name }}</el-checkbox>
-              <div v-if="!displayFields.length" class="aw-cols-empty">这个模型还没有字段</div>
-            </div>
-          </el-popover>
-
-          <el-segmented v-model="viewMode" :options="viewOptions" />
+          <!--
+            筛选器 / 列显示 / 视图切换：与「记录页」共用 RecordToolbar
+            （以前这套是本页内联写的，记录页没有，两边手感对不上）
+          -->
+          <RecordToolbar
+            v-model:filters="filters"
+            v-model:visible-keys="visibleKeys"
+            v-model:view-mode="viewMode"
+            :filter-fields="filterFields"
+            :choices-map="choicesMap"
+            :display-fields="displayFields"
+            :default-keys="defaultKeys"
+            :selected-count="selected.length"
+            :can-manage="canManage"
+            @change="reload"
+            @clear-selection="clearSelection"
+            @batch-remove="batchRemove"
+          />
 
           <el-button type="primary" :disabled="!canManage || !currentType" @click="createRecord">
             <el-icon><Plus /></el-icon>新建记录
@@ -235,10 +202,12 @@
               :labels="refLabels"
               :loading="loading"
               :can-manage="canManage"
+              selection
               @edit="editRecord"
               @remove="removeRecord"
               @open="openRecord"
               @graph="openGraph"
+              @selection-change="onSelectionChange"
             />
           </div>
           <RecordCardGrid
@@ -281,6 +250,22 @@
       :can-edit="canManage"
       @edit="editFromDetail"
       @open-reference="openReference"
+    >
+      <!-- 关联关系 + 关联知识：应用页以前是空的，
+           用户从「客户管理 → 某个模型 → 某条记录」进来看不到任何关联，
+           会以为应用里的记录没有关联功能。
+           现在跟记录页共用同一个面板。 -->
+      <template #extra>
+        <RecordRelationsPanel v-if="detailRecord" :record="detailRecord" />
+      </template>
+    </RecordDetailDrawer>
+
+    <!-- 批量导入：与「记录页」共用同一个弹窗 -->
+    <RecordImportDialog
+      v-model="importOpen"
+      :type-id="currentType?.id"
+      :type-name="currentType?.name"
+      @imported="onImported"
     />
   </div>
 </template>
@@ -290,22 +275,25 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ArrowLeft, Document, EditPen, Files, Filter, Operation, Plus, Search,
+  ArrowLeft, Document, Download, EditPen, Files, Plus, Search, Share, Upload,
 } from '@element-plus/icons-vue'
 import { Api } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { resolveAppIcon } from '../utils/apps'
 import { APP_ICON_CHOICES } from '../utils/icons'
 import {
-  recordDisplayName,
+  recordDisplayName, defaultColumnKeys,
 } from '../utils/recordFields'
 import EmptyState from '../components/EmptyState.vue'
 import RecordTable from '../components/record/RecordTable.vue'
+import RecordRelationsPanel from '../components/record/RecordRelationsPanel.vue'
 import RecordCardGrid from '../components/record/RecordCardGrid.vue'
 import RecordFormDrawer from '../components/record/RecordFormDrawer.vue'
 import RecordPagination from '../components/record/RecordPagination.vue'
 import RecordDetailDrawer from '../components/record/RecordDetailDrawer.vue'
-import { useRecordFields } from '../components/record/useRecordFields'
+import RecordToolbar from '../components/record/RecordToolbar.vue'
+import RecordImportDialog from '../components/record/RecordImportDialog.vue'
+import { useRecordFields, useRecordView } from '../components/record/useRecordFields'
 
 const route = useRoute()
 const router = useRouter()
@@ -322,9 +310,12 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(50)
 const keyword = ref('')
-const filters = ref({})
-const viewMode = ref('table')
-const visibleKeys = ref([])
+
+// 批量删除：选中的记录
+const selected = ref([])
+
+// 导入记录弹窗
+const importOpen = ref(false)
 
 const loadingModels = ref(true)
 const loading = ref(false)
@@ -336,15 +327,18 @@ const detailRecord = ref(null)
 
 const narrow = ref(false)
 
-const viewOptions = [
-  { label: '表格', value: 'table' },
-  { label: '卡片', value: 'card' },
-]
-
 // 记录区要用到的字段分组
 const {
   fields, displayFields, cardFields, filterFields, choicesMap, refLabels, loadRefLabels,
 } = useRecordFields(currentTypeFull, { allTypesRef: allTypes })
+
+// 筛选 / 列显示 / 视图切换：与「记录页」共用同一份状态逻辑
+const {
+  filters, visibleKeys, viewMode, columns, resetForType, clearFilters, filterParams,
+} = useRecordView(currentTypeFull)
+
+// 默认勾选的列（恢复默认时用）
+const defaultKeys = computed(() => defaultColumnKeys(currentTypeFull.value?.fields || []))
 
 // 模型结构归 model_manage 管；记录能不能写归模型级权限管（models: {key: read|write}）
 const canManageModel = computed(() => auth.can('model_manage'))
@@ -360,9 +354,6 @@ const totalFields = computed(() => models.value.reduce((s, m) => s + (m.field_co
 const activeFilterCount = computed(() =>
   Object.values(filters.value).filter(v =>
     v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length)).length)
-
-// 表格列：用户可以自己勾掉不关心的字段
-const columns = computed(() => displayFields.value.filter(f => visibleKeys.value.includes(f.key)))
 
 // ============ 加载 ============
 
@@ -403,15 +394,12 @@ async function selectModel(m) {
   if (!m) return
   currentTypeId.value = m.id
   page.value = 1
-  filters.value = {}
   keyword.value = ''
   try {
     // 列表接口不返回字段定义，字段要单独取一份完整的
     currentTypeFull.value = await Api.getEntityType(m.id)
-    visibleKeys.value = (currentTypeFull.value?.fields || [])
-      .filter(f => !['file', 'image', 'textarea', 'richtext'].includes(f.type))
-      .slice(0, 8)
-      .map(f => f.key)
+    // 换模型时重置视图状态：上一个模型的列名对不上新模型
+    resetForType()
     await loadRefLabels()
     await loadRecords()
   } catch {
@@ -448,15 +436,7 @@ async function loadRecords() {
     // 一次最多 500 条 —— 超过这个数，后面的记录用户根本筛不到，
     // 而且分页数字是假的（第 2 页可能是空的）。
     // 服务端筛是「在库里过滤 + 过滤后的 total」，才是真的。
-    const active = {}
-    for (const [k, v] of Object.entries(filters.value || {})) {
-      if (v === undefined || v === null || v === '') continue
-      if (Array.isArray(v)) {
-        if (v.length) active[k] = v
-      } else {
-        active[k] = v
-      }
-    }
+    const active = filterParams()
     const r = await Api.listRecords(currentType.value.id, {
       page: page.value,
       page_size: pageSize.value,
@@ -491,20 +471,9 @@ function onPageSizeChange(s) {
   loadRecords()
 }
 
-function onFilterChange() {
-  page.value = 1
-  loadRecords()
-}
-
-function clearFilters() {
-  filters.value = {}
-  page.value = 1
-  loadRecords()
-}
-
 function clearSearch() {
   keyword.value = ''
-  filters.value = {}
+  clearFilters()
   page.value = 1
   loadRecords()
 }
@@ -535,6 +504,69 @@ function editFromDetail() {
 
 function openGraph(rec) {
   router.push(`/graph?record=${rec.id}`)
+}
+
+/** 整个模型的关联图谱：与「记录页」的「关联图谱」按钮去同一个地方 */
+function openTypeGraph() {
+  if (!currentType.value) return
+  router.push(`/graph?type=${currentType.value.id}`)
+}
+
+/**
+ * 导出 CSV
+ * 走原生链接让浏览器处理下载（带 cookie 的同源请求）
+ */
+function doExport() {
+  if (!currentType.value) return
+  window.open(Api.exportRecordsUrl(currentType.value.id), '_blank')
+}
+
+// ============ 批量删除 ============
+
+function onSelectionChange(rows) {
+  selected.value = rows || []
+}
+
+function clearSelection() {
+  selected.value = []
+}
+
+/**
+ * 批量删除
+ *
+ * 后端没有批量删除接口（只有 DELETE /api/records/{id}），
+ * 所以这里顺序调用单条删除 —— 顺序而不是并发，是为了别把后端打爆。
+ */
+async function batchRemove() {
+  const rows = selected.value
+  if (!rows.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${rows.length} 条记录吗？删除后可在回收站找回。`,
+      '批量删除',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  let ok = 0
+  let failed = 0
+  for (const row of rows) {
+    try {
+      await Api.deleteRecord(row.id)
+      ok++
+    } catch {
+      failed++
+    }
+  }
+  clearSelection()
+  if (failed) {
+    ElMessage.warning(`成功删除 ${ok} 条，${failed} 条失败`)
+  } else {
+    ElMessage.success(`已删除 ${ok} 条记录`)
+  }
+  await refreshModels()
+  await loadRecords()
 }
 
 /** 点关联字段里的名字：跳到被关联的那条记录 */
@@ -572,6 +604,12 @@ async function removeRecord(rec) {
 function onSaved() {
   refreshModels()
   loadRecords()
+}
+
+/** 导入记录后刷新：记录数变了，侧栏的模型计数也要跟着变 */
+function onImported() {
+  refreshModels()
+  loadRecords(1)
 }
 
 function newModel() {
@@ -847,38 +885,9 @@ watch(() => route.params.appKey, async () => {
 .aw-bar-count { font-size: var(--text-sm); color: var(--text-secondary); }
 .aw-bar-spacer { flex: 1; }
 .aw-search { width: 230px; }
-.aw-filter-badge {
-  display: inline-block;
-  min-width: 16px;
-  height: 16px;
-  line-height: 16px;
-  padding: 0 4px;
-  margin-left: 4px;
-  border-radius: var(--radius-full);
-  background: var(--primary);
-  color: #fff;
-  font-size: 10px;
-  text-align: center;
-}
 
-.aw-filters { display: flex; flex-direction: column; gap: var(--space-3); }
-.aw-filter-label {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-.aw-filter-clear { text-align: right; }
-
-.aw-cols { display: flex; flex-direction: column; gap: 2px; }
-.aw-cols-title {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: var(--space-2);
-}
-.aw-col-item { margin: 0; min-height: 28px; }
-.aw-cols-empty { font-size: var(--text-sm); color: var(--text-secondary); }
+/* 筛选器 / 列显示的样式已经搬进 RecordToolbar（两页共用），
+   这里不再留一份 —— 留两份迟早会改漏一边，用户又会看到「两个入口不一样」。 */
 
 .aw-table {
   border: 1px solid var(--border-light);

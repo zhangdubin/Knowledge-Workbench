@@ -421,6 +421,25 @@
             </div>
           </div>
 
+          <!-- 连不上 GitHub 时没有任何障碍清单（接口在取版本阶段就失败了），
+               只显示「当前环境不能自动升级」等于把路堵死。
+               这里补一条手动升级命令 —— 用户至少知道下一步该干什么。 -->
+          <div v-if="manualCommand" class="upgrade-enable">
+            <div class="upgrade-enable-title">
+              <el-icon><MagicStick /></el-icon>
+              连不上版本服务器时，<b>手动升级</b>：
+              <el-button text size="small" @click="copyEnable">
+                <el-icon><CopyDocument /></el-icon>复制命令
+              </el-button>
+            </div>
+            <pre class="upgrade-enable-cmd mono">{{ manualCommand }}</pre>
+            <div class="upgrade-enable-tip">
+              {{ upgradeTipText(upgrade.plan?.current || '', upgrade.plan?.mode === DEPLOY_MODE.OFFLINE ? DEPLOY_MODE.OFFLINE : DEPLOY_MODE.GIT) }}
+              <br />
+              若是离线包部署：先从 Release 页下载新版本离线包并解压，再执行上面的命令。
+            </div>
+          </div>
+
           <!-- 开启引导：这套部署支持自动升级，只是前置条件没齐。
                与其让人照着上面的文字自己改 YAML（多半会放弃），
                不如给一条能在服务器上直接跑的命令。
@@ -568,7 +587,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../../api'
-import { upgradeCommand, upgradeTip as upgradeTipText, DEPLOY_MODE, planSummary as planSummaryText, assetSize as assetSizeText, autoUpgradeSupported, enableCommands as enableCommandsOf, isLatestPlan } from '../../utils/update'
+import { upgradeCommand as upgradeCommandText, upgradeTip as upgradeTipText, DEPLOY_MODE, planSummary as planSummaryText, assetSize as assetSizeText, autoUpgradeSupported, enableCommands as enableCommandsOf, isLatestPlan } from '../../utils/update'
 import { useAuthStore } from '../../stores/auth'
 import PageTitle from '../../components/PageTitle.vue'
 import MarkdownText from '../../components/MarkdownText.vue'
@@ -651,7 +670,7 @@ function copyUpgradeCmd() {
 // 第三个参数是部署模式：离线包部署的机器上根本没有 git，
 // 给它 git 命令只会得到 "git: command not found"。
 const deployMode = ref(DEPLOY_MODE.GIT)
-const upgradeCmd = computed(() => upgradeCommand(
+const upgradeCmd = computed(() => upgradeCommandText(
   updateInfo.value?.current, updateInfo.value?.latest, deployMode.value))
 const upgradeTip = computed(() => upgradeTipText(updateInfo.value?.current, deployMode.value))
 
@@ -687,6 +706,23 @@ const manualCommands = computed(() => upgrade.plan?.manual_commands || [])
 // 这跟手动升级命令不是一回事：手动命令是「这次怎么升」，
 // 开启命令是「把自动升级这个能力装上」，装好之后每次升级都不用再跑命令。
 const enableCommands = computed(() => enableCommandsOf(upgrade.plan))
+
+/**
+ * 查不到目标版本时的手动升级路径
+ *
+ * 之前有个死路：容器出不了网（连不上 api.github.com）时，
+ * 后端拿不到目标版本 → 弹窗只显示「当前环境不能自动升级」，
+ * 既没有障碍清单（接口在取版本时就失败了），也没有命令 ——
+ * 用户盯着这句话什么也做不了。
+ *
+ * 所以这种时候补一条手动升级命令：告诉他去哪儿拿新版本、怎么装。
+ */
+const manualCommand = computed(() => {
+  // 已经能走自动升级了就不用再给手动命令
+  if (upgrade.plan?.feasible) return ''
+  const mode = upgrade.plan?.mode === DEPLOY_MODE.OFFLINE ? DEPLOY_MODE.OFFLINE : DEPLOY_MODE.GIT
+  return upgradeCommandText(upgrade.plan?.current || '', upgrade.plan?.target || '', mode)
+})
 // 目标版本在 Release 上的资产。离线部署要下载镜像包，
 // 用户得先知道这玩意儿多大、要等多久。
 const releaseAssets = computed(() => upgrade.plan?.release_assets || [])

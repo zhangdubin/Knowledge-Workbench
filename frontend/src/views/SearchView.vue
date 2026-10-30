@@ -28,15 +28,21 @@
           <el-icon class="title-ico"><InfoFilled /></el-icon>你可以试试搜索
         </span>
       </div>
+      <p class="suggest-lead">搜点什么</p>
+      <p class="suggest-sub">
+        支持笔记、记录与文件的全文检索 —— 中文分词与英文全词都认。
+        下面这些是常用的入口，点一下就能试。
+      </p>
       <div class="suggest-chips">
         <button
           v-for="s in SUGGESTIONS"
-          :key="s"
+          :key="s.text"
           class="suggest-chip"
+          :data-kind="s.kind"
           type="button"
-          @click="kw = s; search()"
+          @click="kw = s.text; search()"
         >
-          {{ s }}
+          {{ s.text }}
         </button>
       </div>
       <div class="search-hint">
@@ -72,12 +78,13 @@
         <div class="suggest-chips suggest-chips--center">
           <button
             v-for="s in SUGGESTIONS.slice(0, 4)"
-            :key="s"
+            :key="s.text"
             class="suggest-chip"
+            :data-kind="s.kind"
             type="button"
-            @click="kw = s; search()"
+            @click="kw = s.text; search()"
           >
-            {{ s }}
+            {{ s.text }}
           </button>
         </div>
       </template>
@@ -197,9 +204,26 @@ const loading = ref(false)
 
 const totalCount = computed(() => recordResults.value.length + docResults.value.length)
 
+/**
+ * 搜索建议词
+ *
+ * 原来是一堆裸字符串，一个一个平铺，全是灰底 ——
+ * 用户看不出「笔记」是模型名还是标签，「Q4」又是从哪来的。
+ * 现在每条带上类型，界面上按类型给不同的颜色。
+ */
 const SUGGESTIONS = [
-  '笔记', '项目', '合同', '客户', '任务', 'Obsidian', '知识库', '演示',
-  '测试', '上传', 'Q4', '元数据',
+  { text: '笔记', kind: 'model' },
+  { text: '项目', kind: 'model' },
+  { text: '合同', kind: 'model' },
+  { text: '客户', kind: 'model' },
+  { text: '任务', kind: 'model' },
+  { text: 'Obsidian', kind: 'tag' },
+  { text: '知识库', kind: 'tag' },
+  { text: '演示', kind: 'tag' },
+  { text: '测试', kind: 'tag' },
+  { text: '上传', kind: 'tag' },
+  { text: 'Q4', kind: 'tag' },
+  { text: '元数据', kind: 'tag' },
 ]
 
 function getDisplayName(r) {
@@ -308,7 +332,25 @@ onMounted(() => {
 <style scoped>
 .hero-search { width: 480px; }
 
-.suggest-card { padding: 20px 24px; }
+.suggest-card {
+  padding: 24px 26px;
+  /* 空状态也是一张卡片，要有体积感 —— 原来跟正文一样平 */
+  box-shadow: var(--shadow-card);
+}
+/* 空状态里的说明文字：字号拉开层次，
+   否则一屏只有两种字号，看着像没排版 */
+.suggest-lead {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.suggest-sub {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin-bottom: var(--space-4);
+}
 .search-hint {
   display: flex;
   align-items: center;
@@ -336,6 +378,19 @@ onMounted(() => {
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   transition: all var(--duration-fast) var(--ease-out);
+}
+/* 建议词：按来源给不同的颜色 ——
+   全部一个灰底就分不出「这些是什么」 */
+.suggest-chip[data-kind="model"] {
+  background: var(--ac-bg, var(--primary-bg));
+  border-color: var(--ac-line, var(--primary-200));
+  color: var(--ac-fg, var(--primary-dark));
+}
+.suggest-chip[data-kind="tag"] {
+  background: var(--bg-card);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  font-weight: 550;
 }
 .suggest-chip:hover {
   background: var(--primary-bg);

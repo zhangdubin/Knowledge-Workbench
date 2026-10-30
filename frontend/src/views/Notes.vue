@@ -958,6 +958,8 @@ html.dark .notes-tagchip.is-on { color: var(--primary-light); }
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-card);
+  /* 列表也是一张「卡片」—— 原来只有一圈浅灰边，浮在灰底上像一张纸 */
+  box-shadow: var(--shadow-card);
   overflow: hidden;
   /* 列表占满剩余高度（笔记少时不会在下面留一大片空白） */
   flex: 1;
@@ -981,7 +983,11 @@ html.dark .notes-tagchip.is-on { color: var(--primary-light); }
   transition: background var(--duration-fast) var(--ease-out);
 }
 .note-row:last-child { border-bottom: none; }
-.note-row:hover { background: var(--bg-subtle); }
+.note-row:hover {
+  background: var(--bg-subtle);
+  /* 悬停时左边亮一下主色条，扫列表时能看出鼠标在哪一行 */
+  box-shadow: inset 3px 0 0 var(--primary);
+}
 .note-row.is-active { background: var(--primary-bg); }
 .note-row.is-active::before {
   content: '';

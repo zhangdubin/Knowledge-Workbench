@@ -24,7 +24,9 @@
         @change="$emit('toggle', app)"
         @keydown.stop
       />
-      <div class="app-icon appc-icon">
+      <!-- 图标底板用这个应用自己的强调色 ——
+           原来全是同一个淡紫方块，六个应用长得像复制粘贴出来的 -->
+      <div class="app-icon appc-icon" :class="`ac-${accent}`">
         <el-icon :size="22"><component :is="iconName" /></el-icon>
       </div>
       <div class="appc-titles">
@@ -45,21 +47,44 @@
     </div>
 
     <!-- 快捷操作常驻在卡面上：藏进「更多」菜单等于没有 -->
+    <!-- 操作区
+         原来每张卡底部一排 5 个灰色小图标，一屏六张卡就是一片小图标，
+         看不出哪个是什么 —— 反而把卡片弄脏了。
+         现在：常用的两个（录入记录 / 新建模型）做成带文字的按钮，
+         剩下的（关联 / 编辑 / 删除）收进「更多」菜单。 -->
     <div class="appc-actions" @click.stop @keydown.stop>
-      <el-tooltip content="新建数据模型" placement="top" :show-after="400">
-        <el-button class="appc-btn" text :disabled="!canManage" @click="$emit('new-model', app)">
-          <el-icon><Plus /></el-icon>
-        </el-button>
-      </el-tooltip>
+      <!-- 录入记录：只有一个模型时直接录；有多个时用下拉让用户选 -->
+      <el-button
+        v-if="models.length <= 1"
+        class="appc-primary-btn"
+        size="small"
+        :disabled="!canManage || !models.length"
+        @click="$emit('add-record', app, models[0] || null)"
+      >
+        <el-icon><EditPen /></el-icon>录入记录
+      </el-button>
+      <el-button
+        class="appc-primary-btn is-quiet"
+        size="small"
+        :disabled="!canManage"
+        @click="$emit('new-model', app)"
+      >
+        <el-icon><Plus /></el-icon>新建模型
+      </el-button>
 
-      <!-- 有多个模型时让用户选录哪个；只有一个就直接进 -->
+      <!-- 多模型时「录入记录」要让用户选录哪个 -->
       <el-dropdown
         v-if="models.length > 1"
         trigger="click"
         @command="(cmd) => $emit('add-record', app, cmd)"
       >
-        <el-button class="appc-btn" text :disabled="!canManage" @click.stop>
-          <el-icon><EditPen /></el-icon>
+        <el-button
+          class="appc-primary-btn"
+          size="small"
+          :disabled="!canManage"
+          @click.stop
+        >
+          <el-icon><EditPen /></el-icon>录入记录
         </el-button>
         <template #dropdown>
           <el-dropdown-menu>
@@ -69,41 +94,35 @@
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-      <el-tooltip v-else content="录入记录" placement="top" :show-after="400">
-        <el-button
-          class="appc-btn"
-          text
-          :disabled="!canManage || !models.length"
-          @click="$emit('add-record', app, models[0] || null)"
-        >
-          <el-icon><EditPen /></el-icon>
-        </el-button>
-      </el-tooltip>
 
-      <el-tooltip content="查看关联" placement="top" :show-after="400">
-        <el-button class="appc-btn" text @click="$emit('view-relations', app)">
-          <el-icon><Connection /></el-icon>
+      <!-- 其余操作收进「更多」 -->
+      <el-dropdown trigger="click" @command="(cmd) => onMore(cmd, app)">
+        <el-button class="appc-more-btn" size="small" text aria-label="更多操作" title="更多操作">
+          <el-icon><MoreFilled /></el-icon>
         </el-button>
-      </el-tooltip>
-      <el-tooltip content="编辑应用" placement="top" :show-after="400">
-        <el-button class="appc-btn" text :disabled="!canManage" @click="$emit('edit', app)">
-          <el-icon><Edit /></el-icon>
-        </el-button>
-      </el-tooltip>
-      <el-tooltip content="删除应用" placement="top" :show-after="400">
-        <el-button class="appc-btn is-danger" text :disabled="!canManage" @click="$emit('remove', app)">
-          <el-icon><Delete /></el-icon>
-        </el-button>
-      </el-tooltip>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="relations">
+              <el-icon><Connection /></el-icon>查看关联
+            </el-dropdown-item>
+            <el-dropdown-item command="edit" :disabled="!canManage">
+              <el-icon><Edit /></el-icon>编辑应用
+            </el-dropdown-item>
+            <el-dropdown-item command="remove" divided :disabled="!canManage">
+              <el-icon><Delete /></el-icon>删除应用
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </div>
   </div>
 </template>
 
 <script setup>
 import { computed } from 'vue'
-import { Clock, Connection, Delete, Document, Edit, EditPen, Files, Plus } from '@element-plus/icons-vue'
+import { Clock, Connection, Delete, Document, Edit, EditPen, Files, MoreFilled, Plus } from '@element-plus/icons-vue'
 import { DEFAULT_GROUP, appDescription, resolveAppIcon } from '../utils/apps'
-import { APP_ICON_CHOICES } from '../utils/icons'
+import { APP_ICON_CHOICES, appAccent } from '../utils/icons'
 
 const props = defineProps({
   app: { type: Object, required: true },
@@ -116,9 +135,18 @@ const props = defineProps({
   updatedText: { type: String, default: '' },
 })
 
-defineEmits(['open', 'toggle', 'new-model', 'add-record', 'view-relations', 'edit', 'remove'])
+const emit = defineEmits(['open', 'toggle', 'new-model', 'add-record', 'view-relations', 'edit', 'remove'])
+
+/** 「更多」菜单里的动作 */
+function onMore(cmd, app) {
+  if (cmd === 'relations') emit('view-relations', app)
+  else if (cmd === 'edit') emit('edit', app)
+  else if (cmd === 'remove') emit('remove', app)
+}
 
 const iconName = computed(() => resolveAppIcon(props.app, APP_ICON_CHOICES))
+/** 这个应用自己的强调色 */
+const accent = computed(() => appAccent(props.app?.key))
 const description = computed(() => appDescription(props.app))
 </script>
 
@@ -191,6 +219,42 @@ const description = computed(() => appDescription(props.app))
 .appc-time { margin-left: auto; color: var(--text-secondary); }
 
 /* 快捷操作区：图标按钮的命中区域至少 28×28，否则在触屏上点不准 */
+/* 顶部强调色带 */
+.appc-accent {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 3px;
+  background: var(--ac-fg, var(--primary));
+  opacity: 0.85;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+/* 操作区
+   原来是 5 个灰色小图标排一行，一屏六张卡就是一片小图标。
+   现在两个带文字的按钮 + 一个「更多」，卡片干净多了。 */
+.appc-primary-btn {
+  --el-button-bg-color: var(--ac-bg, var(--primary-bg));
+  --el-button-border-color: var(--ac-line, var(--primary-200));
+  --el-button-text-color: var(--ac-fg, var(--primary-dark));
+  --el-button-hover-bg-color: var(--ac-edge, var(--primary-bg-strong));
+  --el-button-hover-border-color: var(--ac-fg, var(--primary));
+  --el-button-hover-text-color: var(--ac-fg, var(--primary-dark));
+  font-weight: 550;
+}
+.appc-primary-btn.is-quiet {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: var(--border);
+  --el-button-text-color: var(--text-secondary);
+  --el-button-hover-bg-color: var(--bg-subtle);
+  --el-button-hover-border-color: var(--border-strong);
+  --el-button-hover-text-color: var(--text-primary);
+}
+.appc-more-btn {
+  color: var(--text-tertiary);
+  width: 28px;
+  padding: 0;
+}
+
 .appc-actions {
   display: flex;
   align-items: center;

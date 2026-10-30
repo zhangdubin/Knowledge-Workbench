@@ -85,8 +85,8 @@
       <div
         v-for="t in visible"
         :key="t.id"
-        class="model-card"
-        :class="{ 'is-selected': isSelected(t.id) }"
+        class="model-card pcard"
+        :class="[`ac-${modelAccent(t)}`, { 'is-selected': isSelected(t.id) }]"
         role="button"
         tabindex="0"
         :aria-label="`模型 ${t.name}，${t.field_count} 个字段，${t.record_count} 条记录`"
@@ -103,7 +103,8 @@
             @keydown.stop
             @change="v => toggleSelect(t.id, v)"
           />
-          <span class="mdl-icon">
+          <!-- 图标底板跟着模型自己的颜色走：以前十二个模型全是同一个淡紫方块 -->
+          <span class="mdl-icon picon">
             <el-icon :size="20"><component :is="entityIcon(t.key)" /></el-icon>
           </span>
           <div class="mdl-titles">
@@ -147,9 +148,10 @@
             v-for="tag in previewTags(t)"
             :key="tag.key"
             class="field-tag"
+            :class="`ac-${fieldTypeAccent(tag.type)}`"
             :title="`${tag.name} · ${tag.label}${tag.required ? ' · 必填' : ''}`"
           >
-            <span class="field-tag-icon" :style="{ background: tag.color }">{{ tag.icon }}</span>
+            <span class="field-tag-icon">{{ tag.icon }}</span>
             <span class="field-tag-name">{{ tag.name }}</span>
             <span class="field-tag-type">{{ tag.label }}</span>
           </span>
@@ -158,7 +160,7 @@
         </div>
 
         <div class="mdl-meta">
-          <span class="mdl-app">
+          <span class="mdl-app" :class="`ac-${appAccent(t.app)}`">
             <el-icon :size="13"><component :is="appIcon(t.app)" /></el-icon>{{ appName(t.app) }}
           </span>
           <span><el-icon :size="13"><Grid /></el-icon>{{ t.field_count }} 字段</span>
@@ -171,7 +173,7 @@
     <el-table
       v-else
       :data="visible"
-      class="model-table"
+      class="model-table ptable table-striped"
       :class="tableDensityClass('default')"
       row-key="id"
     >
@@ -195,7 +197,7 @@
       <el-table-column label="模型" min-width="220">
         <template #default="{ row }">
           <div class="cell-model">
-            <span class="cell-model-icon">
+            <span class="cell-model-icon" :class="`ac-${modelAccent(row)}`">
               <el-icon :size="17"><component :is="entityIcon(row.key)" /></el-icon>
             </span>
             <span class="cell-model-text">
@@ -205,8 +207,12 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="所属应用" width="140">
-        <template #default="{ row }">{{ appName(row.app) }}</template>
+      <el-table-column label="所属应用" width="150">
+        <template #default="{ row }">
+          <span class="ptag ptag-plain" :class="`ac-${appAccent(row.app)}`">
+            <el-icon :size="12"><component :is="appIcon(row.app)" /></el-icon>{{ appName(row.app) }}
+          </span>
+        </template>
       </el-table-column>
       <el-table-column label="字段" width="80" align="right">
         <template #default="{ row }">{{ row.field_count }}</template>
@@ -214,16 +220,17 @@
       <el-table-column label="记录" width="80" align="right">
         <template #default="{ row }">{{ row.record_count }}</template>
       </el-table-column>
-      <el-table-column label="字段预览" min-width="280">
+      <el-table-column label="字段预览" min-width="320">
         <template #default="{ row }">
           <div class="cell-tags">
             <span
               v-for="tag in previewTags(row)"
               :key="tag.key"
               class="field-tag"
+              :class="`ac-${fieldTypeAccent(tag.type)}`"
               :title="`${tag.name} · ${tag.label}`"
             >
-              <span class="field-tag-icon" :style="{ background: tag.color }">{{ tag.icon }}</span>
+              <span class="field-tag-icon">{{ tag.icon }}</span>
               <span class="field-tag-name">{{ tag.name }}</span>
             </span>
             <span v-if="restFieldCount(row) > 0" class="field-tag is-rest">+{{ restFieldCount(row) }}</span>
@@ -231,7 +238,7 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="150" align="right">
+      <el-table-column label="操作" width="180" align="right">
         <template #default="{ row }">
           <el-button class="cell-btn" text @click="openEdit(row)">
             <el-icon><EditPen /></el-icon>编辑
@@ -307,6 +314,9 @@ import { entityIcon, appIcon } from '../utils/icons'
 import { downloadText, safeFileName } from '../utils/download'
 import { confirmAndDeleteModel } from '../utils/modelDelete'
 import { tableDensityClass } from '../utils/ui'
+import { appAccent } from '../utils/icons'
+import { fieldTypeAccent } from '../utils/accents'
+import './pages.css'
 import { filterModels, sortModels, fieldPreviewTags } from '../utils/modelFields'
 import PageTitle from '../components/PageTitle.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -345,6 +355,11 @@ const hasFilter = computed(() =>
 function appName(key) {
   const a = apps.value.find(x => x.key === key)
   return a ? a.name : (key || '未分组')
+}
+
+/** 模型卡片的强调色：跟应用卡片一个做法 —— 按 key 稳定分配，同一模型永远同一个颜色 */
+function modelAccent(t) {
+  return appAccent(t?.key)
 }
 
 function previewTags(t) {
@@ -699,33 +714,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: var(--space-3);
 }
+/* 卡片底板（底色/圆角/阴影/边框/悬浮反馈）走 pages.css 的 .pcard 统一规格，
+   这里只留这一页特有的排版，避免同一个页面两套卡片规则互相打架 */
 .model-card {
-  background: var(--bg-card);
-  padding: var(--space-4);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
-  border: 1px solid var(--border);
   cursor: pointer;
-  transition: border-color var(--duration) var(--ease-out),
-              box-shadow var(--duration) var(--ease-out),
-              transform var(--duration) var(--ease-out);
-  display: flex;
-  flex-direction: column;
   gap: var(--space-3);
-}
-.model-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-card-hover);
-  border-color: var(--primary-200);
-}
-/* 焦点环交给设计系统的全局规则，这里只保证不被自己的样式盖掉 */
-.model-card:focus-visible {
-  outline: 2px solid var(--focus-ring-color);
-  outline-offset: 2px;
-}
-.model-card.is-selected {
-  border-color: var(--primary);
-  background: var(--primary-bg);
 }
 .mdl-head {
   display: flex;
@@ -733,17 +726,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   gap: var(--space-3);
 }
 .mdl-check { margin-top: 10px; }
-.mdl-icon {
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  border-radius: var(--radius);
-  background: var(--primary-bg);
-  color: var(--primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
 .mdl-titles { flex: 1; min-width: 0; }
 .mdl-name {
   font-size: var(--text-lg);
@@ -816,10 +798,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   gap: 4px;
 }
 .mdl-app {
-  background: var(--bg-subtle);
+  background: var(--ac-bg);
+  border: 1px solid var(--ac-line);
   border-radius: var(--radius-full);
   padding: 2px 9px;
-  color: var(--text-secondary);
+  color: var(--ac-text);
+  font-weight: 600;
 }
 
 /* 字段类型标签：像 Airtable 那样露出字段名和它的类型 */
@@ -844,7 +828,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   border-radius: var(--radius-xs);
   font-size: 10px;
   font-weight: 700;
-  color: #fff;
+  /* 类型图标按语义上色（数字=青、日期=绿、枚举=琥珀、开关=紫…），
+     整个标签仍然保持中性底 —— 一张卡里十几种颜色会吵 */
+  background: var(--ac-bg);
+  border: 1px solid var(--ac-line);
+  color: var(--ac-text);
   flex-shrink: 0;
 }
 .field-tag-name {
@@ -873,9 +861,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   width: 30px;
   height: 30px;
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
-  background: var(--primary-bg);
-  color: var(--primary);
+  border-radius: 9px;
+  /* 表格里的模型图标跟卡片用同一个颜色，一眼能对上 */
+  background: var(--ac-bg);
+  border: 1px solid var(--ac-line);
+  color: var(--ac-fg);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -884,6 +874,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 .cell-model-name {
   font-weight: 600;
   color: var(--text-primary);
+  line-height: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -892,9 +883,16 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--text-secondary);
+  line-height: 16px;
 }
-.cell-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+/* 表格里的字段预览排成一行 —— 表格是拿来扫的，字段细节留给卡片 */
+.cell-tags { display: flex; flex-wrap: nowrap; gap: 4px; overflow: hidden; }
+.cell-tags .field-tag { max-width: 120px; }
 .cell-btn { color: var(--text-secondary); }
+/* 操作按钮别换行：换行会把整行撑高一倍 */
+.cell-btn + .cell-btn { margin-left: 8px; }
+/* .cell 是 Element Plus 内部结构，scoped 选择器够不着，要用 :deep */
+.model-table :deep(.cell) { white-space: nowrap; }
 
 /* ---------- 批量改应用 ---------- */
 .move-select { width: 100%; }

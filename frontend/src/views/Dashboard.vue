@@ -1,20 +1,21 @@
 <template>
-  <div class="page">
-    <!-- 欢迎区 -->
-    <div class="hero">
+  <div class="page dash-page">
+    <!-- 欢迎区：浅色大卡片 + 主色渐变点缀，和下面所有卡片同一套语言 -->
+    <section class="hero">
       <div class="hero-content">
+        <div class="hero-eyebrow"><span class="hero-dot" />{{ todayLabel }}</div>
         <h1>欢迎回来</h1>
         <p>统一管理结构化与非结构化数据，跨实体关联分析，承载多种业务应用</p>
       </div>
       <div class="hero-actions">
-        <el-button size="large" @click="$router.push('/notes')">
+        <el-button type="primary" size="large" @click="$router.push('/notes')">
           <el-icon><EditPen /></el-icon>新建笔记
         </el-button>
-        <el-button size="large" @click="$router.push('/library')">
+        <el-button size="large" class="hero-btn-plain" @click="$router.push('/library')">
           <el-icon><Upload /></el-icon>上传文件
         </el-button>
       </div>
-    </div>
+    </section>
 
     <!-- 上手清单 -->
     <div v-if="showOnboard" class="card onboard-card">
@@ -59,30 +60,51 @@
       </div>
     </div>
 
-    <!-- 统计 -->
-    <div class="stat-grid">
-      <div class="stat-card" role="button" tabindex="0" @click="go('/types')" @keydown="onCardKey($event, '/types')">
+    <!-- 统计：一个主指标 + 三个次要指标，数字字号拉开层次 -->
+    <div class="stat-grid dash-stats">
+      <div
+        class="stat-card is-lead ac-blue"
+        role="button" tabindex="0"
+        @click="go('/types')" @keydown="onCardKey($event, '/types')"
+      >
         <div class="icon"><el-icon><Files /></el-icon></div>
         <div class="value-block">
           <div class="value">{{ stats.type_count || 0 }}</div>
           <div class="label">数据模型</div>
+          <div class="hint">实体与字段结构</div>
         </div>
+        <el-icon class="stat-arrow"><ArrowRight /></el-icon>
       </div>
-      <div class="stat-card success" role="button" tabindex="0" @click="go('/types')" @keydown="onCardKey($event, '/types')">
+
+      <div
+        class="stat-card ac-green"
+        role="button" tabindex="0"
+        @click="go('/types')" @keydown="onCardKey($event, '/types')"
+      >
         <div class="icon"><el-icon><Document /></el-icon></div>
         <div class="value-block">
           <div class="value">{{ stats.record_count || 0 }}</div>
           <div class="label">数据记录</div>
         </div>
       </div>
-      <div class="stat-card warning" role="button" tabindex="0" @click="go('/graph')" @keydown="onCardKey($event, '/graph')">
+
+      <div
+        class="stat-card ac-amber"
+        role="button" tabindex="0"
+        @click="go('/graph')" @keydown="onCardKey($event, '/graph')"
+      >
         <div class="icon"><el-icon><Share /></el-icon></div>
         <div class="value-block">
           <div class="value">{{ stats.relation_count || 0 }}</div>
           <div class="label">关联关系</div>
         </div>
       </div>
-      <div class="stat-card info" role="button" tabindex="0" @click="go('/library')" @keydown="onCardKey($event, '/library')">
+
+      <div
+        class="stat-card ac-orange"
+        role="button" tabindex="0"
+        @click="go('/library')" @keydown="onCardKey($event, '/library')"
+      >
         <div class="icon"><el-icon><Coin /></el-icon></div>
         <div class="value-block">
           <div class="value">{{ fileCount }}</div>
@@ -91,31 +113,53 @@
       </div>
     </div>
 
-    <!-- 快捷入口 -->
-    <div class="card">
+    <!-- 快捷入口：常用的三个大而突出，罕用的收成一行小标签 -->
+    <div class="card quick-card">
       <div class="card-title">
         <span class="card-title-text">
           <el-icon class="title-ico"><Lightning /></el-icon>快捷入口
         </span>
+        <span class="card-title-note">常用的三个放在前面</span>
       </div>
+
       <div class="quick-grid">
         <div
-          v-for="q in quickLinks"
+          v-for="q in quickPrimary"
           :key="q.path"
-          class="quick-item" role="button" tabindex="0" @click="go(q.path)" @keydown="onCardKey($event, q.path)"
+          class="quick-item"
+          :class="`ac-${q.accent}`"
+          role="button" tabindex="0"
+          @click="go(q.path)" @keydown="onCardKey($event, q.path)"
         >
-          <div class="quick-icon" :style="{ background: q.bg, color: q.color }">
+          <div class="quick-icon">
             <el-icon :size="22"><component :is="q.icon" /></el-icon>
           </div>
-          <div class="quick-name">{{ q.name }}</div>
-          <div class="quick-desc">{{ q.desc }}</div>
+          <div class="quick-text">
+            <div class="quick-name">{{ q.name }}</div>
+            <div class="quick-desc">{{ q.desc }}</div>
+          </div>
+          <el-icon class="quick-arrow"><ArrowRight /></el-icon>
+        </div>
+      </div>
+
+      <div class="quick-mini-grid">
+        <div
+          v-for="q in quickSecondary"
+          :key="q.path"
+          class="quick-mini"
+          :title="q.desc"
+          role="button" tabindex="0"
+          @click="go(q.path)" @keydown="onCardKey($event, q.path)"
+        >
+          <el-icon class="quick-mini-ico"><component :is="q.icon" /></el-icon>
+          <span class="quick-mini-name">{{ q.name }}</span>
         </div>
       </div>
     </div>
 
     <div class="dashboard-row">
       <!-- 应用卡片 -->
-      <div class="card">
+      <div class="card dash-apps">
         <div class="card-title">
           <span class="card-title-text">
             <el-icon class="title-ico"><Grid /></el-icon>我的应用
@@ -129,15 +173,19 @@
           <div
             v-for="app in apps.slice(0, 4)"
             :key="app.key"
-            class="app-card" role="button" tabindex="0" @click="go(`/apps/${app.key}`)" @keydown="onCardKey($event, `/apps/${app.key}`)"
+            class="app-card"
+            role="button" tabindex="0"
+            @click="go(`/apps/${app.key}`)" @keydown="onCardKey($event, `/apps/${app.key}`)"
           >
             <div class="app-card-header">
-              <div class="app-icon">
-                <el-icon :size="22"><component :is="appIcon(app.key)" /></el-icon>
+              <div class="app-icon" :class="`ac-${appAccent(app.key)}`">
+                <el-icon :size="20"><component :is="appIcon(app.key)" /></el-icon>
+              </div>
+              <div class="app-card-text">
+                <div class="app-name">{{ app.name }}</div>
+                <div class="app-desc">{{ app.description }}</div>
               </div>
             </div>
-            <div class="app-name">{{ app.name }}</div>
-            <div class="app-desc">{{ app.description }}</div>
             <div class="app-meta">
               <span><el-icon><Files /></el-icon>{{ app.entity_count }} 模型</span>
               <span><el-icon><Document /></el-icon>{{ app.record_count }} 记录</span>
@@ -159,8 +207,8 @@
         </EmptyState>
       </div>
 
-      <!-- 最近活动 -->
-      <div class="card">
+      <!-- 最近活动：时间线，一眼看清「最近动了什么」 -->
+      <div class="card dash-recent">
         <div class="card-title">
           <span class="card-title-text">
             <el-icon class="title-ico"><Clock /></el-icon>最近活动
@@ -169,7 +217,7 @@
 
         <div v-if="stats.recent?.length" class="recent-list">
           <div
-            v-for="r in stats.recent.slice(0, 8)"
+            v-for="r in stats.recent.slice(0, 7)"
             :key="`${r.entity_type_key}-${r.record_id}`"
             class="recent-item"
             role="button"
@@ -179,7 +227,7 @@
             @keydown="onCardKey($event, `/records/${r.entity_type_id}?id=${r.record_id}`)"
           >
             <div class="recent-icon">
-              <el-icon :size="16"><component :is="entityIcon(r.entity_type_key)" /></el-icon>
+              <el-icon :size="15"><component :is="entityIcon(r.entity_type_key)" /></el-icon>
             </div>
             <div class="recent-info">
               <div class="recent-title">
@@ -210,7 +258,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Api } from '../api'
 import { formatTime } from '../utils/format'
-import { entityIcon, appIcon } from '../utils/icons'
+import { entityIcon, appIcon, appAccent } from '../utils/icons'
 import EmptyState from '../components/EmptyState.vue'
 
 const router = useRouter()
@@ -235,18 +283,35 @@ const apps = ref([])
 const fileCount = ref(0)
 const onboardDismissed = ref(localStorage.getItem('kb_onboard_dismissed') === '1')
 
-const quickLinks = [
-  { path: '/notes', name: '知识库', desc: 'Obsidian 风格笔记 · 双链', icon: 'Notebook', bg: 'var(--primary-bg)', color: 'var(--primary)' },
-  { path: '/library', name: '数据中心', desc: '统一文件管理 · 在线预览', icon: 'Coin', bg: 'var(--warning-bg)', color: 'var(--warning)' },
-  { path: '/apps', name: '应用中心', desc: '模板一键建应用', icon: 'Grid', bg: 'var(--success-bg)', color: 'var(--success)' },
-  { path: '/types', name: '数据模型', desc: '自定义实体类型与字段', icon: 'Files', bg: 'var(--danger-bg)', color: 'var(--danger)' },
-  // 配色全部走设计令牌：写死的十六进制在深色主题下会和整体色调脱节
-  { path: '/relations', name: '关联定义', desc: '配置模型之间的关系', icon: 'Connection', bg: 'var(--primary-bg)', color: 'var(--primary)' },
-  { path: '/knowledge/graph', name: '知识图谱', desc: '所有笔记的可视化网络', icon: 'DataAnalysis', bg: 'var(--info-bg)', color: 'var(--info)' },
-  { path: '/graph', name: '关联图谱', desc: '业务实体的关联分析', icon: 'Share', bg: 'var(--success-bg)', color: 'var(--success)' },
-  { path: '/search', name: '全局搜索', desc: '跨实体的全文检索', icon: 'Search', bg: 'var(--info-bg)', color: 'var(--info)' },
-  { path: '/guide', name: '使用指南', desc: '五步跑通一个业务', icon: 'Compass', bg: 'var(--primary-bg)', color: 'var(--primary)' },
-  { path: '/ai-settings', name: 'AI 助手', desc: '配置模型 · 智能摘要问答', icon: 'MagicStick', bg: 'var(--warning-bg)', color: 'var(--warning-text)' },
+// 欢迎区上的一句话日期：给页头一个「今天」的落点，
+// 也让这块大卡片不至于只有一句口号。
+const todayLabel = computed(() => {
+  const d = new Date()
+  const week = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日 · ${week}`
+})
+
+/* 快捷入口分两档：
+   - 主入口（常用）：横向大块，图标底板用强调色，一眼能找到
+   - 次入口（罕用）：收成一行小标签，中性灰，不跟主入口抢注意力
+
+   颜色按语义分配，不按位置轮换：
+   知识库=紫（笔记）、数据中心=橙（文件）、应用中心=青（应用），
+   与下面统计卡的 数据模型=蓝 / 数据记录=绿 / 关联关系=琥珀 / 附件=橙 同属一套色板。 */
+const quickPrimary = [
+  { path: '/notes', name: '知识库', desc: 'Obsidian 风格笔记 · 双链', icon: 'Notebook', accent: 'violet' },
+  { path: '/library', name: '数据中心', desc: '统一文件管理 · 在线预览', icon: 'Coin', accent: 'orange' },
+  { path: '/apps', name: '应用中心', desc: '模板一键建应用', icon: 'Grid', accent: 'teal' },
+]
+
+const quickSecondary = [
+  { path: '/types', name: '数据模型', desc: '自定义实体类型与字段', icon: 'Files' },
+  { path: '/relations', name: '关联定义', desc: '配置模型之间的关系', icon: 'Connection' },
+  { path: '/knowledge/graph', name: '知识图谱', desc: '所有笔记的可视化网络', icon: 'DataAnalysis' },
+  { path: '/graph', name: '关联图谱', desc: '业务实体的关联分析', icon: 'Share' },
+  { path: '/search', name: '全局搜索', desc: '跨实体的全文检索', icon: 'Search' },
+  { path: '/guide', name: '使用指南', desc: '五步跑通一个业务', icon: 'Compass' },
+  { path: '/ai-settings', name: 'AI 助手', desc: '配置模型 · 智能摘要问答', icon: 'MagicStick' },
 ]
 
 // 上手清单：从真实数据推导完成状态
@@ -312,45 +377,104 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* ======================================================================
+   工作台的视觉重做
+   ----------------------------------------------------------------------
+   原来这里最扎眼的是三件事：
+   1. hero 是一整块深色渐变，下面却是一片白卡 —— 两个世界拼在一起
+   2. 统计卡 4 个一模一样（字号都是 27px），快捷入口 10 个一模一样，
+      用户扫一眼不知道该看哪、该点哪
+   3. 图标底板紫橙绿粉蓝一轮马卡龙，颜色没有含义，看着像随机贴上去的
+
+   现在的做法：
+   - hero 改成浅色大卡片 + 主色渐变点缀，和下面所有卡片同一套语言
+   - 统计卡分主次：1 个主指标（数据模型）大而突出，3 个次要指标收着
+   - 快捷入口分主次：3 个常用入口大块 + 7 个罕用入口收成一行小标签
+   - 图标底板一律走全局强调色板（ac-*），按语义分配，不再轮换马卡龙
+   ====================================================================== */
+
+/* 一层很浅的抬升阴影。
+   原来整屏的卡片只有 1~2px 的贴地阴影，看上去像摊平的一张纸；
+   这里加一层大面积、极低透明度的投影，卡片之间才分出前后。
+   深色主题下投影要用黑色才看得见，所以单独给一份。 */
+.dash-page {
+  --dash-lift: 0 10px 26px rgba(16, 18, 27, 0.055);
+}
+:global(html.dark) .dash-page {
+  --dash-lift: 0 10px 26px rgba(0, 0, 0, 0.42);
+}
+.dash-page :deep(.card),
+.dash-page .stat-card,
+.dash-page .quick-item {
+  /* 先写大面积柔光、再写贴地的一层：
+     视觉上卡片边缘依然清晰，但「层次」来自那 26px 的大柔光 */
+  box-shadow: var(--dash-lift), var(--shadow-card);
+}
+
+/* ---------- 欢迎区 ---------- */
 .hero {
-  background:
-    radial-gradient(120% 165% at 88% -22%, rgba(124, 128, 216, 0.34) 0%, rgba(124, 128, 216, 0) 58%),
-    linear-gradient(135deg, #1f2131 0%, #14161f 58%, #191b2b 100%);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: var(--radius-lg);
-  padding: 32px 36px;
-  color: #fff;
-  margin-bottom: var(--space-5);
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-5);
-  box-shadow: var(--shadow-lg);
-  position: relative;
-  overflow: hidden;
+  gap: var(--space-6);
+  padding: var(--space-8) var(--space-9);
+  margin-bottom: var(--space-5);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(70% 150% at 100% -10%, var(--primary-100) 0%, transparent 62%),
+    linear-gradient(115deg, var(--primary-50) 0%, var(--bg-card) 46%);
+  box-shadow: var(--dash-lift), var(--shadow-card);
 }
+/* 右下角一团很淡的光晕：没有硬边，不会跟按钮打架，
+   只在卡片角落给一点「有光源」的层次 */
 .hero::after {
   content: '';
   position: absolute;
-  right: -50px;
-  top: -90px;
-  width: 320px;
-  height: 320px;
+  right: -70px;
+  bottom: -170px;
+  width: 380px;
+  height: 380px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(131, 135, 222, 0.18), transparent 66%);
+  background: radial-gradient(circle, var(--primary-100) 0%, transparent 68%);
+  opacity: 0.75;
   pointer-events: none;
 }
-.hero-content { position: relative; z-index: 1; }
+.hero-content {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+.hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--primary);
+  margin-bottom: var(--space-3);
+}
+.hero-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-bg);
+}
 .hero h1 {
-  margin: 0 0 9px;
-  font-size: var(--text-3xl);
-  font-weight: 650;
-  letter-spacing: -1px;
+  margin: 0 0 10px;
+  font-size: var(--text-4xl);
+  font-weight: 680;
+  letter-spacing: -1.2px;
   font-family: var(--font-display);
+  color: var(--text-primary);
 }
 .hero p {
   margin: 0;
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--text-secondary);
   font-size: var(--text-md);
   line-height: 1.65;
   max-width: 620px;
@@ -363,23 +487,390 @@ onMounted(async () => {
   z-index: 1;
 }
 .hero-actions .el-button {
-  background: rgba(255, 255, 255, 0.10) !important;
-  color: #fff !important;
-  border: 1px solid rgba(255, 255, 255, 0.18) !important;
   font-weight: 550;
-  backdrop-filter: blur(6px);
+  height: 42px;
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-md);
 }
-.hero-actions .el-button:hover {
-  background: rgba(255, 255, 255, 0.18) !important;
-  border-color: rgba(255, 255, 255, 0.28) !important;
+/* 次要动作是白底描边，跟主按钮拉开一档 */
+.hero-btn-plain {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.hero-btn-plain:hover {
+  background: var(--bg-subtle);
+  border-color: var(--primary-200);
+  color: var(--primary);
 }
 
-.stat-card { cursor: pointer; }
+/* ---------- 统计卡：一个主指标 + 三个次要 ---------- */
+.dash-stats {
+  display: grid;
+  grid-template-columns: 1.42fr 1fr 1fr 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+.dash-stats .stat-card {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition:
+    transform var(--duration) var(--ease-out),
+    box-shadow var(--duration) var(--ease-out),
+    border-color var(--duration) var(--ease-out);
+}
+/* 顶部一道语义色：颜色在卡片上能看见，但不用整块染色去抢注意力 */
+.dash-stats .stat-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  background: var(--ac-fg);
+  opacity: 0.85;
+}
+.dash-stats .stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--ac-line);
+}
+.dash-stats .icon {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-md);
+  background: var(--ac-bg);
+  color: var(--ac-fg);
+  border: 1px solid var(--ac-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+.dash-stats .value {
+  font-size: 26px;
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: -0.7px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-display);
+}
+.dash-stats .label {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  margin-top: 3px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+.dash-stats .hint {
+  margin-top: 5px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.dash-stats .value-block {
+  flex: 1;
+  min-width: 0;
+}
+.dash-stats .stat-arrow {
+  color: var(--text-disabled);
+  font-size: 15px;
+  flex-shrink: 0;
+  transition: transform var(--duration) var(--ease-out), color var(--duration) var(--ease-out);
+}
+.dash-stats .stat-card:hover .stat-arrow {
+  color: var(--ac-fg);
+  transform: translateX(2px);
+}
+/* 主指标：卡片更大、数字更大、底色带一点主色的晕 */
+.dash-stats .stat-card.is-lead {
+  padding: var(--space-6);
+  border-color: var(--ac-line);
+  background: linear-gradient(135deg, var(--ac-bg) 0%, var(--bg-card) 64%);
+}
+.dash-stats .stat-card.is-lead .icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-lg);
+  font-size: 26px;
+}
+.dash-stats .stat-card.is-lead .value {
+  font-size: 42px;
+  letter-spacing: -1.6px;
+  line-height: 1.05;
+}
+.dash-stats .stat-card.is-lead .label {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
 
-/* 上手清单 */
+/* ---------- 快捷入口 ---------- */
+.card-title-note {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.quick-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    transform var(--duration) var(--ease-out),
+    box-shadow var(--duration) var(--ease-out),
+    border-color var(--duration) var(--ease-out);
+}
+.quick-item:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--ac-line);
+}
+.quick-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: var(--radius-md);
+  background: var(--ac-bg);
+  color: var(--ac-fg);
+  border: 1px solid var(--ac-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.quick-text {
+  min-width: 0;
+  flex: 1;
+}
+.quick-name {
+  font-weight: 600;
+  font-size: var(--text-lg);
+  letter-spacing: -0.2px;
+  color: var(--text-primary);
+}
+.quick-desc {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  line-height: 1.45;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quick-arrow {
+  color: var(--text-disabled);
+  flex-shrink: 0;
+  transition: transform var(--duration) var(--ease-out), color var(--duration) var(--ease-out);
+}
+.quick-item:hover .quick-arrow {
+  color: var(--ac-fg);
+  transform: translateX(2px);
+}
+/* 次入口：收成一行中性标签，把彩色预算留给主入口 */
+.quick-mini-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px dashed var(--border);
+}
+.quick-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 13px;
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+.quick-mini:hover {
+  background: var(--primary-bg);
+  border-color: var(--primary-200);
+  color: var(--primary);
+}
+.quick-mini-ico {
+  font-size: 15px;
+  color: var(--text-tertiary);
+}
+.quick-mini:hover .quick-mini-ico {
+  color: var(--primary);
+}
+
+/* ---------- 双栏 ---------- */
+.dashboard-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+.dashboard-row > .card {
+  margin-bottom: 0;
+}
+
+/* 我的应用：改成横向紧凑卡，一屏能看完 4 个应用 */
+.dash-apps .app-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.dash-apps .app-card {
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--dash-lift), var(--shadow-card);
+  transition:
+    transform var(--duration) var(--ease-out),
+    box-shadow var(--duration) var(--ease-out),
+    border-color var(--duration) var(--ease-out);
+}
+.dash-apps .app-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--primary-200);
+}
+.dash-apps .app-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: 12px;
+}
+.dash-apps .app-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  font-size: 19px;
+}
+.dash-apps .app-card-text {
+  min-width: 0;
+  flex: 1;
+}
+.dash-apps .app-name {
+  margin-bottom: 2px;
+  font-size: var(--text-base);
+}
+.dash-apps .app-desc {
+  min-height: 0;
+  margin-bottom: 0;
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-apps .app-meta {
+  padding-top: 10px;
+  margin-top: 14px;
+}
+
+/* 最近活动：时间线，一条竖线串起来 */
+.recent-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.recent-list::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  top: 20px;
+  bottom: 20px;
+  width: 1px;
+  background: var(--border);
+}
+.recent-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.recent-item:hover {
+  background: var(--bg-subtle);
+}
+.recent-icon {
+  position: relative;
+  z-index: 1;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.recent-item:hover .recent-icon {
+  border-color: var(--primary-200);
+  color: var(--primary);
+}
+.recent-info {
+  flex: 1;
+  min-width: 0;
+}
+.recent-title {
+  font-size: var(--text-base);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.recent-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
+}
+.recent-type-tag {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.recent-time {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 上手清单 ---------- */
 .onboard-card {
-  background: linear-gradient(135deg, var(--primary-50), var(--bg-card) 55%);
-  border: 1px solid var(--primary-light);
+  border-color: var(--primary-light);
+  box-shadow: var(--shadow-card);
 }
 .onboard-progress {
   height: 6px;
@@ -449,129 +940,58 @@ onMounted(async () => {
 }
 .title-ico { color: var(--primary); font-size: 18px; }
 
-/* 快捷入口 */
-.quick-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: var(--space-3);
+/* ======================================================================
+   响应式
+   ====================================================================== */
+@media (max-width: 1180px) {
+  /* 统计卡挤成 2×2：主指标占满第一行，其余三个各占一格 */
+  .dash-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dash-stats .stat-card.is-lead { grid-column: 1 / -1; }
+  .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-.quick-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 18px 12px;
-  background: var(--bg);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: all var(--duration) var(--ease-out);
-  text-align: center;
-}
-.quick-item:hover {
-  background: var(--bg-card);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow);
-  border-color: var(--primary-light);
-}
-.quick-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: var(--radius);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.quick-name { font-weight: 600; font-size: var(--text-base); }
-.quick-desc { font-size: var(--text-xs); color: var(--text-tertiary); line-height: 1.4; }
-
-/* 双栏布局 */
-.dashboard-row {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: var(--space-4);
-}
-.dashboard-row > .card { margin-bottom: 0; }
 
 @media (max-width: 1100px) {
-  .dashboard-row { grid-template-columns: 1fr; }
+  .dashboard-row { grid-template-columns: minmax(0, 1fr); }
   .hero { flex-direction: column; align-items: flex-start; }
 }
 
-/* 手机端：hero 收紧、快捷入口变 3 列紧凑小卡（竖排罗列不实用） */
+/* 手机端 */
 @media (max-width: 768px) {
   .hero {
-    padding: 20px 18px;
+    padding: var(--space-6) var(--space-5);
+    gap: var(--space-5);
   }
-  .hero h1 { font-size: var(--text-2xl); margin-bottom: 6px; }
+  .hero h1 { font-size: var(--text-2xl); letter-spacing: -0.6px; margin-bottom: 6px; }
   .hero p { font-size: var(--text-sm); }
-  .hero-actions {
-    width: 100%;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
-  .hero-actions .el-button { flex: 1 1 auto; }
+  .hero-actions { width: 100%; flex-wrap: wrap; gap: var(--space-2); }
+  .hero-actions .el-button { flex: 1 1 auto; padding: 0 var(--space-3); }
 
-  .quick-grid {
-    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-    gap: var(--space-2);
+  /* 统计卡：主指标独占一行，次要三个并排一行。
+     次要卡用横向排布（图标 + 数字），竖排会把这一行撑到 120px，
+     整个统计区就占了屏幕的三分之一。 */
+  .dash-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+  .dash-stats .stat-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 10px;
+    border-radius: var(--radius-md);
   }
-  .quick-item { padding: 12px 6px; gap: 5px; }
-  .quick-icon { width: 38px; height: 38px; }
-  .quick-name { font-size: var(--text-sm); }
-  .quick-desc { display: none; }   /* 手机上信息密度优先，描述让位 */
-}
+  .dash-stats .stat-card.is-lead { grid-column: 1 / -1; padding: var(--space-4) var(--space-5); }
+  .dash-stats .stat-card.is-lead .icon { width: 46px; height: 46px; font-size: 22px; border-radius: var(--radius-md); }
+  .dash-stats .stat-card.is-lead .value { font-size: 32px; }
+  .dash-stats .icon { width: 28px; height: 28px; font-size: 15px; border-radius: var(--radius-sm); }
+  .dash-stats .value { font-size: 20px; letter-spacing: -0.4px; }
+  .dash-stats .label { font-size: 11px; margin-top: 1px; }
+  .dash-stats .hint { display: none; }
+  .dash-stats .stat-arrow { display: none; }
 
-/* 最近活动 */
-.recent-list { display: flex; flex-direction: column; gap: 2px; }
-.recent-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-.recent-item:hover { background: var(--bg-subtle); }
-.recent-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  background: var(--primary-bg);
-  color: var(--primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.recent-info { flex: 1; min-width: 0; }
-.recent-title {
-  font-size: var(--text-base);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.recent-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 550;
-}
-.recent-type-tag {
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  background: var(--bg-subtle);
-  padding: 1px 8px;
-  border-radius: var(--radius-full);
-  font-weight: 600;
-  flex-shrink: 0;
-}
-.recent-time {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  margin-top: 2px;
-  font-variant-numeric: tabular-nums;
+  .quick-grid { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .quick-item { padding: var(--space-3) var(--space-4); }
+  .quick-icon { width: 40px; height: 40px; }
+  .quick-mini-grid { gap: 6px; }
+  .quick-mini { height: 32px; padding: 0 11px; font-size: var(--text-xs); }
+
+  .dash-apps .app-grid { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

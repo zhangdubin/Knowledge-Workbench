@@ -1,0 +1,140 @@
+/* =========================================================
+   数据模型 / 数据中心 / 关联定义 —— 三页共用的卡片与表格规格
+   ------------------------------------------------------------
+   为什么要单独抽一个文件：
+   以前这三页各写各的卡片样式 —— padding 有 15px 有 16px 有 20px，
+   边框有 --border 有 --border-light，阴影有 --shadow 有 --shadow-card，
+   表格又是另一套行高。同一屏里卡片和表格对不上，看着像三个页面拼起来的。
+
+   这里定一套规格，三页都引用它：圆角、边框、阴影、留白、行高只此一份。
+   类名统一加 p 前缀（pcard / picon / ptag / ptable / pgrid），
+   全局引入也不会撞到别的页面已有的类。
+   ========================================================= */
+
+/* ---------- 卡片：统一规格 ---------- */
+.pcard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-4);
+  overflow: hidden;
+  transition: border-color var(--duration) var(--ease-out),
+              box-shadow var(--duration) var(--ease-out),
+              transform var(--duration) var(--ease-out);
+}
+
+/* 顶部 3px 强调色条：
+   一屏二十张卡时，靠它一眼分清「这张是哪一类」——
+   以前所有卡的顶部都一样，整屏找不到重点。 */
+.pcard::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--ac-fg, var(--primary));
+  opacity: 0.9;
+}
+
+.pcard:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--ac-line, var(--primary-200));
+}
+
+/* 焦点环交给设计系统的全局规则，这里只保证不被自己的样式盖掉 */
+.pcard:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
+
+.pcard.is-selected {
+  border-color: var(--ac-fg, var(--primary));
+  box-shadow: inset 0 0 0 1px var(--ac-fg, var(--primary)), var(--shadow-card);
+}
+
+/* ---------- 图标底板：跟着 --ac-* 换色 ---------- */
+.picon {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ac-bg);
+  border: 1px solid var(--ac-line);
+  color: var(--ac-fg);
+}
+
+.picon-sm {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  font-size: 15px;
+}
+
+/* ---------- 强调色当文字用的时候要再深一档 ----------
+   main.css 的 --ac-fg 是给图标用的（非文字场景 3:1 就够）。
+   直接拿它当小字颜色，琥珀/青/绿这几个在浅底上只有 3.8~4.1:1，
+   达不到正文要求的 4.5:1 —— 这里往正文色方向混一档，深浅主题都成立：
+   浅色主题混黑变深、对比度上升；深色主题混白变亮、对比度同样上升。 */
+[data-accent], [class*="ac-"] {
+  --ac-text: color-mix(in srgb, var(--ac-fg) 72%, var(--text-primary));
+}
+
+/* ---------- 小标签：类型 / 状态 ---------- */
+.ptag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+  color: var(--ac-text);
+  background: var(--ac-bg);
+  border: 1px solid var(--ac-line);
+}
+
+.ptag-plain {
+  background: transparent;
+}
+
+/* ---------- 表格：统一密度 ---------- */
+/* 以前这三页的表格行高 67~73px，字号 14px，跟卡片的紧凑感对不上；
+   这里统一收到 8px 上下留白 / 13px 正文，一屏能多看七八行。 */
+.ptable.el-table {
+  /* 13px：比正文的 14px 紧一档，又不至于小到读着费劲
+     （--text-sm 是 12px，中文正文用 12px 太挤） */
+  font-size: 13px;
+}
+.ptable.el-table .el-table__cell {
+  padding: 8px 0;
+}
+.ptable.el-table .cell {
+  padding: 0 12px;
+  line-height: 22px;
+}
+.ptable.el-table .el-table__header th.el-table__cell {
+  background: var(--bg-subtle);
+  border-bottom-color: var(--border);
+}
+.ptable.el-table .el-table__body tr td.el-table__cell {
+  border-bottom-color: var(--border-light);
+}
+/* 选中行：明确一点，不要只靠斑马纹猜 */
+.ptable.el-table .el-table__body tr.current-row td.el-table__cell {
+  background: var(--primary-bg);
+}
+
+/* ---------- 卡片网格：统一间距 ---------- */
+.pgrid {
+  display: grid;
+  gap: var(--space-3);
+}

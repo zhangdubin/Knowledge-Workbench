@@ -172,14 +172,14 @@
           <el-table
             :data="pagedFiles"
             v-loading="loading"
-            class="data-table table-striped table-density-default"
+            class="data-table ptable table-striped table-density-default"
             @row-click="previewFile"
             :row-style="{ cursor: 'pointer' }"
           >
             <el-table-column label="文件" min-width="280">
               <template #default="{ row }">
                 <div class="file-cell">
-                  <span class="file-icon" :style="{ background: typeBg(row.mime), color: typeColor(row.mime) }">
+                  <span class="file-icon" :class="`ac-${fileAccent(row.mime, row.filename)}`">
                     <el-icon><component :is="typeIconOf(row)" /></el-icon>
                   </span>
                   <div class="file-info">
@@ -295,7 +295,8 @@
           <div
             v-for="f in pagedFiles"
             :key="f.id"
-            class="file-tile"
+            class="file-tile pcard"
+            :class="`ac-${fileAccent(f.mime, f.filename)}`"
             role="button"
             tabindex="0"
             :aria-label="`预览 ${f.filename}`"
@@ -303,15 +304,21 @@
             @keydown.enter.prevent="previewFile(f)"
             @keydown.space.prevent="previewFile(f)"
           >
-            <div class="ft-thumb" :style="{ background: typeBg(f.mime) }">
+            <div class="ft-thumb">
               <img v-if="(f.mime || '').startsWith('image/')" :src="f.url" :alt="f.filename" loading="lazy" />
-              <el-icon v-else :style="{ color: typeColor(f.mime) }">
-                <component :is="typeIconOf(f)" />
-              </el-icon>
+              <template v-else>
+                <span class="ft-badge">
+                  <el-icon :size="26"><component :is="typeIconOf(f)" /></el-icon>
+                  <span class="ft-ext">{{ fileExt(f.filename) }}</span>
+                </span>
+              </template>
             </div>
             <div class="ft-body">
               <div class="ft-name" :title="f.filename">{{ f.filename }}</div>
               <div class="ft-meta">
+                <span class="ptag ptag-plain" :class="`ac-${fileAccent(f.mime, f.filename)}`">
+                  {{ fileTypeLabel(f) }}
+                </span>
                 <span>{{ formatSize(f.size) }}</span>
                 <span>·</span>
                 <span>{{ formatTime(f.created_at).slice(0, 10) }}</span>
@@ -371,7 +378,7 @@
                  @click="toggleJson(f)"
                  @keydown.enter.prevent="toggleJson(f)"
                  @keydown.space.prevent="toggleJson(f)">
-              <span class="file-icon sm" :style="{ background: typeBg(f.mime), color: typeColor(f.mime) }">
+              <span class="file-icon sm" :class="`ac-${fileAccent(f.mime, f.filename)}`">
                 <el-icon><component :is="typeIconOf(f)" /></el-icon>
               </span>
               <span class="json-name">{{ f.filename }}</span>
@@ -434,9 +441,9 @@
               hollow
             >
               <div class="recent-row">
-                <el-tag size="small" effect="plain">
+                <span class="ptag" :class="`ac-${appAccent(r.entity_type_key)}`">
                   {{ r.entity_type_icon }} {{ r.entity_type_name }}
-                </el-tag>
+                </span>
                 <a class="recent-link" role="button" tabindex="0"
                    @click="$router.push(`/records/${r.entity_type_id}?id=${r.record_id}`)"
                    @keydown.enter.prevent="$router.push(`/records/${r.entity_type_id}?id=${r.record_id}`)"
@@ -560,7 +567,7 @@
     >
       <template #header>
         <div class="dlg-head">
-          <span class="file-icon sm" :style="{ background: typeBg(previewFile_?.mime), color: typeColor(previewFile_?.mime) }">
+          <span class="file-icon sm" :class="`ac-${fileAccent(previewFile_?.mime, previewFile_?.filename)}`">
             <el-icon><component :is="previewFile_ ? typeIconOf(previewFile_) : 'Document'" /></el-icon>
           </span>
           <div class="dlg-head-text">
@@ -869,6 +876,9 @@ import {
   Download, InfoFilled, ArrowRight, Loading,
 } from '@element-plus/icons-vue'
 import { Api, fileUrls, previewModeOf } from '../api'
+import { fileAccent } from '../utils/accents'
+import { appAccent } from '../utils/icons'
+import './pages.css'
 import { formatTime, formatSize } from '../utils/format'
 import JsonViewer from '../components/JsonViewer.vue'
 import PageTitle from '../components/PageTitle.vue'
@@ -1197,6 +1207,28 @@ function typeBg(ct) {
   if (ct.includes('sheet') || ct.includes('excel')) return 'var(--warning-bg)'
   if (ct.includes('zip') || ct.includes('compressed')) return 'var(--warning-bg)'
   return 'var(--bg-subtle)'
+}
+
+/** 文件扩展名（小写，不含点）：给卡片上的角标用 */
+function fileExt(filename) {
+  const n = String(filename || '')
+  const i = n.lastIndexOf('.')
+  return i > 0 ? n.slice(i + 1).toLowerCase().slice(0, 5) : ''
+}
+
+/** 文件类型的中文名：颜色之外的第二重提示，色弱用户也能分辨 */
+function fileTypeLabel(row) {
+  const m = String(row?.mime || '').toLowerCase()
+  const n = String(row?.filename || '').toLowerCase()
+  if (m.startsWith('image/')) return '图片'
+  if (m.includes('pdf') || n.endsWith('.pdf')) return 'PDF'
+  if (m.includes('spreadsheet') || m.includes('excel') || m.includes('csv') || /\.(csv|xlsx?|numbers)$/.test(n)) return '表格'
+  if (m.includes('presentation') || m.includes('powerpoint') || /\.pptx?$/.test(n)) return '演示'
+  if (m.includes('zip') || m.includes('compressed') || /\.(zip|rar|7z|tar|gz)$/.test(n)) return '压缩包'
+  if (m.includes('video')) return '视频'
+  if (m.includes('audio')) return '音频'
+  if (m.includes('word') || m.includes('document') || /\.(docx?|md|txt|rtf)$/.test(n)) return '文档'
+  return '文件'
 }
 
 function typeIcon(ct) {
@@ -1597,25 +1629,31 @@ onMounted(async () => {
 
 .file-cell { display: flex; align-items: center; gap: var(--space-3); }
 .file-icon {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 9px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 16px;
+  /* 颜色按文件类型分（PDF 红、表格绿、文档蓝…），不再是一律灰底 */
+  background: var(--ac-bg);
+  border: 1px solid var(--ac-line);
+  color: var(--ac-fg);
 }
 .file-icon.sm { width: 28px; height: 28px; font-size: 14px; }
 .file-info { display: flex; flex-direction: column; min-width: 0; }
 .file-name {
   font-weight: 550;
   color: var(--text-primary);
+  /* 行高写死，表格行高才稳定（否则跟着字体默认行高飘） */
+  line-height: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.file-sub { font-size: var(--text-xs); color: var(--text-tertiary); }
+.file-sub { font-size: var(--text-xs); color: var(--text-tertiary); line-height: 16px; }
 
 /* ============ 网格 ============ */
 .file-grid {
@@ -1625,30 +1663,52 @@ onMounted(async () => {
 }
 /* 空状态在网格里要占满整行，不然会被塞进第一格 */
 .grid-span-all { grid-column: 1 / -1; }
+/* 卡片底板（圆角/阴影/悬浮反馈）走 pages.css 的 .pcard 统一规格 */
 .file-tile {
-  background: var(--bg-card);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  overflow: hidden;
+  padding: 0;
   cursor: pointer;
-  transition: all var(--duration) var(--ease-out);
   position: relative;
 }
-.file-tile:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow);
-  border-color: var(--primary-light);
-}
 .ft-thumb {
-  height: 120px;
+  height: 124px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 36px;
   overflow: hidden;
+  /* 非图片文件用同色淡底托住图标 */
+  background: var(--ac-bg);
+  border-bottom: 1px solid var(--ac-line);
 }
 .ft-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.ft-body { padding: 10px 12px; }
+/* 文件类型的图标牌 + 扩展名角标 */
+.ft-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.ft-badge .el-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-card);
+  border: 1px solid var(--ac-line);
+  color: var(--ac-fg);
+  box-shadow: 0 2px 6px rgba(16, 18, 27, 0.08);
+}
+.ft-ext {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--ac-fg);
+}
+.ft-body { padding: 12px 14px 14px; }
 .ft-name {
   font-size: var(--text-sm);
   font-weight: 600;
@@ -1659,9 +1719,11 @@ onMounted(async () => {
 .ft-meta {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
-  margin-top: 4px;
+  margin-top: 6px;
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 .ft-actions {
   position: absolute;

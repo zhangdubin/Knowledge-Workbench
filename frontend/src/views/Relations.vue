@@ -22,7 +22,79 @@
       </div>
     </div>
 
-    <div class="card" style="padding:0;overflow:hidden">
+    <!-- 工具条：视图切换 + 数量 -->
+    <div class="rel-toolbar">
+      <el-radio-group v-model="viewMode" class="tb-view" aria-label="视图切换">
+        <el-radio-button value="card">
+          <el-icon><Grid /></el-icon>卡片
+        </el-radio-button>
+        <el-radio-button value="table">
+          <el-icon><Menu /></el-icon>表格
+        </el-radio-button>
+      </el-radio-group>
+      <span class="toolbar-count">共 {{ defs.length }} 条关联定义</span>
+    </div>
+
+    <!-- 卡片视图 -->
+    <div v-if="viewMode === 'card' && defs.length" v-loading="loading" class="rel-grid">
+      <div
+        v-for="row in defs"
+        :key="row.id"
+        class="rel-card pcard"
+        :class="`ac-${cardinalityAccent(row.cardinality)}`"
+      >
+        <div class="rel-card-head">
+          <div class="rel-card-title">
+            <span class="rel-card-name" :title="row.name">{{ row.name }}</span>
+            <code class="rel-key" :title="row.key">{{ row.key }}</code>
+          </div>
+          <span class="ptag" :class="`ac-${cardinalityAccent(row.cardinality)}`">
+            {{ cardLabel(row.cardinality) }}
+          </span>
+        </div>
+
+        <!-- 两端：源端蓝、目标端青，一眼看出方向 -->
+        <div class="rel-flow">
+          <div class="rel-end" :class="`ac-${REL_SOURCE_ACCENT}`">
+            <span class="rel-end-tag">源</span>
+            <span class="rel-end-icon">{{ endEmoji(row.source_kind, row.source_icon) }}</span>
+            <span class="rel-end-name" :title="row.source_label">{{ row.source_label }}</span>
+          </div>
+          <el-icon class="rel-flow-arrow"><Right /></el-icon>
+          <div class="rel-end" :class="`ac-${REL_TARGET_ACCENT}`">
+            <span class="rel-end-tag">目标</span>
+            <span class="rel-end-icon">{{ endEmoji(row.target_kind, row.target_icon) }}</span>
+            <span class="rel-end-name" :title="row.target_label">{{ row.target_label }}</span>
+          </div>
+        </div>
+
+        <p class="rel-card-desc">{{ row.description || '暂无说明' }}</p>
+
+        <div class="rel-card-meta">
+          <span class="rel-card-count" :class="{ zero: !row.link_count }">
+            {{ row.link_count || 0 }} 条关联
+          </span>
+          <div class="rel-card-actions" @click.stop>
+            <el-button v-if="row.source_kind === 'document'" size="small" text type="primary"
+                       @click="$router.push('/library')">
+              <el-icon><Coin /></el-icon>去数据中心
+            </el-button>
+            <el-button v-else size="small" text type="primary"
+                       @click="$router.push(`/records/${row.source_type_id}`)">
+              <el-icon><Document /></el-icon>去录入
+            </el-button>
+            <el-button v-if="canManage" size="small" text @click="openEdit(row)">
+              <el-icon><Edit /></el-icon>编辑
+            </el-button>
+            <el-button v-if="canManage" size="small" text type="danger" @click="del(row)">
+              <el-icon><Delete /></el-icon>删除
+            </el-button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-else class="card" style="padding:0;overflow:hidden">
       <EmptyState
         v-if="!defs.length && !loading"
         icon="Connection"
@@ -40,11 +112,11 @@
         </template>
       </EmptyState>
 
-      <el-table v-else :data="defs" v-loading="loading" class="data-table table-striped table-density-default">
-        <el-table-column label="关联名称" min-width="170">
+      <el-table v-else :data="defs" v-loading="loading" class="data-table ptable table-striped table-density-default">
+        <el-table-column label="关联名称" min-width="200">
           <template #default="{ row }">
             <div class="rel-name-cell">
-              <span class="badge badge-primary">{{ row.name }}</span>
+              <span class="ptag" :class="`ac-${cardinalityAccent(row.cardinality)}`">{{ row.name }}</span>
               <code class="rel-key">{{ row.key }}</code>
             </div>
           </template>
@@ -52,12 +124,12 @@
         <el-table-column label="方向" min-width="280">
           <template #default="{ row }">
             <div class="rel-dir">
-              <span class="rel-node" :class="{ file: row.source_kind === 'document' }">
+              <span class="rel-node" :class="`ac-${REL_SOURCE_ACCENT}`">
                 <span class="rn-ico">{{ row.source_kind === 'document' ? '🗂️' : (row.source_icon || '📦') }}</span>
                 {{ row.source_label }}
               </span>
               <el-icon class="rel-arrow"><Right /></el-icon>
-              <span class="rel-node target" :class="{ file: row.target_kind === 'document' }">
+              <span class="rel-node target" :class="`ac-${REL_TARGET_ACCENT}`">
                 <span class="rn-ico">{{ row.target_kind === 'document' ? '🗂️' : (row.target_icon || '📦') }}</span>
                 {{ row.target_label }}
               </span>
@@ -66,7 +138,9 @@
         </el-table-column>
         <el-table-column label="基数" width="100">
           <template #default="{ row }">
-            <el-tag size="small" effect="plain">{{ cardLabel(row.cardinality) }}</el-tag>
+            <span class="ptag" :class="`ac-${cardinalityAccent(row.cardinality)}`">
+              {{ cardLabel(row.cardinality) }}
+            </span>
           </template>
         </el-table-column>
         <el-table-column label="关联数" width="90" align="right">
@@ -176,6 +250,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../api'
+import { REL_SOURCE_ACCENT, REL_TARGET_ACCENT, cardinalityAccent } from '../utils/accents'
+import './pages.css'
 import { useAuthStore } from '../stores/auth'
 import PageTitle from '../components/PageTitle.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -194,6 +270,13 @@ const cardLabel = (c) => CARD_LABELS[c] || c || '多对多'
 
 const defs = ref([])
 const types = ref([])
+/** 卡片视图默认：关系定义数量不多，卡片能一眼看清两端 */
+const viewMode = ref('card')
+
+/** 端点图标：数据中心文件用文件夹，业务模型用后端给的图标（一般是 emoji） */
+function endEmoji(kind, icon) {
+  return kind === 'document' ? '🗂️' : (icon || '📦')
+}
 const loading = ref(false)
 const dialogOpen = ref(false)
 const saving = ref(false)
@@ -333,7 +416,14 @@ onMounted(load)
 .info-banner .el-icon { color: var(--primary); margin-top: 2px; flex-shrink: 0; }
 .info-banner b { color: var(--text-primary); }
 
-.rel-name-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 名称与标识排一行：换行会把整行撑高 */
+.rel-name-cell { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+.rel-name-cell .ptag {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .rel-key {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -341,27 +431,129 @@ onMounted(load)
 }
 
 .rel-dir { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 两端各用一种颜色：源端蓝、目标端青，方向一眼可辨 */
 .rel-node {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 10px;
   border-radius: var(--radius-full);
-  background: var(--bg-subtle);
+  background: var(--ac-bg);
+  border: 1px solid var(--ac-line);
   font-size: var(--text-sm);
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--ac-fg);
 }
-.rel-node.target { background: var(--primary-bg); color: var(--primary); }
-/* 文件端用虚线边框区分，一眼能看出这端不是业务模型 */
-.rel-node.file {
-  background: var(--bg-card);
-  border: 1px dashed var(--border-strong);
-  font-weight: 500;
-}
-.rel-node.target.file { color: var(--primary); border-color: var(--primary-200); background: var(--primary-bg); }
+.rel-node.target { background: var(--ac-bg); color: var(--ac-fg); }
 .rn-ico { font-size: 13px; line-height: 1; }
 .rel-arrow { color: var(--text-tertiary); }
 
 .link-count { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text-primary); }
+
+/* ============ 卡片视图 ============ */
+.rel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.rel-toolbar .toolbar-count { margin-left: auto; }
+
+.rel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--space-3);
+}
+.rel-card { gap: var(--space-3); }
+
+.rel-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.rel-card-title { min-width: 0; }
+.rel-card-name {
+  display: block;
+  font-size: var(--text-lg);
+  font-weight: 650;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 两端：源端蓝、目标端青 */
+.rel-flow {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+.rel-end {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  /* 端点用同色淡底 + 描边：源端一块蓝、目标端一块青，方向一眼可辨 */
+  background: var(--ac-bg);
+  border: 1px solid var(--ac-line);
+}
+.rel-end-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--ac-bg);
+  color: var(--ac-text);
+}
+.rel-end-icon { flex-shrink: 0; font-size: 15px; line-height: 1; }
+.rel-end-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rel-flow-arrow {
+  align-self: center;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 16px;
+}
+.rel-card-desc {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--text-secondary);
+  min-height: 22px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.rel-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-light);
+}
+.rel-card-count {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.rel-card-count.zero { color: var(--text-disabled); font-weight: 400; }
+.rel-card-actions { display: flex; align-items: center; gap: var(--space-1); }
 .link-count.zero { color: var(--text-disabled); font-weight: 400; }
 .cell-text { color: var(--text-secondary); font-size: var(--text-sm); }
 .form-hint {

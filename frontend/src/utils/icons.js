@@ -78,6 +78,42 @@ export function entityIcon(key) {
   return lookup(ENTITY_ICON_MAP, key, 'Folder')
 }
 
+/**
+ * 应用的强调色
+ *
+ * 为什么按 key 分配而不是让用户自己选：
+ * - 应用卡片的图标底板原来全是同一个淡紫方块，一屏六个应用长得一模一样，
+ *   像同一个东西复制了六遍 —— 这是「整个界面很平、很丑」的最大来源。
+ * - 按 key 固定分配，每个应用有稳定的颜色，用户扫一眼就能认出是哪个应用。
+ * - 颜色取自全局强调色板（accent-*），浅色/深色两套都由 main.css 负责。
+ */
+const APP_ACCENTS = {
+  knowledge: 'violet',
+  project: 'blue',
+  sales: 'teal',
+  crm: 'green',
+  contract: 'amber',
+  library: 'orange',
+  finance: 'red',
+  hr: 'pink',
+  inventory: 'slate',
+  research: 'green',
+  support: 'amber',
+  asset: 'slate',
+  default: 'blue',
+}
+
+/** 应用用哪个强调色（没登记过的按 key 哈希稳定分配一个） */
+export function appAccent(key) {
+  const k = String(key || '')
+  if (APP_ACCENTS[k]) return APP_ACCENTS[k]
+  // 没登记过的：按 key 的字符和取模，保证同一个 key 每次都是同一个颜色
+  let sum = 0
+  for (let i = 0; i < k.length; i++) sum = (sum + k.charCodeAt(i) * (i + 1)) % 997
+  const pool = ['blue', 'teal', 'green', 'amber', 'orange', 'red', 'violet', 'pink']
+  return pool[sum % pool.length]
+}
+
 export function appIcon(key) {
   return lookup(APP_ICON_MAP, key, 'Grid')
 }

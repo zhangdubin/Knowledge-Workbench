@@ -32,6 +32,33 @@
   --danger-text: #ad3630;
   --info-text: #5b6273;
 
+
+  /* ---- 强调色板（accent）----
+     为什么要有：
+     之前全站只有「主色淡紫」一个颜色 —— 应用卡片、数据模型卡片、
+     工作台快捷入口的图标底板全是同一个 rgba 淡紫 + 同一个圆角，
+     一屏十来个图标方块，长得一模一样，看着像同一个东西复制了十遍。
+
+     现在给一组**按语义命名**的强调色，每个都有「图标底 / 文字 / 边框 / 描边」四档。
+     用法：给元素加 data-accent="teal"，或直接用类 .ac-teal，
+     里面的 --ac-bg / --ac-fg / --ac-line / --ac-edge 会自动换掉。
+
+     颜色不是随便挑的：
+     - 同一组色相在浅色/深色下都能当图标色用（≥3:1，非文字场景）
+     - 底色是同色相的极浅色，不会跟正文抢注意力
+     - 相邻色相刻意拉开（蓝 → 青 → 绿 → 琥珀 → 橙 → 红 → 紫），
+       一屏里并排出现时能分辨
+  */
+  --accent-blue:   #3b6fd4;
+  --accent-teal:   #0f8b8d;
+  --accent-green:  #2f8f4e;
+  --accent-amber:  #b3760f;
+  --accent-orange: #c96a1e;
+  --accent-red:    #c04a45;
+  --accent-violet: #6b4bc4;
+  --accent-pink:   #b5407e;
+  --accent-slate:  #5a6478;
+
   /* ---- 搜索命中高亮 ----
      之前高亮是写死的 rgba(245,158,11,.25) + #92400e，只在浅色底下勉强能看；
      到了深色主题，浅棕底 + 深棕字会糊成一团，等于「搜到了却看不出命中在哪」。
@@ -74,8 +101,15 @@
      旧的 --shadow-xs/sm/lg/xl 保留为别名，既有两千行样式引用不用逐个改，
      但新代码请直接用语义名（--shadow-card / --shadow-card-hover / --shadow-overlay）。 */
   --shadow-xs: 0 1px 2px rgba(16, 18, 27, 0.05);
-  --shadow-card: 0 1px 2px rgba(16, 18, 27, 0.05), 0 1px 3px rgba(16, 18, 27, 0.045);
-  --shadow-card-hover: 0 4px 10px rgba(16, 18, 27, 0.07), 0 12px 28px rgba(16, 18, 27, 0.10);
+  /* 卡片阴影
+     原来只有 0 1px 2px rgba(...,0.05) —— 几乎看不见，
+     于是白卡片浮在浅灰底上像一张纸，整屏没有层次。
+     现在分三档：贴地（列表里的行）、常规（卡片）、悬浮（抬起）。
+     影子略深一点、范围大一点，卡片才有「浮在背景上」的体积感。 */
+  --shadow-card: 0 1px 2px rgba(16, 18, 27, 0.05), 0 2px 8px rgba(16, 18, 27, 0.06);
+  --shadow-card-hover: 0 2px 4px rgba(16, 18, 27, 0.06), 0 8px 24px rgba(16, 18, 27, 0.10);
+  --shadow-raised: 0 1px 2px rgba(16, 18, 27, 0.04), 0 6px 20px rgba(16, 18, 27, 0.07);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   --shadow-overlay: 0 10px 24px rgba(16, 18, 27, 0.11), 0 28px 64px rgba(16, 18, 27, 0.16);
   --shadow-sm: var(--shadow-card);
   --shadow: var(--shadow-card);
@@ -509,8 +543,10 @@ html.dark {
      否则卡片边缘会糊成一片。改成「更深一层底 + 更亮的轮廓光」的思路：
      暗部 + 顶部 1px 提亮，让卡片边缘在暗底上仍然能分辨。 */
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.45);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35);
-  --shadow-card-hover: 0 4px 10px rgba(0, 0, 0, 0.45), 0 12px 28px rgba(0, 0, 0, 0.55);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.50), 0 2px 8px rgba(0, 0, 0, 0.40);
+  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.55), 0 8px 24px rgba(0, 0, 0, 0.60);
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.50), 0 6px 20px rgba(0, 0, 0, 0.45);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   --shadow-overlay: 0 10px 24px rgba(0, 0, 0, 0.5), 0 28px 64px rgba(0, 0, 0, 0.65);
   --shadow-sm: var(--shadow-card);
   --shadow: var(--shadow-card);
@@ -783,12 +819,19 @@ html.dark .title-ico { color: var(--primary-light); }
   background: var(--bg-card);
   padding: 20px;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
+  /* 卡片原来只有一层几乎看不见的阴影，整屏平得像一张纸。
+     现在给两层：贴地的一层给重量，悬浮的一层给「浮起来」的感觉。 */
+  box-shadow: var(--shadow-card), 0 1px 2px rgba(16, 18, 27, 0.04);
   border: 1px solid var(--border);
   cursor: pointer;
   transition: border-color var(--duration) var(--ease-out), box-shadow var(--duration) var(--ease-out), transform var(--duration) var(--ease-out);
   position: relative;
   overflow: hidden;
+}
+.app-card:hover {
+  border-color: var(--ac-line, var(--primary-200));
+  box-shadow: var(--shadow-card-hover), 0 4px 12px rgba(16, 18, 27, 0.07);
+  transform: translateY(-1px);
 }
 .app-card::before {
   content: '';
@@ -813,18 +856,65 @@ html.dark .title-ico { color: var(--primary-light); }
   align-items: flex-start;
   margin-bottom: 12px;
 }
+
+/* ============ 强调色工具类 ============
+   给任何元素加 .ac-blue / .ac-teal … 或者 data-accent="teal"，
+   里面的 --ac-fg / --ac-bg / --ac-line / --ac-edge 就换成对应的强调色。
+
+   典型用法：
+     <div class="icon-plate ac-teal">…</div>   图标底板
+     <span class="ac-amber-text">…</span>      文字用强调色
+*/
+[data-accent="blue"]   { --ac-fg: var(--accent-blue);   --ac-tint: 59 111 212; }
+[data-accent="teal"]   { --ac-fg: var(--accent-teal);   --ac-tint: 15 139 141; }
+[data-accent="green"]  { --ac-fg: var(--accent-green);  --ac-tint: 47 143 78; }
+[data-accent="amber"]  { --ac-fg: var(--accent-amber);  --ac-tint: 179 118 15; }
+[data-accent="orange"] { --ac-fg: var(--accent-orange); --ac-tint: 201 106 30; }
+[data-accent="red"]    { --ac-fg: var(--accent-red);    --ac-tint: 192 74 69; }
+[data-accent="violet"] { --ac-fg: var(--accent-violet); --ac-tint: 107 75 196; }
+[data-accent="pink"]   { --ac-fg: var(--accent-pink);   --ac-tint: 181 64 126; }
+[data-accent="slate"]  { --ac-fg: var(--accent-slate);  --ac-tint: 90 100 120; }
+
+.ac-blue   { --ac-fg: var(--accent-blue);   --ac-tint: 59 111 212; }
+.ac-teal   { --ac-fg: var(--accent-teal);   --ac-tint: 15 139 141; }
+.ac-green  { --ac-fg: var(--accent-green);  --ac-tint: 47 143 78; }
+.ac-amber  { --ac-fg: var(--accent-amber);  --ac-tint: 179 118 15; }
+.ac-orange { --ac-fg: var(--accent-orange); --ac-tint: 201 106 30; }
+.ac-red    { --ac-fg: var(--accent-red);    --ac-tint: 192 74 69; }
+.ac-violet { --ac-fg: var(--accent-violet); --ac-tint: 107 75 196; }
+.ac-pink   { --ac-fg: var(--accent-pink);   --ac-tint: 181 64 126; }
+.ac-slate  { --ac-fg: var(--accent-slate);  --ac-tint: 90 100 120; }
+
+/* 四档派生：底色 / 文字 / 边框 / 描边 */
+[data-accent], [class*="ac-"] {
+  --ac-bg: rgb(var(--ac-tint) / 0.10);
+  --ac-line: rgb(var(--ac-tint) / 0.26);
+  --ac-edge: rgb(var(--ac-tint) / 0.16);
+}
+html.dark [data-accent], html.dark [class*="ac-"] {
+  --ac-bg: rgb(var(--ac-tint) / 0.18);
+  --ac-line: rgb(var(--ac-tint) / 0.42);
+  --ac-edge: rgb(var(--ac-tint) / 0.30);
+}
+
+/* 图标底板
+   默认是主色（没有 ac-* 时），加了 .ac-* 就换成那个强调色 ——
+   底色是同色相的极浅色，边框稍深一点，图标本身用色相本身。
+   这样一屏多个卡片各带各的颜色，不再是复制粘贴的淡紫方块。 */
 .app-icon {
   width: 44px;
   height: 44px;
-  border-radius: var(--radius);
-  background: var(--primary-100);
-  border: 1px solid var(--primary-200);
+  border-radius: 13px;
+  background: var(--ac-bg, var(--primary-100));
+  border: 1px solid var(--ac-line, var(--primary-200));
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 21px;
-  color: var(--primary);
-  transition: transform var(--duration) var(--ease-spring);
+  color: var(--ac-fg, var(--primary));
+  transition: transform var(--duration) var(--ease-spring),
+              box-shadow var(--duration) var(--ease-out);
+  flex-shrink: 0;
 }
 .app-card:hover .app-icon { transform: scale(1.04); }
 .app-name {

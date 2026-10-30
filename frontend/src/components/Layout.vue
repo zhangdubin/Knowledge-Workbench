@@ -94,13 +94,13 @@
         <div class="topbar-right">
           <el-input
             v-model="searchKw"
+            class="search-input topbar-search"
             placeholder="搜索知识、记录、文件…"
             size="default"
             clearable
             @keyup.enter="onSearch"
             @focus="searchFocused = true"
             @blur="searchFocused = false"
-            class="search-input"
             :class="{ focused: searchFocused }"
           >
             <template #prefix><el-icon><Search /></el-icon></template>
@@ -671,6 +671,9 @@ onUnmounted(() => {
   top: 0;
   z-index: var(--z-sticky);
 }
+
+/* 顶栏搜索框的宽度（外观样式见 .search-input） */
+.topbar-search { width: 260px; }
 .topbar-left {
   display: flex;
   align-items: center;
@@ -700,12 +703,14 @@ onUnmounted(() => {
 }
 /* 当前位置：比面包屑更重，告诉用户「你现在在这」 */
 .page-title {
-  font-size: 15px;
-  font-weight: 600;
+  /* 顶栏的页面名是「我在哪」的最强信号 ——
+     原来 15px，跟正文一样大，看不出是在导航还是在正文 */
+  font-size: 16.5px;
+  font-weight: 680;
   color: var(--text-primary);
   padding-left: 14px;
   border-left: 1px solid var(--border);
-  letter-spacing: -0.1px;
+  letter-spacing: -0.2px;
   white-space: nowrap;
 }
 .topbar-right {

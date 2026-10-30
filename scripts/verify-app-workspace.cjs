@@ -77,12 +77,22 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
     await sleep(1400)
     const previewOpened = await page.evaluate(() => {
       const card = document.querySelector('.app-card')
-      // 卡片动作区按钮顺序固定：新建模型 / 录入记录 / 查看关联 / 编辑 / 删除
-      const btns = [...(card?.querySelectorAll('.appc-actions .appc-btn') || [])]
-      const btn = btns.find(b => b.querySelector('.el-icon') && !b.disabled && b.querySelectorAll('.el-icon').length === 1
-        && btns.indexOf(b) === btns.length - 3)
-      if (!btn) return 'no-btn:' + btns.length
-      btn.click()
+      // 卡片操作区现在是：录入记录 / 新建模型（带文字）+「更多」菜单
+      // （以前是五个灰色小图标排一行，扫一眼看不出哪个是什么）
+      // 「查看关联」现在收在「更多」里 —— 点开菜单再点它。
+      const more = [...(card?.querySelectorAll('.appc-actions button') || [])]
+        .find(b => /更多操作/.test(b.getAttribute('aria-label') || b.title || ''))
+      if (!more) return 'no-more'
+      more.click()
+      return 'clicked-more'
+    })
+    await sleep(900)
+    // 在「更多」菜单里点「查看关联」
+    const pickedRelations = await page.evaluate(() => {
+      const item = [...document.querySelectorAll('.el-dropdown-menu__item')]
+        .find(x => /查看关联/.test(x.innerText || ''))
+      if (!item) return 'no-item'
+      item.click()
       return 'clicked'
     })
     await sleep(1600)
@@ -95,7 +105,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
         visible: d.getBoundingClientRect().height > 0,
       }
     })
-    log(previewOpened === 'clicked', '应用卡片有「查看关联」入口')
+    log(previewOpened === 'clicked-more' && pickedRelations === 'clicked', '应用卡片有「查看关联」入口')
     log(!!preview && preview.visible, '快速预览抽屉能打开', preview?.name)
     log(!!preview && preview.hasOpen, '预览抽屉里有「打开应用」入口')
 

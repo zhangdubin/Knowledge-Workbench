@@ -34,10 +34,16 @@
         <span class="ng-side-num">{{ allCount }}</span>
       </button>
 
-      <!-- 未分组 -->
+      <!-- 「全部 / 未分组」是总览，下面才是真正的分组列表 ——
+           用一条分隔线把两层分开，否则「未分组」看起来像个分组 -->
+      <div class="ng-side-sep" aria-hidden="true"></div>
+
+      <!-- 未分组：放在分组列表**下面**。
+           它是「没有归属」的归集项，不是跟「产品设计」并列的一个组 ——
+           放在总览里会让人以为它也是个可管理的分组。 -->
       <button
         type="button"
-        class="ng-side-item"
+        class="ng-side-item is-quiet"
         :class="{ 'is-on': modelValue === 0 }"
         :aria-current="modelValue === 0 ? 'true' : 'false'"
         @click="pick(0)"
@@ -46,10 +52,6 @@
         <span class="ng-side-name">未分组</span>
         <span class="ng-side-num">{{ ungroupedCount }}</span>
       </button>
-
-      <!-- 「全部 / 未分组」是总览，下面才是真正的分组列表 ——
-           用一条分隔线把两层分开，否则「未分组」看起来像个分组 -->
-      <div class="ng-side-sep" aria-hidden="true"></div>
 
       <!-- 分组列表标题：告诉用户「⋯」那个按钮能干什么 -->
       <div v-if="groups.length" class="ng-side-sub">
@@ -443,10 +445,18 @@ function pick(id) {
   padding: 2px 8px 8px;
 }
 .ng-side-title {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text-secondary);
+  /* 侧栏标题要压得住下面的条目 ——
+     原来和条目一样大，看着像又一条导航项 */
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
 }
+/* 未分组：弱化一点（它是「没有归属」，不是并列的分组） */
+.ng-side-item.is-quiet { color: var(--text-tertiary); }
+.ng-side-item.is-quiet .ng-side-ico { opacity: 0.7; }
+
 .ng-side-sep {
   height: 1px;
   background: var(--border-light);
@@ -534,6 +544,7 @@ function pick(id) {
 html.dark .ng-side-row.is-on .ng-side-item { color: var(--primary-light); }
 .ng-side-ico { color: var(--text-tertiary); flex-shrink: 0; }
 .ng-side-row.is-on .ng-side-ico { color: var(--primary); }
+/* 分组名：条目里最重要的信息，字要够重 */
 .ng-side-name {
   flex: 1;
   min-width: 0;
@@ -550,8 +561,10 @@ html.dark .ng-side-row.is-on .ng-side-item { color: var(--primary-light); }
 .ng-side-row.is-on .ng-side-num { color: var(--primary); }
 
 .ng-dot {
-  width: 9px;
-  height: 9px;
+  /* 色点是这个分组唯一的身份标识，要看得见：
+     9px 太小，10px + 一圈同底色的描边才既清楚又不会糊在文字上 */
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
   box-shadow: 0 0 0 2px var(--bg-card);

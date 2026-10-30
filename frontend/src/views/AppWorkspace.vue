@@ -649,10 +649,23 @@ watch(() => route.params.appKey, async () => {
 <style scoped>
 /* ============ 页头 ============ */
 .aw-header {
-  display: flex;
+  /* 头部
+   *
+   * 原来是一行里塞「图标 + 标题 + 3 个统计 + 6 个按钮」——
+   * 空间不够时 flex 把标题压成一条竖线（「销售管理」变成 销/售/管/理 四个字一行，
+   * 实测过），非常难看。
+   *
+   * 现在分两层：
+   *   第一层：身份（图标 + 标题 + 描述）  ·  统计（靠右）
+   *   第二层：操作按钮
+   */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'main stats'
+    'actions actions';
   align-items: center;
-  gap: var(--space-5);
-  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
   padding: var(--space-4) var(--space-5);
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -710,11 +723,16 @@ watch(() => route.params.appKey, async () => {
 }
 
 .aw-stats {
+  grid-area: stats;
   display: flex;
   gap: var(--space-2);
+  justify-self: end;
 }
 .aw-stat {
   min-width: 76px;
+  /* 统计块不能被压扁（压扁了数字就换行，一行变成两行） */
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: var(--space-2) var(--space-3);
   background: var(--bg-subtle);
   border: 1px solid var(--border-light);
@@ -731,7 +749,10 @@ watch(() => route.params.appKey, async () => {
 }
 .aw-stat span { font-size: var(--text-xs); color: var(--text-secondary); }
 
-.aw-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.aw-actions {
+  grid-area: actions;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-light); display: flex; gap: var(--space-2); flex-wrap: wrap; }
 
 /* ============ 主体两栏 ============ */
 .aw-body {

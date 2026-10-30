@@ -184,6 +184,46 @@ function isTableSep(row) {
 /** 全是数字/金额/百分比 → 该列右对齐，读数更顺 */
 const NUMERIC = /^[¥$€]?\s*[-+]?\d[\d,._]*\s*(%|元|万元|亿|万|次|条|个|天|人)?$/
 
+/**
+ * Obsidian callout 渲染（规范 §3）
+ *
+ * 语法：`> [!type] 标题`，type 后面 + / - 表示可折叠。
+ * 已知类型给对应颜色；未知类型按 note 处理（别丢内容）。
+ * 没用过的类型降级成普通 note 卡片，而不是原样吐出 `[!xxx]`。
+ */
+const CALLOUT_TYPES = [
+  'info', 'tip', 'warning', 'danger', 'example', 'question',
+  'success', 'failure', 'note', 'quote', 'abstract', 'todo',
+]
+const CALLOUT_TITLE = {
+  info: '信息', tip: '技巧', warning: '注意', danger: '危险',
+  example: '示例', question: '疑问', success: '成功', failure: '失败',
+  note: '笔记', quote: '引用', abstract: '摘要', todo: '待办',
+}
+const CALLOUT_ICON = {
+  info: 'ℹ️', tip: '💡', warning: '⚠️', danger: '🚨', example: '📖',
+  question: '❓', success: '✅', failure: '❌', note: '📝', quote: '❝',
+  abstract: '📋', todo: '☑️',
+}
+
+function renderCallout(buf) {
+  const first = (buf[0] || '').trim()
+  const m = first.match(/^\[!(\w+)\]([+-]?)\s*(.*)$/)
+  if (!m) return null
+  const type = m[1].toLowerCase()
+  if (!CALLOUT_TYPES.includes(type)) return null
+  const fold = m[2]
+  const title = m[3].trim() || CALLOUT_TITLE[type] || ''
+  const rest = buf.slice(1).join('\n')
+
+  const cls = ['md-callout', `md-callout-${type}`]
+  if (fold) cls.push('is-foldable', fold === '-' ? 'is-open' : 'is-collapsed')
+
+  const head = `<div class="md-callout-title"><span class="md-callout-ico">${CALLOUT_ICON[type] || '📝'}</span><span class="md-callout-name">${title}</span></div>`
+  const body = rest.trim() ? `<div class="md-callout-body">${rest.trim()}</div>` : ''
+  return `<div class="${cls.join(' ')}">${head}${body}</div>`
+}
+
 function renderTable(rows) {
   const head = splitRow(rows[0])
   const align = splitRow(rows[1]).map(c =>
@@ -330,14 +370,20 @@ export function renderMarkdown(src, opts = {}) {
     // ---- 分隔线 ----
     if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) { out.push('<hr>'); i++; continue }
 
-    // ---- 引用 ----
+    // ---- 引用 / Obsidian callout ----
+    //
+    // callout 是《笔记 UI 排版规范》§3 的核心记号：
+    // `> [!info] 标题` 渲染成带色条的卡片，而不是普通引用块。
+    // 不支持的话，规范里写的一堆 `> [!warning]` 到了页面上全变成灰引用块，
+    // 层次感就没了。
     if (/^\s*>\s?/.test(line)) {
       const buf = []
       while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
-        buf.push(lines[i].replace(/^\s*>\s?/, ''))
+        buf.push(lines[i].replace(/^\s*>\s?\s?/, ''))
         i++
       }
-      out.push(`<blockquote>${buf.map(inlineMd).join('<br>')}</blockquote>`)
+      const callout = renderCallout(buf)
+      out.push(callout || `<blockquote>${buf.map(inlineMd).join('<br>')}</blockquote>`)
       continue
     }
 

@@ -579,6 +579,13 @@ function applyAI({ task, value, tags }) {
     formData.value.content = value
   } else if (task === 'title') {
     formData.value.title = value
+  } else if (task === 'layout') {
+    // 按规范排版：输出的是**排版后的整篇正文**，直接替换
+    // （不是追加一段建议 —— 那样只会让笔记更乱）
+    formData.value.content = value
+  } else if (task === 'meeting') {
+    // 会议纪要：追加在正文后面（前面是原有的会议记录）
+    formData.value.content = (formData.value.content || '') + '\n\n' + value
   }
   // 切到编辑模式让用户保存
   editing.value = true

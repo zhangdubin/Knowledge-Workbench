@@ -2352,6 +2352,90 @@ html.dark {
   color: var(--text-secondary);
 }
 
+/* ============ Obsidian callout（规范 §3）============
+   `> [!info]` 这种记号要渲染成带色条的卡片，不是普通引用块。
+   不做的话，规范里写的一堆 [!warning] 到页面上全变成灰引用块，
+   层次感全没了 —— 规范就白定了。
+*/
+.md-callout {
+  margin: 8px 0 12px;
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--callout-color, var(--border-strong));
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.md-callout-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--callout-fg, var(--text-primary));
+  background: var(--callout-bg, var(--bg-subtle));
+}
+.md-callout-ico { font-size: 13px; line-height: 1; }
+.md-callout-body {
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+.md-callout-body > *:first-child { margin-top: 0; }
+.md-callout-body > *:last-child { margin-bottom: 0; }
+.md-callout-body p { margin: 0 0 6px; }
+.md-callout-body code {
+  background: var(--bg-subtle);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.md-callout-body pre { margin: 6px 0; }
+
+.md-callout.is-foldable .md-callout-title { cursor: pointer; user-select: none; }
+.md-callout.is-collapsed .md-callout-body { display: none; }
+.md-callout.is-collapsed .md-callout-title::after {
+  content: '▸';
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.md-callout.is-open .md-callout-title::after {
+  content: '▾';
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+/* 各类型的配色 —— 每种一个固定色相，跟图谱的连线配色一个思路：
+   同一个意思在同一个地方，颜色要一致 */
+.md-callout-info     { --callout-color: #4a7fd4; --callout-fg: #2f5ea8; --callout-bg: #eef4fd; }
+.md-callout-tip      { --callout-color: #2a9d8f; --callout-fg: #1f7a6f; --callout-bg: #eaf7f5; }
+.md-callout-warning  { --callout-color: #d99a2b; --callout-fg: #9a6a12; --callout-bg: #fdf5e6; }
+.md-callout-danger   { --callout-color: #d9534f; --callout-fg: #b13b37; --callout-bg: #fdedec; }
+.md-callout-success  { --callout-color: #3a9d5d; --callout-fg: #2a7343; --callout-bg: #ecf7f0; }
+.md-callout-failure  { --callout-color: #c9503f; --callout-fg: #a53d2f; --callout-bg: #fceeea; }
+.md-callout-example  { --callout-color: #8b6fc4; --callout-fg: #6b52a0; --callout-bg: #f4f0fb; }
+.md-callout-question { --callout-color: #5a7f9e; --callout-fg: #44637e; --callout-bg: #eff4f8; }
+.md-callout-note     { --callout-color: #7a8394; --callout-fg: #5b6474; --callout-bg: #f2f4f7; }
+.md-callout-quote    { --callout-color: #8a8f98; --callout-fg: #666c76; --callout-bg: #f5f6f8; }
+.md-callout-abstract { --callout-color: #5b5fc7; --callout-fg: #464a9e; --callout-bg: #eeeffa; }
+.md-callout-todo     { --callout-color: #d98a3a; --callout-fg: #a8661f; --callout-bg: #fdf3e8; }
+
+html.dark .md-callout-info     { --callout-fg: #8fb8f0; --callout-bg: #17233a; }
+html.dark .md-callout-tip      { --callout-fg: #6fd0c0; --callout-bg: #122a28; }
+html.dark .md-callout-warning  { --callout-fg: #f0c473; --callout-bg: #2e2513; }
+html.dark .md-callout-danger   { --callout-fg: #f09a95; --callout-bg: #331c1b; }
+html.dark .md-callout-success  { --callout-fg: #7fd3a2; --callout-bg: #14291d; }
+html.dark .md-callout-failure  { --callout-fg: #f0a596; --callout-bg: #2f1d19; }
+html.dark .md-callout-example  { --callout-fg: #bfa6e8; --callout-bg: #241f33; }
+html.dark .md-callout-question { --callout-fg: #9dbdd6; --callout-bg: #1a2430; }
+html.dark .md-callout-note     { --callout-fg: #b0b8c6; --callout-bg: #1e222a; }
+html.dark .md-callout-quote    { --callout-fg: #b6bcc6; --callout-bg: #20242b; }
+html.dark .md-callout-abstract { --callout-fg: #a8adf0; --callout-bg: #1c1e3a; }
+html.dark .md-callout-todo     { --callout-fg: #f2b478; --callout-bg: #2e2216; }
+
 .md-body blockquote {
   margin: 6px 0 10px;
   padding: 6px 11px;

@@ -124,6 +124,17 @@
             <span class="notes-composer-hint">
               {{ draftGroupId ? `将建在「${groupNameOf(draftGroupId)}」` : '将建在「未分组」' }}
             </span>
+            <!-- 套用排版模板：一建出来就是规范形态（Obsidian 的「从模板新建」）-->
+            <el-button
+              size="small"
+              text
+              class="notes-composer-template"
+              :loading="templateLoading"
+              title="按《笔记 UI 排版规范》生成 front-matter 与标题层级"
+              @click="applyTemplate"
+            >
+              <el-icon><Brush /></el-icon>套用排版模板
+            </el-button>
           </div>
           <NoteEditor
             v-model="draft"
@@ -262,7 +273,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  DataAnalysis, Delete, Document, FolderOpened, Plus, Search,
+  Brush, DataAnalysis, Delete, Document, FolderOpened, Plus, Search,
 } from '@element-plus/icons-vue'
 import { Api } from '../api'
 import { formatTime } from '../utils/format'
@@ -296,6 +307,7 @@ const serverFiltered = ref(true)
 
 // 内联快速新建
 const creating = ref(false)
+const templateLoading = ref(false)
 const draft = ref({ title: '', content: '', tags: [] })
 const draftGroupId = ref(0)
 
@@ -557,6 +569,39 @@ function openCreate() {
   // 当前选中的是某个分组 → 笔记直接建到该分组
   draftGroupId.value = groupId.value === null ? 0 : groupId.value
   creating.value = true
+}
+
+/**
+ * 套用排版模板
+ *
+ * 和 Obsidian 里「从模板新建」是一回事：新建的笔记一出来就带
+ * front-matter 和标题层级，符合《笔记 UI 排版规范》，
+ * 不用事后再排一遍。
+ *
+ * 注意：模板里的 front-matter 是**正文的一部分**
+ * （知识库的笔记模型只有一个 content 字段），渲染时会自动拆出来显示成属性表。
+ */
+async function applyTemplate() {
+  templateLoading.value = true
+  try {
+    const title = (draft.value.title || '').trim()
+    const r = await Api.aiNoteTemplate({
+      title,
+      tags: draft.value.tags || [],
+      source: 'human',
+    })
+    const tpl = r.text || ''
+    // front-matter **要留着** —— 它是规范 §2 的一部分，
+    // 渲染时会自动拆出来显示成属性表（title/tags/created/source…）。
+    // 之前把 front-matter 剥掉了，等于模板白套。
+    draft.value.content = tpl.trim()
+    if (title) draft.value.title = title
+    ElMessage.success('已套用排版模板')
+  } catch (e) {
+    ElMessage.error('套用模板失败：' + (e?.message || e))
+  } finally {
+    templateLoading.value = false
+  }
 }
 
 async function createNote() {

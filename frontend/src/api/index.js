@@ -367,8 +367,10 @@ export const Api = {
   aiRewrite: (text, style = 'polish') => api.post('/api/ai/rewrite', { text, style }),
   // 会议记录 → 结构化纪要（议题/讨论要点/决议/待办）
   aiMeetingMinutes: (text) => api.post('/api/ai/meeting-minutes', { text }),
-  // 针对内容给排版改进建议
+  // 按《笔记 UI 排版规范》把正文排好 —— 直接给排版后的笔记，不是建议
   aiBeautifyLayout: (text) => api.post('/api/ai/beautify-layout', { text }),
+  // 新建笔记的模板（一建出来就是规范形态）
+  aiNoteTemplate: (data) => api.post('/api/ai/note-template', data),
   aiTitle: (content) => api.post('/api/ai/title', { content }),
   // document_ids 为空且 auto_retrieve 为真时，服务端自动混合检索相关文件与笔记
   aiAsk: (question, context, opts = {}) =>

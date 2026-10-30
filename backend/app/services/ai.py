@@ -323,27 +323,63 @@ async def meeting_minutes(text: str) -> str:
 
 
 async def beautify_layout(text: str) -> str:
-    """排版美化建议
+    """按《笔记 UI 排版规范》把正文排好 —— **直接给排版后的笔记，不是给建议**
 
-    针对具体内容给出可执行的排版建议，而不是泛泛而谈
-    「建议使用标题」这种废话 —— 每条建议都要指出**哪一段**、**怎么改**。
+    用户原话：「关于知识库的美化排版只给出了建议，没有进行修改」。
+    之前这个接口只输出一份「建议清单」，用户还得自己照着改一遍 ——
+    那等于没做。
+
+    现在的做法：
+      1. 先用**规则**把确定性的部分做掉（标题 emoji、表格表头加粗、
+         代码块标语言、分割线留白、任务列表统一、引用块转 callout）
+      2. 有大模型时，让模型做它比规则强的那件事：
+         判断哪段是摘要、给标题配语义合适的 emoji、重排混乱的段落
+      3. 无论有没有大模型，**输出的一定是排版后的正文**，
+         不是建议清单 —— 能不能直接用，是这个接口的底线
     """
-    return await chat_real([
-        {"role": "system", "content": (
-            "你是文档排版顾问。请针对下面这段内容给出具体的排版改进建议。\n\n"
-            "输出格式：\n\n"
-            "## 排版建议\n\n"
-            "逐条给出，每条包含：\n"
-            "1. **问题**：引用原文里具体的一小段（≤20 字）\n"
-            "2. **建议**：具体怎么改（改成什么结构、拆成几段、用什么标记）\n"
-            "3. **理由**：一句话说明为什么要改（对阅读/检索/结构化有什么好处）\n\n"
-            "要求：\n"
-            "- 建议要针对这段内容本身，不要给通用模板\n"
-            "- 不要重写内容，只讲排版\n"
-            "- 最后可以补一节「建议的最终结构」，用缩进列表给出改完之后的骨架"
-        )},
-        {"role": "user", "content": text},
-    ])
+    from . import note_format
+
+    # 规则打底：确定性部分先做掉
+    ruled = note_format.format_note(text)
+
+    if not _ai_available():
+        return ruled
+
+    try:
+        polished = await chat_real([
+            {"role": "system", "content": (
+                "你是笔记排版执行器。给你一段笔记正文，**直接输出排版后的完整正文**。\n\n"
+                "必须遵守《笔记 UI 排版规范》：\n"
+                "1. 标题层级：H1 只一个（= 笔记名）；H2 = 主要分节；H3 = 子节\n"
+                "2. 每个 H2 标题前加一个语义相关的 emoji（背景🎯 步骤🔧 配置⚙️ 数据📊 "
+                "警告⚠️ 成功✅ 失败❌ 待办📋 总结📌 链接🔗 时间⏱️）\n"
+                "3. 用 Obsidian callout 表达强调：> [!info] > [!tip] > [!warning] > [!danger] "
+                "> [!example] > [!success] > [!failure] > [!note] > [!abstract] > [!todo]\n"
+                "4. 笔记开头（第一个 H2 之前）放一个 > [!abstract] 摘要块，1-3 行 TL;DR\n"
+                "5. 每个 H2 章节第一段用 > [!note] 或 > [!tip] 一句话点出本章核心\n"
+                "6. 表格：表头用 **粗体**；单元格里的状态词加 emoji（已完成✅ 进行中🚧 "
+                "待开始⏳ 失败❌ 慎用⚠️）\n"
+                "7. 代码块必须标语言（```bash / ```python / ```json …）\n"
+                "8. 分割线统一用 ---，前后各空一行\n"
+                "9. 任务列表用 GitHub 风格：- [x] / - [ ] / - [-] / - [?]\n"
+                "10. 不要输出解释、不要输出「以下是排版后的内容」这类前言\n\n"
+                "**只输出排版后的正文本身。**"
+            )},
+            {"role": "user", "content": ruled},
+        ])
+    except Exception:
+        return ruled
+
+    # 模型输出可能不完整（比如它只回了一段）—— 拿规则版兜底
+    if not polished or len(polished.strip()) < max(20, len(ruled.strip()) * 0.4):
+        return ruled
+    return polished.strip() + "\n"
+
+
+def _ai_available() -> bool:
+    """有没有配好大模型（没配就走纯规则）"""
+    cfg = cfg_svc.get_full_config()
+    return bool(cfg.get("enabled") and cfg.get("api_key") and cfg.get("base_url"))
 
 
 async def suggest_title(content: str) -> str:

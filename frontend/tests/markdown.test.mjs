@@ -159,5 +159,41 @@ const has = (html, s) => html.includes(s)
   assert('escapeHtml 处理 null', escapeHtml(null) === '')
 }
 
+// ---------- Obsidian callout（规范 §3）----------
+//
+// 不支持 callout 的话，规范里写的一堆 `> [!warning]` 到页面上
+// 全变成灰引用块，层次感就没了 —— 规范就白定了。
+{
+  const src = '> [!warning] 危险\n> 升级前必须备份'
+  const html = renderMarkdown(src, { headingOffset: 0 })
+  assert('callout 渲染成卡片而不是引用块', has(html, 'md-callout') && !has(html, '<blockquote>危险'))
+  assert('callout 带类型 class', has(html, 'md-callout-warning'))
+  assert('callout 有图标', has(html, 'md-callout-ico'))
+  assert('callout 保留标题文字', has(html, '危险'))
+  assert('callout 正文保留', has(html, '升级前必须备份'))
+}
+{
+  const html = renderMarkdown('> [!tip] 技巧\n> 用强刷', { headingOffset: 0 })
+  assert('不同类型给不同 class', has(html, 'md-callout-tip') && !has(html, 'md-callout-warning'))
+  assert('无标题时用默认名', has(html, '技巧'))
+}
+{
+  const html = renderMarkdown('> [!note]\n> 只有正文没有标题', { headingOffset: 0 })
+  assert('callout 没标题时用类型默认名', has(html, '笔记'))
+}
+{
+  const html = renderMarkdown('> [!unknown] 未知类型', { headingOffset: 0 })
+  assert('未知类型降级成普通引用块（内容不丢）', has(html, '<blockquote>'))
+}
+{
+  const html = renderMarkdown('> 普通引用', { headingOffset: 0 })
+  assert('普通引用仍是 blockquote', has(html, '<blockquote>普通引用</blockquote>'))
+}
+{
+  // 可折叠：> [!info]- 标题
+  const html = renderMarkdown('> [!info]- 可折叠\n> 内容', { headingOffset: 0 })
+  assert('callout 支持可折叠标记', has(html, 'is-foldable'))
+}
+
 console.log(failed ? `\n❌ ${failed} 项失败` : '\n✅ 全部通过')
 process.exit(failed ? 1 : 0)

@@ -93,14 +93,11 @@
     </div>
 
     <template #footer>
-      <el-button v-if="!showApply && output" @click="copyOutput">
-        <el-icon><CopyDocument /></el-icon>复制
-      </el-button>
-      <el-button v-if="showApply && output" @click="copyOutput">
+      <el-button v-if="output" @click="copyOutput">
         <el-icon><CopyDocument /></el-icon>复制
       </el-button>
       <el-button v-if="showApply && output" type="primary" @click="applyOutput">
-        <el-icon><Check /></el-icon>应用到笔记
+        <el-icon><Check /></el-icon>{{ applyLabel }}
       </el-button>
       <el-button @click="visible = false">关闭</el-button>
       <el-button type="primary" :loading="loading" @click="run">
@@ -139,9 +136,22 @@ const title = computed(() => {
     title: '📝 AI 生成标题',
     ask: '🤖 AI 智能问答',
     meeting: '🗒️ 会议纪要整理',
-    layout: '🎨 排版美化建议',
+    layout: '🎨 按规范排版',
   }
   return titles[props.task] || 'AI'
+})
+
+/** 应用按钮的文案：不同任务说清楚「应用」的是什么 */
+const applyLabel = computed(() => {
+  const map = {
+    meeting: '存为笔记',
+    layout: '用排版后的正文替换',
+    rewrite: '应用到笔记',
+    title: '设为标题',
+    tags: '加上这些标签',
+    summarize: '应用到笔记',
+  }
+  return map[props.task] || '应用到笔记'
 })
 
 const input = ref('')
@@ -153,8 +163,10 @@ const isTagOutput = computed(() => props.task === 'tags')
 const loading = ref(false)
 const rewriteStyle = ref('polish')
 const config = ref(null)
-// 会议纪要也能「应用到笔记」—— 整理完直接存进笔记里
-const showApply = computed(() => ['rewrite', 'title', 'tags', 'summarize', 'meeting'].includes(props.task))
+// 会议纪要、排版都能「应用到笔记」——
+// 排版这个任务原来只给建议清单、用不了；现在输出的是排版后的正文，直接能存进去
+const showApply = computed(() =>
+  ['rewrite', 'title', 'tags', 'summarize', 'meeting', 'layout'].includes(props.task))
 
 const placeholder = computed(() => {
   const map = {
@@ -163,7 +175,7 @@ const placeholder = computed(() => {
     rewrite: '请粘贴要改写的文本...',
     title: '请粘贴要生成标题的内容...',
     meeting: '把会议记录粘贴进来 —— 谁说了什么、定了什么、谁要做什么\n（原始记录越乱越好，AI 会帮你整理成议题 / 讨论要点 / 决议 / 待办）',
-    layout: '把要排版的正文粘贴进来 —— AI 会指出具体哪一段该怎么改',
+    layout: '把要排版的正文粘贴进来 —— 会按《笔记 UI 排版规范》直接排好（标题配 emoji、表格加粗、代码块标语言、引用转 callout）',
   }
   return map[props.task] || ''
 })

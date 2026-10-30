@@ -62,6 +62,15 @@ class BeautifyIn(BaseModel):
     text: str
 
 
+class NoteTemplateIn(BaseModel):
+    title: str = ""
+    tags: list[str] = []
+    source: str = "human"
+    scope: str = "concept"
+    status: str = "draft"
+    summary: str = ""
+
+
 class TitleIn(BaseModel):
     content: str
 
@@ -197,6 +206,25 @@ async def beautify_layout(payload: BeautifyIn) -> dict:
         raise HTTPException(400, "文本为空")
     result = await ai_svc.beautify_layout(payload.text)
     return {"text": result}
+
+
+@router.post("/note-template", dependencies=_AI)
+async def note_template(payload: NoteTemplateIn) -> dict:
+    """新建笔记的模板（按《笔记 UI 排版规范》）
+
+    和 Obsidian 里「从模板新建」是一回事：一建出来就是规范形态，
+    不用事后再排一遍。
+    """
+    from ..services import note_format
+    text = note_format.note_template(
+        payload.title,
+        tags=payload.tags,
+        source=payload.source,
+        scope=payload.scope,
+        status=payload.status,
+        summary=payload.summary,
+    )
+    return {"text": text}
 
 
 @router.post("/rewrite", dependencies=_AI)

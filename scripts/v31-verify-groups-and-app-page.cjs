@@ -15,7 +15,7 @@
  */
 const puppeteer = require('/Users/trisome/.workbuddy/binaries/node/workspace/node_modules/puppeteer-core')
 
-const BASE = process.env.BASE || 'http://127.0.0.1:5173'
+const BASE = process.env.BASE || process.env.KB_FRONTEND || 'http://127.0.0.1:5173'
 const USER = process.env.KB_USER || 'admin'
 const PASS = process.env.KB_PASS || 'Kb@2026admin'
 

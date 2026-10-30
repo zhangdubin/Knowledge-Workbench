@@ -15,7 +15,7 @@ const puppeteer = require('/Users/trisome/.workbuddy/binaries/node/workspace/nod
 const { USER, PASS } = require('../scripts/lib/session.cjs')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-const BASE = process.env.BASE || 'http://localhost:5173'
+const BASE = process.env.BASE || process.env.KB_FRONTEND || 'http://localhost:5173'
 const W = Number(process.env.W || 390)
 const H = Number(process.env.H || 844)
 

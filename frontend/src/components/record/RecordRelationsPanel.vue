@@ -79,10 +79,14 @@
     </section>
 
     <!-- 添加关联 -->
+    <!-- 注意 prop 名：RelationLinker 收的是 self-kind / self-id / self-label，
+         不是 record —— 传错了弹窗里就会显示「当前记录是 #null」 -->
     <RelationLinker
       v-model="addRelationOpen"
       :defs="relationDefs"
-      :record="record"
+      self-kind="record"
+      :self-id="record?.id"
+      :self-label="recordLabel"
       @linked="onLinked"
     />
 
@@ -120,7 +124,7 @@
  *   - 数据怎么加载只有一处
  *   - 两边行为不会走偏（以前常见「记录页能删关联、应用页不能」这种不一致）
  */
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Connection, Delete, Link, MagicStick, Notebook, Plus, View } from '@element-plus/icons-vue'
@@ -133,6 +137,13 @@ const props = defineProps({
 })
 
 const router = useRouter()
+
+/** 记录的显示名（优先 name，其次 title，最后 #id） */
+const recordLabel = computed(() => {
+  const r = props.record
+  if (!r) return ''
+  return r.data?.name || r.data?.title || `#${r.id}`
+})
 
 const relations = ref([])
 const relationDefs = ref([])

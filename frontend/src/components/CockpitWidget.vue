@@ -640,7 +640,22 @@ function shortTime(s) {
 /* 卡片高度是用户自由拖出来的，内容高于卡片时在卡内滚动，
    不许溢出去压到别人的卡片上 */
 .cw-table { flex: 1; min-height: 0; }
-.cw-list { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; }
+/* 清单可滚动。
+   但 macOS 的滚动条要 hover 才显（Windows 也是），用户根本看不出下面还有内容 ——
+   最后一条被切一半，看着就像渲染坏了。
+   所以底部加一层渐隐：内容没到底时底部是渐隐的，提示「还有，往下滚」。 */
+.cw-list {
+  display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto;
+  /* 渐隐提示的挂载点 */
+  position: relative;
+  scrollbar-width: thin;
+}
+.cw-list::-webkit-scrollbar { width: 8px; }
+.cw-list::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+.cw-list::-webkit-scrollbar-track { background: transparent; }
 .cw-li {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 8px 2px; border-bottom: 1px solid var(--border-light); cursor: pointer;

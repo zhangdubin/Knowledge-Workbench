@@ -29,17 +29,44 @@
         </span>
       </div>
       <div v-if="eligible.length" class="rl-defs">
-        <button v-for="d in eligible" :key="d.id" class="rl-def" @click="chooseDef(d)">
-          <span class="rd-name">{{ d.name }}</span>
-          <span class="rd-dir">
-            <em>{{ d.source_icon || '📦' }} {{ d.source_label }}</em>
-            <el-icon :size="12"><Right /></el-icon>
-            <em class="tgt">{{ d.target_icon || '📦' }} {{ d.target_label }}</em>
+        <!-- 用 div + role=button，不用 <button>：
+             Chrome 对 <button> 有特殊处理 —— 它的固有高度是「一行文字那么高」，
+             不管里面放了多少内容都撑不开（实测按钮 28px 高、内容 63px，
+             内容就溢出到下一条上去了，条目互相叠着）。
+             换成普通 div 就没这个问题，键盘可达性用 role/tabindex 补上。 -->
+        <div
+          v-for="d in eligible"
+          :key="d.id"
+          class="rl-def"
+          role="button"
+          tabindex="0"
+          @click="chooseDef(d)"
+          @keydown.enter="chooseDef(d)"
+          @keydown.space.prevent="chooseDef(d)"
+        >
+          <!-- 内容包一层 div：
+               <button> 直接当 flex/grid 容器时，Chrome 用的是**浏览器给按钮的固有高度**
+               （一行文字那么高），不会按内容撑开 —— 实测按钮 28px 高、内容 74px，
+               于是内容溢出到下一行上，一堆条目互相叠着（用户截图里就是这样）。
+               把内容放进普通 div，按钮只管边框和点击，高度就正常了。 -->
+          <span class="rd-inner">
+            <!-- 名字后面挂上「源模型」——
+                 「关联知识」这类名字会有好几条（任务→笔记、项目→笔记…），
+                 光看名字分不出是哪条，列表里全是重复项 -->
+            <span class="rd-name">
+              {{ d.name }}
+              <em v-if="sameNameCount(d.name) > 1" class="rd-name-from">· {{ d.source_label || d.source_key }}</em>
+            </span>
+            <span class="rd-dir">
+              <em>{{ d.source_icon || '📦' }} {{ d.source_label }}</em>
+              <el-icon :size="12"><Right /></el-icon>
+              <em class="tgt">{{ d.target_icon || '📦' }} {{ d.target_label }}</em>
+            </span>
+            <span class="rd-meta">
+              {{ cardLabel(d.cardinality) }} · 已有 {{ d.link_count || 0 }} 条关联
+            </span>
           </span>
-          <span class="rd-meta">
-            {{ cardLabel(d.cardinality) }} · 已有 {{ d.link_count || 0 }} 条关联
-          </span>
-        </button>
+        </div>
       </div>
       <div v-else class="rl-empty">
         <el-icon :size="26"><Connection /></el-icon>
@@ -124,6 +151,9 @@ const CARD_LABELS = {
   'many-to-one': '多对一', 'one-to-one': '一对一',
 }
 const cardLabel = (c) => CARD_LABELS[c] || c || '多对多'
+
+/** 有多少条定义跟这条同名 —— >1 才需要标出来源 */
+const sameNameCount = (name) => (props.defs || []).filter(d => d.name === name).length
 
 const step = ref(1)
 const pickedDef = ref(null)
@@ -224,23 +254,43 @@ async function submit() {
 .rl-line { flex: 1; height: 1px; background: var(--border); max-width: 60px; }
 
 .rl-defs { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow: auto; }
+/* 关联定义行
+ *
+ * ⚠️ <button> 不能直接当 flex/grid 容器：
+ * Chrome 会用**浏览器给按钮的固有高度**（就一行文字那么高），
+ * 不会按内容撑开。实测按钮 28px 高、内容要 74px，
+ * 内容就溢出到下一行上，一堆条目互相叠着（用户截图里就是这样）。
+ *
+ * 所以：按钮只负责边框和点击，内容包一层 .rd-inner 用 flex 列排。
+ */
 .rl-def {
-  display: grid; grid-template-columns: 1fr auto; gap: 4px 12px;
-  align-items: center; text-align: left; width: 100%;
-  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  display: block;
+  text-align: left; width: 100%;
+  padding: 11px 14px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--bg-card); cursor: pointer; font-family: inherit;
   transition: all var(--duration) var(--ease-out);
 }
+.rd-inner {
+  display: flex; flex-direction: column; gap: 3px;
+}
 .rl-def:hover { border-color: var(--primary); background: var(--primary-bg); }
-.rd-name { font-size: var(--text-base); font-weight: 650; color: var(--text-primary); }
+.rd-name {
+  font-size: var(--text-base); font-weight: 650; color: var(--text-primary);
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+}
+.rd-name-from {
+  font-style: normal; font-size: var(--text-xs); font-weight: 500;
+  color: var(--text-tertiary);
+}
 .rd-dir {
-  grid-row: 2; grid-column: 1 / -1;
   display: inline-flex; align-items: center; gap: 6px;
   font-size: var(--text-sm); color: var(--text-tertiary);
+  min-width: 0;
 }
+.rd-dir em { font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rd-dir em { font-style: normal; }
 .rd-dir em.tgt { color: var(--primary); }
-.rd-meta { grid-row: 3; grid-column: 1 / -1; font-size: var(--text-xs); color: var(--text-disabled); }
+.rd-meta { font-size: var(--text-xs); color: var(--text-tertiary); }
 
 .rl-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .rl-def-name { font-size: var(--text-base); font-weight: 650; color: var(--text-primary); }

@@ -12,7 +12,12 @@
       Esc             取消（先关掉双链候选，再退出编辑）
       标题里回车      跳到正文
   -->
-  <div class="composer" :class="`composer-${mode}`" @keydown="onKeydown">
+  <div
+    class="composer"
+    :class="`composer-${mode}`"
+    :style="{ '--composer-body-h': bodyHeight + 'px' }"
+    @keydown="onKeydown"
+  >
     <!-- 标题：Obsidian 里文件名就是第一行，所以标题框是主入口 -->
     <div class="composer-title-row">
       <el-icon class="composer-icon"><Notebook /></el-icon>
@@ -71,9 +76,10 @@
           spellcheck="false"
           @input="onBodyInput"
           @keydown="onBodyKeydown"
+          @scroll="onBodyScroll"
         ></textarea>
         <!-- 双链高亮覆盖层（与 textarea 同字体同间距，逐字对齐） -->
-        <div class="composer-overlay" aria-hidden="true" v-html="highlightedContent"></div>
+        <div ref="overlayRef" class="composer-overlay" aria-hidden="true" v-html="highlightedContent"></div>
 
         <!-- 双链候选：输入 [[ 时提示已有笔记 -->
         <div v-if="suggestVisible" class="composer-suggest" role="listbox" aria-label="双链候选">
@@ -137,6 +143,7 @@ import { Notebook } from '@element-plus/icons-vue'
 import { Api } from '../api'
 import TagInput from './TagInput.vue'
 import { extractHashtags, firstLineTitle, renderNoteHtml } from '../utils/notes'
+import { highlightEditorText } from '../utils/editorHighlight'
 
 const props = defineProps({
   modelValue: { type: Object, default: () => ({}) },
@@ -153,6 +160,7 @@ const preview = ref(false)
 
 const titleRef = ref(null)
 const bodyRef = ref(null)
+const overlayRef = ref(null)
 
 // 双链候选
 const suggestVisible = ref(false)
@@ -176,19 +184,78 @@ const inlineTags = computed(() =>
   )
 )
 
-const highlightedContent = computed(() => {
-  let html = escapeHtml(localContent.value || '')
-  html = html.replace(/\[\[([^\[\]\n]+?)\]\]/g, (_m, title) => {
-    return `<span class="composer-wikilink">[[${escapeHtml(title)}]]</span>`
-  })
-  html = html.replace(/\n/g, '<br/>')
-  return html
-})
+/**
+ * 编辑器随内容变高
+ *
+ * 原来编辑区是固定 180px，长文本全挤在里面要滚动 ——
+ * 而下面还压着一个同样 180px 的高亮覆盖层，两层**各滚各的**，
+ * 于是「滑动没反应」：文字框动了，高亮层没动，看着像卡住了。
+ *
+ * 现在：
+ *   1. 内容超过阈值时，编辑区跟着长高（到上限为止）
+ *   2. 覆盖层与文字框滚动位置始终同步
+ */
+const MAX_AUTO_HEIGHT = 620   // 再高就该在页面里滚了，编辑器内部不再无限长
+
+/** 编辑区实际高度（px） */
+const bodyHeight = ref(0)
+
+function autoGrow() {
+  const ta = bodyRef.value
+  if (!ta) return
+  const cs = getComputedStyle(ta)
+  const padY = parseFloat(cs.paddingTop || '0') + parseFloat(cs.paddingBottom || '0')
+  const borderY = parseFloat(cs.borderTopWidth || '0') + parseFloat(cs.borderBottomWidth || '0')
+  // scrollHeight 含内边距，减掉自身已有的 padding/border 才是内容高度
+  const content = ta.scrollHeight - padY - borderY
+  const base = props.mode === 'full' ? 420 : 180
+  const next = Math.min(Math.max(base, content), MAX_AUTO_HEIGHT)
+  bodyHeight.value = next
+  ta.style.height = `${next}px`
+  syncScroll()
+}
+
+/** 覆盖层跟着文字框滚 —— 两层不同步就是「滑动没反应」的元凶 */
+function syncScroll() {
+  const ta = bodyRef.value
+  const ov = overlayRef.value
+  if (!ta || !ov) return
+  if (Math.abs(ov.scrollTop - ta.scrollTop) > 0.5) {
+    ov.scrollTop = ta.scrollTop
+  }
+  if (Math.abs(ov.scrollLeft - ta.scrollLeft) > 0.5) {
+    ov.scrollLeft = ta.scrollLeft
+  }
+}
+
+function onBodyScroll() {
+  syncScroll()
+}
+
+/**
+ * 编辑区的高亮层
+ *
+ * 之前只把 [[双链]] 包成 span，别的什么都不管 ——
+ * 所以在编辑器里写 ```bash 代码块，看着就是普通文字，
+ * 「代码没被识别」就是这么来的。
+ *
+ * 现在用 editorHighlight 做**行内**高亮：标题、代码块围栏、
+ * 行内代码、强调、任务列表、callout、双链都能认出来。
+ *
+ * 为什么不用 renderMarkdown：那个产出的是块级 HTML，
+ * 行高和内外边距跟 textarea 对不上，字会错位、光标会飘。
+ */
+const highlightedContent = computed(() =>
+  highlightEditorText(localContent.value || '', escapeHtml)
+    .replace(/\n/g, '<br/>')
+)
 
 watch(() => props.modelValue, v => {
   localTitle.value = v.title || ''
   localContent.value = v.content || ''
   localTags.value = [...(v.tags || [])]
+  // 外部换了内容（比如切了别的笔记）→ 高度要重算
+  nextTick(autoGrow)
 }, { deep: true })
 
 function emitChange() {
@@ -279,6 +346,8 @@ async function loadTitleIndex() {
 function onBodyInput(e) {
   localContent.value = e.target.value
   emitChange()
+  // 内容变了 → 编辑区高度要跟着变
+  autoGrow()
   const ta = bodyRef.value
   if (!ta) return
   const pos = ta.selectionStart
@@ -328,6 +397,8 @@ function escapeHtml(s) {
 
 onMounted(async () => {
   await loadTitleIndex()
+  // 初始高度按内容算（长笔记一打开就是够高的，不用先滚动才知道下面还有）
+  nextTick(autoGrow)
   // 打开即聚焦标题：Obsidian 的「随手记」手感全靠这一点
   if (props.mode === 'quick') nextTick(() => titleRef.value?.focus())
 })
@@ -381,14 +452,19 @@ onMounted(async () => {
 }
 
 /* 正文 */
+/* 编辑区高度由 JS 按内容算（autoGrow）——
+   写死 180px 的话长笔记全挤在里面要滚动，
+   而下面还压着同样高度的高亮层，两层各滚各的，看着就像「滑动没反应」。 */
 .composer-body {
   position: relative;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   min-height: 180px;
+  height: var(--composer-body-h, 180px);
+  transition: height var(--duration-fast) var(--ease-out);
 }
-.composer-full .composer-body { min-height: 420px; }
+.composer-full .composer-body { min-height: 420px; height: var(--composer-body-h, 420px); }
 
 .composer-switch {
   position: absolute;
@@ -420,6 +496,7 @@ onMounted(async () => {
   position: relative;
   height: 100%;
   min-height: inherit;
+  /* 高度跟着 .composer-body 走 */
 }
 .composer-editor,
 .composer-overlay {
@@ -455,6 +532,58 @@ onMounted(async () => {
   border-radius: 3px;
   padding: 0 3px;
 }
+
+/* ============ 编辑器行内高亮 ============
+   覆盖层与 textarea 逐字对齐，所以这些 span **只能改颜色/背景**，
+   绝不能改字号、行高、内外边距 —— 改了就错行、光标会飘。
+   （之前只高亮 [[双链]]，写代码块时看着就是普通文字，
+     「编辑器没识别代码」就是这么来的）
+
+   ⚠️ 必须用 :deep()：覆盖层的内容来自 v-html，
+   v-html 渲染出来的节点**没有 scoped 属性**，
+   不加 :deep() 的话这些样式一条都落不上（实测背景是透明的、
+   字体也不是等宽）。 */
+
+:deep(.ed-h) { color: var(--text-primary); font-weight: 700; }
+
+:deep(.ed-fence) { color: var(--primary-dark); font-weight: 600; }
+:deep(.ed-lang) { color: var(--text-tertiary); font-weight: 500; font-size: 0.9em; margin-left: 4px; }
+html.dark :deep(.ed-fence) { color: var(--primary-light); }
+
+/* 代码块正文：等宽 + 浅底，整行一眼看出「这是代码」 */
+:deep(.ed-code-line) {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+:deep(.ed-inline-code) {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--bg-subtle);
+  color: var(--primary-dark);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+html.dark :deep(.ed-inline-code) { color: var(--primary-light); }
+
+:deep(.ed-em) { font-weight: 650; color: var(--text-primary); }
+:deep(.ed-wikilink) {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+:deep(.ed-link) { color: var(--info); text-decoration: underline; }
+
+:deep(.ed-task) { color: var(--text-tertiary); }
+:deep(.ed-task.is-done) { color: var(--success); }
+
+:deep(.ed-bullet) { color: var(--text-tertiary); }
+
+:deep(.ed-callout-tag) { color: var(--primary-dark); font-weight: 650; }
+html.dark :deep(.ed-callout-tag) { color: var(--primary-light); }
 
 .composer-preview {
   padding: 12px 16px;

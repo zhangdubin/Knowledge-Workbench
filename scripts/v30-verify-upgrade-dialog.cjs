@@ -173,8 +173,19 @@ async function main() {
       // 也就没有障碍要解决、没有命令要给。
       // （原来无条件要求，实例升到最新后体检就误报了）
       if (isLatest) {
-        if (/阻塞|没法|无法/.test(t)) bad('已是最新版本，却还在说升级受阻')
-        else ok('已是最新版本，不显示障碍与升级命令（正确）')
+        // 已是最新时**可以**显示「为下次升级做准备」的障碍清单
+        // （比如还缺 docker socket），但不能把结论说成「升级受阻」。
+        // 所以只查标题那句话，不能整段搜「无法」——
+        // 障碍的说明文字里本来就该有「无法导入镜像」这类话。
+        const heading = await page.evaluate(() => {
+          const el = document.querySelector('.upgrade-blockers-title')
+          return el ? (el.innerText || '').trim() : ''
+        })
+        if (/当前环境不能自动升级|升级受阻|无法升级/.test(heading)) {
+          bad(`已是最新版本，标题却说升级受阻（${heading}）`)
+        } else {
+          ok(`已是最新版本，不说升级受阻（${heading || '无障碍清单'}）`)
+        }
       } else {
         if (/阻塞|缺|没法|无法|开启|命令/.test(t)) ok('弹窗说明了障碍或给出了开启引导')
         else bad('弹窗既没说障碍，也没给开启引导')

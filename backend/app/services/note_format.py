@@ -59,15 +59,39 @@ STATUS_EMOJI: list[tuple[str, str]] = [
 ]
 
 # §6.1 代码块语言：按内容猜一个（猜不到就不标，不瞎标）
+# 代码块语言识别
+#
+# 「AI 对内容识别不到位、排版时没有识别到代码」——除了编辑器不认代码，
+# 这里也只扫了前 5 行：长代码块的语言特征（比如第 20 行才出现的
+# `def` / `SELECT`）根本扫不到，于是整块代码没有语言标识。
+#
+# 现在扫**全文**，并且语言线索更全。
 _LANG_HINTS: list[tuple[str, str]] = [
-    (r"^\s*(docker|docker-compose)\b", "bash"),
-    (r"^\s*(\$|#!|npm|yarn|pnpm|pip|git|curl|cd |ls |mkdir|chmod|apt|brew)\b", "bash"),
-    (r'^\s*[{\[]|^\s*[\w"\'-]+\s*:', "json"),
-    (r"^\s*<\?xml|^<\w+>", "xml"),
-    (r"^\s*(from |import |def |class |return |print\()", "python"),
-    (r"^\s*(SELECT|select|UPDATE|update|INSERT|insert|DELETE|delete|FROM|from)\b", "sql"),
-    (r"^\s*<\w+.*>.*</\w+>", "html"),
-    (r"^\s*[\w.-]+\s*:\s*.+;", "yaml"),
+    (r"^\s*(docker|docker-compose|dockerfile)\b", "bash"),
+    (r"^\s*(\$|#!|npm|yarn|pnpm|pip\s|git\s|curl\s|wget\s|cd\s|ls\s|mkdir\s|chmod\s|apt\s|apt-get\s|yum\s|brew\s|export\s|source\s|systemctl\s|kubectl\s|helm\s|tar\s|ssh\s|scp\s|rsync\s)", "bash"),
+    (r"^\s*(sudo|set\s+-[euxo]|if\s|then|else|fi|for\s|while\s|do|done|case\s|esac|function\s|return\s|echo\s)", "bash"),
+    (r"^\s*#!/usr/bin/env\s+(python|node|ruby|perl|php)", "python"),
+    (r"^\s*#!/bin/(ba)?sh", "bash"),
+    (r'^\s*\{\s*$', "json"),
+    (r'^\s*\{\s*"[^"]+"\s*:', "json"),
+    (r'^\s*\[[\s\n]*\{\s*"', "json"),
+    (r"^\s*<\?xml", "xml"),
+    (r"^\s*<\w+[^>]*>\s*</\w+>", "html"),
+    (r"^\s*<!DOCTYPE\s+html", "html"),
+    (r"^\s*(from\s+\w+\s+import|import\s+\w+|def\s+\w+\s*\(|class\s+\w+|print\s*\(|if\s+__name__|self\.|async\s+def|@\w+\.\w+)", "python"),
+    # 裸赋值（x = 1 / a.b = 2）—— Python 最常见的形态
+    (r"^\s*[A-Za-z_][\w.]*\s*=\s*[^=>]", "python"),
+    (r"^\s*(SELECT|select|INSERT|insert|UPDATE|update|DELETE|delete|FROM|from|WHERE|where|JOIN|join|GROUP\s+BY|ORDER\s+BY)\b", "sql"),
+    (r"^\s*(CREATE\s+TABLE|ALTER\s+TABLE|PRAGMA|GRANT\s|REVOKE\s)", "sql"),
+    (r"^\s*[\w.-]+\s*:\s*\S", "yaml"),
+    (r"^\s*[-]{3}\s*$", "yaml"),
+    (r"^\s*(package|import|export|const|let|var|function|=>|async\s+function)\s", "javascript"),
+    (r"^\s*<(?:div|span|p|a|html|body|head)\b", "html"),
+    (r"^\s*[.#]?\w+\s*\{\s*$", "css"),
+    (r"^\s*[@\w.-]+\s*\([^)]*\)\s*\{", "css"),
+    (r"^\s*(public|private|protected)\s+\w+", "java"),
+    (r"^\s*(func|package)\s+\w+", "go"),
+    (r"^\s*(use|fn|impl|struct|pub)\s", "rust"),
 ]
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*$")
@@ -103,11 +127,23 @@ def _looks_like_code(line: str) -> bool:
 
 
 def _guess_lang(lines: list[str]) -> str:
-    """猜代码块语言（§6.1）"""
+    """猜代码块语言（§6.1）
+
+    ⚠️ 要扫**全文**，不能只看开头几行：
+    很多代码块的语言特征在中间或靠后（比如先写注释和配置，
+    第 20 行才出现 def / SELECT）。只扫前 5 行的话，
+    「AI 没识别到代码」就变成「代码块没有语言标识」。
+    """
     body = [l for l in lines if l.strip()]
     if not body:
         return ""
-    for line in body[:5]:
+    # 先看前 8 行（语言特征通常靠前，命中更快），
+    # 没命中再扫全文 —— 避免整块很长的代码被逐行正则拖慢。
+    for line in body[:8]:
+        for pat, lang in _LANG_HINTS:
+            if re.search(pat, line):
+                return lang
+    for line in body[8:]:
         for pat, lang in _LANG_HINTS:
             if re.search(pat, line):
                 return lang

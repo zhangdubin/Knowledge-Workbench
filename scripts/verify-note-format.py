@@ -110,6 +110,32 @@ twice = fmt(once)
 check("排版基本幂等（再排一次不会更乱）",
       once.count("## ") == twice.count("## "), f"{once.count('## ')} vs {twice.count('## ')}")
 
+# ---------- 代码块语言识别（§6.1）----------
+# 「AI 对内容识别不到位、排版时没有识别到代码」——
+# 原来只扫前 5 行，语言特征在后面的代码块就认不出来了。
+_code_cases = [
+    (['docker compose up -d'], 'bash'),
+    (['curl -s http://x/api/health', 'ls -la'], 'bash'),
+    (['import os', 'def main():'], 'python'),
+    (['SELECT id FROM t WHERE x=1'], 'sql'),
+    (['{', '  "a": 1'], 'json'),
+    (['name: test', 'items:'], 'yaml'),
+    (['const a = 1'], 'javascript'),
+    (['<!DOCTYPE html', '<div>hi</div>'], 'html'),
+]
+for _body, _want in _code_cases:
+    _got = note_format._guess_lang(_body)
+    check(f"代码块语言识别：{_want}", _got == _want, f"得到 {_got!r}")
+
+# 关键回归：语言特征在很后面（前面 20 行都是注释）
+_long_body = ['// 前面的注释'] * 20 + ['def handler():', '    pass']
+_got = note_format._guess_lang(_long_body)
+check('代码块语言识别：特征在第 21 行也认得出来', _got == 'python', f"得到 {_got!r}")
+
+# 完整排版：代码块要有语言标识
+_out = fmt('```\n' + 'x = 1\n' + '```')
+check('排版后代码块带语言标识', '```python' in _out, repr(_out[:80]))
+
 print()
 print(f"{PASSED} 项通过，{FAILED} 项失败")
 sys.exit(1 if FAILED else 0)

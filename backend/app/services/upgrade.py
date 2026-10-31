@@ -294,6 +294,192 @@ def _has_build_section(text: str) -> bool:
     return False
 
 
+# ==================== 版本核对 ====================
+
+# 版本号归一：GitHub 的 tag 写 "v0.6.9"，代码里写 "0.6.9"。
+# 比版本时必须先归一 —— 否则 "0.6.9" != "v0.6.9"，
+# 明明升上去了却被判成「没生效」，比不判还糟。
+_VERSION_RE = re.compile(r"^[vV]?(\d+(?:\.\d+)*)")
+
+
+def _norm_version(raw: str) -> str:
+    """把版本号归一成「数字.数字.数字」（去掉 v 前缀与空白）"""
+    s = str(raw or "").strip()
+    m = _VERSION_RE.match(s)
+    return m.group(1) if m else s.lstrip("vV")
+
+
+def _same_version(a: str, b: str) -> bool:
+    """两个版本号是不是同一个
+
+    拿不到版本号时一律判「不同」—— 「不知道」不能当成「一样」，
+    否则界面会为一个根本没核对过的状态报成功。
+    """
+    na, nb = _norm_version(a), _norm_version(b)
+    return bool(na) and bool(nb) and na == nb
+
+
+def _version_mismatch_message(running: str, target: str) -> str:
+    """版本没对上时给用户看的一句话
+
+    要回答三件事：现在跑的是哪一版、目标是哪一版、接下来查什么。
+    只说「升级失败」等于把排查的活儿全推给用户。
+    """
+    return (f"服务已重启，但运行的仍是 v{_norm_version(running)}"
+            f"（目标 v{_norm_version(target)}）—— 升级没有真正生效。"
+            "请检查 docker compose logs backend 与镜像标签是否换成功。")
+
+
+def _declared_version(config_text: str) -> str:
+    """从 backend/app/config.py 的源码里读出它声明的 app_version
+
+    不 import 那个文件（会拉起整套 pydantic 配置，还依赖运行目录），
+    只按行找 `app_version: str = "0.6.9"` 这一行 ——
+    读源码足够回答「这个 tag 里写的是哪个版本」。
+    """
+    m = re.search(r"""app_version\s*:\s*str\s*=\s*["']([^"']+)["']""", config_text)
+    return m.group(1).strip() if m else ""
+
+
+# ==================== 编排文件里的镜像引用 ====================
+
+def _split_ref(ref: str) -> tuple[str, str]:
+    """镜像引用 → (仓库名, 标签)
+
+    "kb-workbench-backend:latest" → ("kb-workbench-backend", "latest")
+    "kb-workbench-backend"        → ("kb-workbench-backend", "latest")
+    """
+    r = str(ref or "").strip()
+    if "@" in r:                      # 形如 repo@sha256:... —— 摘要引用，用不上
+        r = r.split("@", 1)[0]
+    tail = r.rsplit("/", 1)[-1]
+    if ":" in tail:
+        repo, tag = r.rsplit(":", 1)
+        return repo, tag
+    return r, "latest"
+
+
+def _resolve_image_ref(raw: str) -> str:
+    """把编排文件里的 image 值解析成实际的镜像引用
+
+    支持 compose 的变量写法（`${VAR:-默认值}`）。
+    解析不出来就返回空串 —— 调用方会退回「按项目名拼」的兜底。
+    """
+    v = str(raw or "").strip().strip('"\'')
+    if not v:
+        return ""
+    if "${" not in v:
+        return v
+    m = re.fullmatch(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}", v)
+    if m:
+        var, default = m.group(1), m.group(2)
+        env_val = (os.environ.get(var) or "").strip()
+        if env_val:
+            return env_val
+        return (default or "").strip()
+    # 混合写法（如 ${A}-${B}）不好还原，认不出来就当没有
+    return ""
+
+
+def _compose_project_name(text: str, fallback: str) -> str:
+    """compose 的项目名（编排文件里的 name: 键，没有就用目录名）
+
+    为什么重要：编排文件里不写 image: 时，compose 构建出来的镜像名是
+    `<项目名>-<服务名>:latest`。项目名取错，标签就打错地方，
+    compose up 起来的还是旧镜像 —— 而日志里看不出任何异常。
+    """
+    try:
+        import yaml
+        data = yaml.safe_load(text) or {}
+        if isinstance(data, dict):
+            n = str(data.get("name") or "").strip()
+            if n:
+                return n
+    except Exception:
+        pass
+    # 兜底：逐行找顶格的 name:
+    for line in text.splitlines():
+        m = re.match(r"^name\s*:\s*(\S+)", line)
+        if m:
+            return m.group(1).strip().strip('"\'')
+    return fallback
+
+
+def _scan_compose_images(text: str) -> dict[str, str]:
+    """逐行扫出 services 段里各服务的 image 值（YAML 解析不可用时的兜底）
+
+    手法与 `_has_build_section()` 一致：能用 YAML 就用 YAML，
+    解析不了再退回逐行扫 —— 线上编排文件偶尔带 compose 特有的语法，
+    YAML 解析器可能不认。
+    """
+    out: dict[str, str] = {}
+    in_services = False
+    svc_indent: int | None = None
+    current = ""
+    for raw in text.splitlines():
+        # 只把「前面是空白的 #」当注释，避免误伤值里的 #
+        line = re.sub(r"\s+#.*$", "", raw).rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0:
+            in_services = stripped.rstrip(":") == "services"
+            svc_indent = None
+            current = ""
+            continue
+        if not in_services:
+            continue
+        m = re.match(r"^([A-Za-z0-9_.-]+)\s*:\s*(.*)$", stripped)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        if svc_indent is None:
+            svc_indent = indent
+        if indent <= svc_indent:
+            current = key                      # 服务名
+            out.setdefault(current, "")
+            continue
+        if current and key == "image":
+            out[current] = val
+    return out
+
+
+def _compose_service_images(text: str, project: str) -> dict[str, str]:
+    """编排文件里每个服务期望的镜像引用
+
+    有 image: 就用它；没有就按 compose 自己的命名规则拼
+    `<项目名>-<服务名>:latest`（这正是 compose build 出来的名字）。
+
+    为什么必须知道这个：离线升级导入的是**架构标签**的镜像
+    （kb-workbench-backend:amd64），而 compose 引用的是 :latest。
+    不把新镜像打到 compose 真正引用的那个名字上，
+    compose up 起来的还是旧镜像 —— 界面显示「升级完成」，实际没变。
+    """
+    services: dict[str, str] = {}
+    try:
+        import yaml
+        data = yaml.safe_load(text) or {}
+        raw_services = data.get("services") if isinstance(data, dict) else None
+        if isinstance(raw_services, dict):
+            for name, svc in raw_services.items():
+                ref = ""
+                if isinstance(svc, dict):
+                    ref = _resolve_image_ref(svc.get("image") or "")
+                # 服务定义为空（`backend:` 底下什么都没有）也照样给个名字 ——
+                # 编排文件写得再差，也不能因此漏掉给某个服务准备镜像。
+                services[str(name)] = ref or f"{project}-{name}:latest"
+            return services
+    except Exception:
+        pass
+    # YAML 解析不了时的兜底
+    scanned = _scan_compose_images(text)
+    for name, raw_img in scanned.items():
+        ref = _resolve_image_ref(raw_img) if raw_img else ""
+        services[name] = ref or f"{project}-{name}:latest"
+    return services
+
+
 async def _detect_compose_cmd() -> tuple[list[str], str]:
     """找出可用的 compose 命令
 
@@ -575,6 +761,99 @@ def _read_state_file() -> dict[str, Any] | None:
         return None
 
 
+def _append_log(text: str, line: str) -> str:
+    """往作业日志尾部追加一行"""
+    if not line:
+        return text or ""
+    return f"{text}\n{line}" if text else line
+
+
+def _audit_restored_verdict(job_data: dict[str, Any], action: str,
+                            detail: dict[str, Any]) -> None:
+    """给「重启之后才结算出来的升级结果」补一条审计
+
+    为什么要有：正常升级路径里，成功/失败的审计是 `_run_job` 写的，
+    而第 4 步会把那个进程杀掉 —— 于是走完一次升级，审计日志里
+    反而什么都没有。这里补上，升级这件事才是有据可查的。
+
+    get_job 是同步函数，不能 await 审计写入，所以用 create_task 挂到
+    当前事件循环上。审计写失败绝不能把接口带崩 —— 整段都兜住。
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return                      # 没有事件循环（测试环境）就跳过
+
+    async def _safe_log() -> None:
+        # 审计写失败（表不存在、字段对不上……）绝不能变成
+        # 一个没人认领的 task 异常，把日志刷满。
+        try:
+            await audit_svc.log_event(
+                str(job_data.get("who") or ""), action,
+                resource="system_upgrade", method="POST",
+                path="/api/system/update/apply",
+                status=200 if action == "upgrade_succeeded" else 500,
+                detail=detail,
+            )
+        except Exception:
+            pass
+
+    try:
+        loop.create_task(_safe_log())
+    except Exception:
+        pass
+
+
+def _settle_restarting_job(data: dict[str, Any]) -> dict[str, Any]:
+    """把「重启中」的历史作业结算成「成功」或「失败」
+
+    为什么必须核对版本：状态文件里的 restarting 是**上一个进程**写的，
+    它没能看到新容器起来。现在能应答的这个进程只说明「服务回来了」——
+    至于回来的是不是新版本，要看它自己的版本号。
+
+    以前这里无条件判成功，于是「升级没生效」会被说成「升级完成」，
+    用户刷新页面看到还是旧版本，却找不到任何报错 ——
+    这正是这次要修的那个现象。
+
+    结算结果要**写回状态文件**：不然下一次轮询又读到 restarting，
+    同一段话会被追加进日志很多遍，日志框里全是重复。
+    """
+    running = str(settings.app_version or "")
+    target = str(data.get("target") or "")
+    if not target:
+        # 没有目标版本可比对（比如作业没记下目标）：
+        # 判成功不算错，但必须把「没核对过」讲清楚，不能假装核对过。
+        out = {**data, "status": ST_SUCCEEDED,
+               "note": "服务已重启完成（未记录目标版本，未核对版本号）"}
+        _save_state_file(out)
+        return out
+    if _same_version(running, target):
+        out = {**data, "status": ST_SUCCEEDED,
+               "note": f"已确认运行版本 v{_norm_version(running)}"}
+        _save_state_file(out)
+        _audit_restored_verdict(out, "upgrade_succeeded", {
+            "target": target, "running": running,
+            "note": "重启后核对运行版本一致",
+        })
+        return out
+    msg = _version_mismatch_message(running, target)
+    out = {**data, "status": ST_FAILED, "error": msg,
+           "note": "服务已重启，但版本没有变"}
+    # 同一段话也要进日志：弹窗里的日志框是用户排障时唯一能看到的东西，
+    # 只写进 error 字段的话，日志框里仍然是满屏「成功」的记录。
+    out["log"] = _append_log(str(out.get("log") or ""), msg)
+    try:
+        out["log_lines"] = int(out.get("log_lines") or 0) + 1
+    except (TypeError, ValueError):
+        out["log_lines"] = 1
+    _save_state_file(out)
+    _audit_restored_verdict(out, "upgrade_failed", {
+        "target": target, "running": running, "error": msg[:500],
+        "note": "重启后核对运行版本不一致 —— 升级没有真正生效",
+    })
+    return out
+
+
 def get_job(job_id: str = "") -> dict[str, Any]:
     """取当前作业状态
 
@@ -586,11 +865,11 @@ def get_job(job_id: str = "") -> dict[str, Any]:
         return {"ok": True, "job": job.snapshot(), "restored": False}
     data = _read_state_file()
     if data and (not job_id or data.get("job_id") == job_id):
-        # 状态停在「重启中」，而我们现在还能应答 —— 说明新容器已经起来了，
-        # 这次升级实际上成功了（写这个状态的是上一个进程，它没能改过来）。
+        # 状态停在「重启中」，而我们现在还能应答 —— 说明新容器已经起来了。
+        # 但「服务回来了」不等于「升级生效了」：要拿这个进程自己的版本号
+        # 跟作业的目标版本比一比，对不上就必须如实报失败。
         if data.get("status") == ST_RESTARTING:
-            data = {**data, "status": ST_SUCCEEDED,
-                    "note": "服务已重启完成"}
+            data = _settle_restarting_job(data)
         # 状态停在「运行中」，但内存里没有活着的作业 ——
         # 写这个状态的进程已经不在了（容器重启过、进程被杀了、宿主机断电）。
         # 谎称还在跑只会让前端转圈转到天荒地老，
@@ -1118,7 +1397,8 @@ async def _self_container_info(docker: str) -> dict[str, Any]:
 
 
 async def _start_restart_helper(job: UpgradeJob, plan: dict[str, Any],
-                                root: Path, compose: list[str]) -> bool:
+                                root: Path, compose: list[str],
+                                extra: list[str] | None = None) -> bool:
     """起一个**独立容器**去跑 compose up。
 
     为什么不能在本容器里直接跑 compose up：
@@ -1134,6 +1414,9 @@ async def _start_restart_helper(job: UpgradeJob, plan: dict[str, Any],
     用的镜像是**当前正在跑的这个容器的镜像 ID**（不是 :latest 标签）：
     此刻 :latest 已经指向新镜像了，而新镜像未必带 docker/compose；
     老镜像一定带（能执行升级就说明它带）。
+
+    `extra` 是追加给 compose up 的参数（离线升级传 --no-build）：
+    绝不能让 compose 拿本地源码重新构建 —— 那会把刚导入的新镜像盖掉。
 
     返回 False 表示起不来（调用方退回「在本容器里跑」的旧办法）。
     """
@@ -1153,7 +1436,7 @@ async def _start_restart_helper(job: UpgradeJob, plan: dict[str, Any],
         return False
 
     name = f"kb-upgrade-restart-{uuid.uuid4().hex[:6]}"
-    inner = " ".join([*compose, "up", "-d", "--remove-orphans"])
+    inner = " ".join([*compose, "up", "-d", "--remove-orphans", *(extra or [])])
     # 睡 2 秒再动手：给后端一点时间把「重启中」写进状态文件、
     # 把响应返回给前端。前端这时候已经在轮询了。
     script = (f"sleep 2; cd {shlex.quote(cpath)} && {inner} "
@@ -1227,54 +1510,145 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
 
         # ---- 3. 导入 + 提升标签 ----
         #
-        # 回滚：改标签前先记住旧的 :latest 指向哪个镜像。
+        # 回滚：改标签前先记住旧标签指向哪个镜像。
         # 为什么需要：`:latest` 一旦被指到新镜像，旧镜像就成了没有标签的悬空镜像，
         # 用户想退回去就没有抓手了 —— 而「新镜像起不来」正是这套流程最该防的事故。
         # 所以这里先记下旧 ID，出错时把标签指回去。
         old_ids: dict[str, str] = {}
-        for repo_name in ("kb-workbench-backend", "kb-workbench-frontend"):
+
+        async def _image_id(repo: str, tag: str) -> str:
+            """取某个标签当前指向的镜像 ID（取不到就返回空）"""
             rc, out = await _run([docker, "image", "inspect", "-f", "{{.Id}}",
-                                  f"{repo_name}:latest"], timeout=30)
-            if rc == 0 and out.strip():
-                old_ids[repo_name] = out.strip()
+                                  f"{repo}:{tag}"], timeout=30)
+            return out.strip() if rc == 0 else ""
+
+        # 编排文件里各服务真正引用的镜像 —— 标签必须打到这些名字上。
+        #
+        # 为什么非知道不可：镜像包里装的是**架构标签**的镜像
+        # （kb-workbench-backend:amd64），而 compose 引用的是 :latest
+        # （或者用户自己写的名字）。不把新镜像打到 compose 真正引用的
+        # 那个名字上，compose up 起来的还是旧容器 ——
+        # 而日志里看不出任何异常，用户只会看到「升级完成，刷新后还是旧版」。
+        compose_file = _compose_file(root)
+        compose_text = ""
+        if compose_file is not None:
+            try:
+                compose_text = compose_file.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                job.log(f"⚠️ 读不到编排文件 {compose_file}（{e}），"
+                        f"只能按约定的镜像名打标签")
+        expected_refs: dict[str, str] = {}
+        if compose_text:
+            project = _compose_project_name(compose_text, root.name)
+            expected_refs = _compose_service_images(compose_text, project)
+        if not expected_refs:
+            # 读不到编排文件：只能按约定的名字打标签（与 install.sh 一致）
+            expected_refs = {
+                "backend": "kb-workbench-backend:latest",
+                "frontend": "kb-workbench-frontend:latest",
+            }
+        job.log("编排文件里各服务引用的镜像："
+                + "；".join(f"{svc} → {ref}" for svc, ref in sorted(expected_refs.items())))
+
+        # 要打标签的目标引用：编排文件引用的那些 + 约定的两个名字。
+        # 约定的那两个也要打 —— 别的工具（比如 install.sh、用户的 docker 命令）
+        # 可能还在用它们，而它们指向旧镜像会让人误判。
+        target_refs: list[str] = []
+        for ref in (list(expected_refs.values())
+                    + ["kb-workbench-backend:latest", "kb-workbench-frontend:latest"]):
+            if ref and ref not in target_refs:
+                target_refs.append(ref)
+
+        # 记下升级前每个标签指向的镜像（回滚与事后核对都要用）
+        for ref in target_refs:
+            repo_name, tag = _split_ref(ref)
+            img_id = await _image_id(repo_name, tag)
+            if img_id:
+                old_ids[ref] = img_id
 
         async def _rollback_tags() -> None:
             if not old_ids:
                 return
             job.log("出错，正在把镜像标签回退到升级前的版本……")
-            for repo_name, img_id in old_ids.items():
-                rc, _ = await _run([docker, "tag", img_id, f"{repo_name}:latest"],
-                                   timeout=120)
+            for ref, img_id in old_ids.items():
+                rc, _ = await _run([docker, "tag", img_id, ref], timeout=120)
                 if rc == 0:
-                    job.log(f"已回退 {repo_name}:latest → {img_id[:19]}")
+                    job.log(f"已回退 {ref} → {img_id[:19]}")
                 else:
-                    job.log(f"回退 {repo_name}:latest 失败，需要手工处理："
-                            f"docker tag {img_id} {repo_name}:latest")
+                    job.log(f"回退 {ref} 失败，需要手工处理："
+                            f"docker tag {img_id} {ref}")
 
         try:
             out = await _stage(job, "load", [docker, "load", "-i", str(tar_path)],
                                 root, timeout=1800)
             loaded = re.findall(r"Loaded image:\s*(\S+)", out)
-            tagged = False
+
+            # 新镜像在哪个标签下：镜像包里通常是架构标签（:amd64 / :arm64），
+            # 而 compose 引用的是 :latest —— 这一步就是把两者对上。
+            source_by_repo: dict[str, str] = {}
             for ref in loaded:
                 if not ref.startswith("kb-workbench-"):
                     continue
-                repo_name = ref.rsplit(":", 1)[0]
-                if repo_name.endswith(":latest"):
+                repo_name, _t = _split_ref(ref)
+                source_by_repo.setdefault(repo_name, ref)
+            # 架构标签优先（它是镜像包的正式产物）
+            for ref in loaded:
+                repo_name, t = _split_ref(ref)
+                if t in ("amd64", "arm64"):
+                    source_by_repo[repo_name] = ref
+
+            tagged = False
+            for ref in target_refs:
+                repo_name, _tag = _split_ref(ref)
+                src = source_by_repo.get(repo_name, "")
+                if not src and arch:
+                    # docker load 的输出没认出来（不同版本措辞可能不同）：
+                    # 退回到按约定的架构标签找，跟 install.sh 的做法保持一致
+                    src = f"{repo_name}:{arch}"
+                if not src:
+                    job.log(f"⚠️ 镜像包里没有 {repo_name}，"
+                            f"{ref} 仍指向升级前的镜像 —— 相关服务可能还是旧版")
                     continue
-                job.log(f"$ docker tag {ref} {repo_name}:latest")
-                await _stage(job, "load", [docker, "tag", ref, f"{repo_name}:latest"],
+                if src == ref:
+                    job.log(f"镜像包里的 {ref} 就是编排文件引用的镜像，无需改标签")
+                    tagged = True
+                    continue
+                # 源镜像必须真的存在 —— 拿一个不存在的镜像去 tag 只会报错，
+                # 把整次升级拖垮（而它本来只意味着「这个服务用不上新镜像」）。
+                # 跳过它 + 后面那次核对，会把话说清楚：哪个服务还是旧版。
+                if not await _image_id(*_split_ref(src)):
+                    job.log(f"⚠️ 源镜像 {src} 不存在，跳过给 {ref} 打标签 —— "
+                            f"相关服务可能还是旧版")
+                    continue
+                job.log(f"$ docker tag {src} {ref}")
+                await _stage(job, "load", [docker, "tag", src, ref],
                              root, timeout=120)
                 tagged = True
             if not tagged:
-                # docker load 的输出没认出来（不同版本措辞可能不同）：
-                # 退回到按约定的架构标签提升，跟 install.sh 的做法保持一致
-                for repo_name in ("kb-workbench-backend", "kb-workbench-frontend"):
-                    if not arch:
-                        continue
-                    job.log(f"$ docker tag {repo_name}:{arch} {repo_name}:latest")
-                    await _stage(job, "load", [docker, "tag", f"{repo_name}:{arch}",
-                                               f"{repo_name}:latest"], root, timeout=120)
+                job.log("⚠️ 没有找到可用的新镜像标签，"
+                        "这次升级很可能不会生效 —— 请检查镜像包内容")
+
+            # 核对标签确实换掉了。
+            #
+            # 为什么必须查：之前 compose 里两个服务都只有 build: 没有 image:，
+            # `docker compose up -d` 会**按本地源码重建** ——
+            # 明明导入了新镜像、前端却还是旧代码，
+            # 用户看到的就是「显示升级完成，刷新后还是旧版本」。
+            #
+            # 现在 compose 写死了 image:，up -d 用的就是导入的镜像。
+            # 这里再核对一遍，是为了让「升级成功」这句话真的可信 ——
+            # 万一某个镜像没换上，日志里要写清楚，而不是闷声报成功。
+            #
+            # 注意：这里**只告警不判失败** ——
+            # 标签没变可能是有意的（比如用户就是要留在旧版），
+            # 但把它悄悄咽下去，就是「谎报成功」，那才是真正要修的毛病。
+            for ref in target_refs:
+                repo_name, tag = _split_ref(ref)
+                new_id = await _image_id(repo_name, tag)
+                old_id = old_ids.get(ref, "")
+                if new_id and old_id and new_id == old_id:
+                    job.log(f"⚠️ {ref} 仍是升级前的镜像（{new_id[:19]}）"
+                            f" —— 这个服务可能还是旧版")
         except Exception:
             await _rollback_tags()
             raise
@@ -1287,10 +1661,47 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
     job.set_step("restart", "running")
     job.log("正在重建容器，服务会短暂中断（约 10–30 秒）……")
     await _flush_state(job, force=True)
-    if not await _start_restart_helper(job, plan, root, compose):
+    # --no-build：绝不能让 compose 拿本地源码重新构建一遍 ——
+    # 离线升级已经把新镜像导入并打好标签了，
+    # compose 再 build 一次，起来的就还是旧代码（这就是那个老 bug）。
+    # 编排文件里没有 image: 时 compose build 出来的名字是
+    # `<项目名>-<服务名>:latest`，正是上面打好的那个标签，所以 --no-build 也安全。
+    if not await _start_restart_helper(job, plan, root, compose, extra=["--no-build"]):
         # 起不了临时容器只能退回在本容器里跑（多半会失败，但总得试）
         job.log("  临时容器起不来，退回在本容器里执行 compose up")
-        await _stage(job, "restart", [*compose, "up", "-d"], root, timeout=900)
+        await _stage(job, "restart", [*compose, "up", "-d", "--no-build"],
+                     root, timeout=900)
+
+
+async def _check_checked_out_version(job: UpgradeJob, root: Path, target: str) -> None:
+    """核对 checkout 出来的代码里声明的版本与目标 tag 一致
+
+    不一致就**直接失败**：这个 tag 里根本没有用户要的那一版，
+    继续 build + up 只会得到「一切正常，但版本没变」——
+    也就是这次要修的那个现象。宁可现在报错，也不要报成功。
+
+    读不到文件时不报错（只是跳过核对）：编排目录结构可能不一样，
+    那是部署形态的差异，不该被说成「升级失败」。
+    """
+    cfg_path = root / "backend" / "app" / "config.py"
+    try:
+        text = cfg_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        job.log(f"⚠️ 读不到 {cfg_path}（{e}），跳过版本核对")
+        return
+    declared = _declared_version(text)
+    if not declared:
+        job.log(f"⚠️ {cfg_path.name} 里找不到 app_version 声明，跳过版本核对")
+        return
+    if not _same_version(declared, target):
+        msg = (f"目标 tag {target} 里的 backend/app/config.py 声明的版本是 "
+               f"{declared}，不是 {_norm_version(target)} —— "
+               "这个 tag 里没有你要的版本，升级不会生效。"
+               "请确认目标 tag 是否正确。")
+        job.set_step("checkout", "failed")
+        job.log(f"❌ {msg}")
+        raise RuntimeError(msg)
+    job.log(f"✓ 目标 tag {target} 里声明的版本是 {declared}，与目标一致")
 
 
 async def _run_git_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
@@ -1311,6 +1722,19 @@ async def _run_git_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
     await _stage(job, "fetch", _git_cmd(root, "fetch", "origin", "--tags", "--force"),
                  root, timeout=600)
     await _stage(job, "checkout", _git_cmd(root, "checkout", job.target), root, timeout=300)
+
+    # ---- 核对 checkout 出来的代码里声明的版本 ----
+    #
+    # 为什么必须查：tag 里的版本号与代码里的 app_version 是两回事 ——
+    # 打 tag 时忘了改 app_version（或者 tag 打在了一个错的提交上），
+    # 升级流程会一路「成功」地跑完：fetch ✓ checkout ✓ build ✓ up ✓，
+    # 而跑起来的还是旧版本。用户看到的正是「显示升级完成，刷新后还是 0.6.8」。
+    #
+    # 与 scripts/upgrade.sh 的做法一致：那边是在重启后拿 /api/health 的
+    # 版本号对账，这边是在 build 之前先看一眼源码里写的是什么 ——
+    # 更早发现，少白等一次构建。
+    await _check_checked_out_version(job, root, job.target)
+
     await _stage(job, "build", [*compose, "build"], root, timeout=3600)
 
     # ---- 第 4 步：会把自己杀掉 ----

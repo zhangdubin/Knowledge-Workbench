@@ -20,6 +20,27 @@ services:
     #
     # 提醒：挂载 docker.sock 等于把宿主机的 root 权限交给容器，
     #       只在可信环境开启。
+    # 镜像名要写死。
+    #
+    # 为什么：只写 build: 不写 image: 的话，compose 会在
+    # `docker compose up -d` 时**按本地源码重新构建**。
+    # 离线升级时明明已经把新镜像导入并打好 :latest 标签了，
+    # 结果 compose 又用旧源码重建了一遍 —— 前端于是还在发旧的 JS，
+    # 用户看到的就是「显示升级完成，刷新后还是旧版本」。
+    #
+    # 写上 image: 之后，compose 用的是这个标签指向的镜像；
+    # 需要重建时显式 docker compose build 即可（那会把新构建的
+    # 镜像打回同一个标签，语义不变）。
+    #
+    # ⚠️ 副作用（要知道）：同时写了 image: 与 build: 时，
+    #    `docker compose up -d` **不会**再按本地源码重建 ——
+    #    镜像存在就直接用它。改了源码想看效果，用：
+    #      ./start.sh up            （等价于 docker compose up -d --build）
+    #      docker compose build && docker compose up -d
+    #    一键升级的两条路径都不受影响：
+    #      源码部署：先 docker compose build，再 up -d
+    #      离线包：导入镜像打好标签后 up -d --no-build
+    image: kb-workbench-backend:latest
     build:
       context: ./backend
       # 要「一键升级」的源码部署，把 target 改成 tools 即可：
@@ -116,6 +137,9 @@ services:
         max-file: "5"
 
   frontend:
+    # 同 backend：写死镜像名，否则 up -d 会按本地源码重建，
+    # 离线升级导入的新前端镜像就白导了。
+    image: kb-workbench-frontend:latest
     build: ./frontend
     container_name: kb-frontend
     restart: unless-stopped

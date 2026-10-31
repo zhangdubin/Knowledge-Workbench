@@ -16,6 +16,54 @@ export function parseVersion(v) {
   return [Number(m[1]), Number(m[2]), Number(m[3] || 0)]
 }
 
+/**
+ * 去掉版本号里的 v 前缀与空白
+ *
+ * 为什么需要：目标版本来自 git tag（"v0.6.9"），
+ * 运行版本来自后端接口（"0.6.9"）—— 指的是同一个版本，
+ * 但字符串不相等。两边各写一份「去掉 v」的逻辑，
+ * 早晚有一处漏掉，于是「明明升好了」被说成「升级没生效」。
+ */
+export function normVersion(v) {
+  return String(v == null ? '' : v).trim().replace(/^v/i, '')
+}
+
+/**
+ * 两个版本号是不是同一个版本
+ *
+ * 拿不到版本号时一律判「不同」——
+ * 「不知道」不能当成「一样」，否则界面会为一个没核对过的状态报成功。
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+export function sameVersion(a, b) {
+  const na = normVersion(a)
+  const nb = normVersion(b)
+  if (!na || !nb) return false
+  return na === nb
+}
+
+/**
+ * 版本没对上时给用户看的一句话
+ *
+ * 为什么要统一：升级弹窗与侧栏版本核对是两条不同的路径，
+ * 但它们要回答的是同一个问题 —— 「现在跑的到底是不是新版本」。
+ * 两处措辞不一致，用户会以为系统自相矛盾。
+ *
+ * @param {string} running 现在运行的版本
+ * @param {string} target  期望的版本
+ * @returns {string}
+ */
+export function versionMismatchText(running, target) {
+  const r = normVersion(running)
+  const t = normVersion(target)
+  if (!r) return '无法确认当前运行的版本号'
+  if (!t) return `当前运行版本 v${r}`
+  return `当前运行版本 v${r}，期望 v${t}`
+}
+
 /** 升级脚本从哪个版本起才随仓库提供 */
 export const UPGRADE_SCRIPT_SINCE = [0, 4, 0]
 

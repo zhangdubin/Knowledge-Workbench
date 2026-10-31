@@ -6,12 +6,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import os
+import shutil
+import tempfile
 from typing import Any
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from ..database import get_db
 from ..models import AuditLog, Role, User, UserSession
@@ -449,6 +455,93 @@ async def storage_backups(principal: Principal = Depends(require_feature("storag
     from ..services import maintenance as maint
     return {"items": await maint.list_backups(),
             "dir": await maint.backup_dir()}
+
+
+@router.get("/storage/backups/{name}/export")
+async def storage_backup_export(name: str, request: Request,
+                                principal: Principal = Depends(require_feature("storage_manage"))):
+    """把一份备份导出成 .tar.gz 下载到本地
+
+    导出的是**内容**而不是链接：备份可以拷到别的机器、离线保存，
+    在那台机器上用「导入」登记回备份列表，然后点「还原」即可应用。
+
+    名字由 URL 进来，必须严查（路径穿越 / 越界符号链接）——
+    这一层要是漏了，就等于开放了「让服务器吐出任意文件」的接口。
+    """
+    from ..services import maintenance as maint
+    out = await maint.export_backup(name)
+    request.state.audit_detail = {"name": name, "kind": out.get("kind"),
+                                  "bytes": out.get("bytes")}
+    if not out.get("ok"):
+        raise HTTPException(400, str(out.get("error") or "导出失败"))
+
+    fname = out["filename"]
+    # RFC 5987：filename 给 ASCII 兜底，filename* 带中文名，
+    # 中文环境下浏览器才不会把文件名显示成乱码
+    disp = f"attachment; filename=\"{fname}\"; filename*=UTF-8''{quote(fname)}"
+    # 导出是一次「数据出境」的动作，而审计中间件只记写操作（GET 不记），
+    # 所以这里显式补一条 —— 谁在什么时候导走了哪份备份，得有据可查。
+    await audit_svc.log_event(
+        principal.username, "export", user_id=principal.id,
+        ip=(request.client.host if request.client else ""),
+        resource="storage", method="GET",
+        path=f"/api/system/storage/backups/{name}/export",
+        detail={"name": name, "bytes": out.get("bytes")})
+    # 归档先落在临时文件里（不在内存里拼 tar），下载完由后台任务删掉
+    return FileResponse(out["path"], media_type="application/gzip",
+                        headers={"Content-Disposition": disp},
+                        background=BackgroundTask(maint.cleanup_export, out))
+
+
+async def _save_upload(file: UploadFile, dest: str, max_bytes: int) -> int:
+    """把上传的包流式写到临时文件
+
+    必须边读边写：**先收完再判断大小**等于把超大文件先吃进磁盘。
+    超限立刻中断并删掉临时文件。
+    """
+    total = 0
+    with open(dest, "wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(
+                    400, f"备份包超过上限（{max_bytes // (1024 * 1024)} MB）")
+            out.write(chunk)
+    if total == 0:
+        raise HTTPException(400, "上传的文件是空的")
+    return total
+
+
+@router.post("/storage/import")
+async def storage_import(request: Request,
+                         file: UploadFile = File(...),
+                         principal: Principal = Depends(require_feature("storage_manage"))):
+    """导入一个本地备份文件（.tar.gz），登记为新的快照
+
+    导入**只登记，不动线上数据**：真正的还原仍然要在备份列表里点「还原」，
+    走原有的「退路快照 + 自检 + 自动回滚」流程。
+    导入来的快照与本机做的快照在列表里长得一样，名字带 -imported 后缀。
+    """
+    from ..services import maintenance as maint
+
+    tmpdir = tempfile.mkdtemp(prefix="kb-upload-")
+    try:
+        path = os.path.join(tmpdir, "upload.tar.gz")
+        size = await _save_upload(file, path, maint.import_upload_max_bytes())
+        out = await maint.import_backup(path, original_name=file.filename or "")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    entry = out.get("entry") or {}
+    request.state.audit_detail = {"file": file.filename, "bytes": size,
+                                  "name": entry.get("name"),
+                                  "complete": out.get("complete")}
+    if not out.get("ok"):
+        raise HTTPException(400, str(out.get("error") or "导入失败"))
+    return out
 
 
 class RestoreIn(BaseModel):

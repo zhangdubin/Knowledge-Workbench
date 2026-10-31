@@ -136,6 +136,27 @@ export const Api = {
   storageRestore: (name) => api.post('/api/system/storage/restore',
     { name, confirm: name }, { timeout: 0 }),
 
+  // ---- 备份的导出 / 导入（拿到本地、搬到别的机器再还原）----
+  // 导出走**同源直链**而不是 axios：
+  //   会话是 HttpOnly Cookie，浏览器发起同源导航/下载时会自动带上它；
+  //   走 axios 就得把整个包读进 blob 再存盘，几 GB 的备份会把标签页吃满。
+  //   同时 URL 里不能挂 token（会进浏览历史与服务器日志）。
+  storageBackupExportUrl: (name) =>
+    `/api/system/storage/backups/${encodeURIComponent(name)}/export`,
+  // 导入是 multipart 上传。超时给 0（不限）：备份包可能几百 MB 到几 GB，
+  // 默认的 30s 必然中途失败；而上传进度由 onUploadProgress 报给界面。
+  storageBackupImport: (file, onProgress) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post('/api/system/storage/import', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+      onUploadProgress: (e) => {
+        if (onProgress && e.total) onProgress(Math.round((e.loaded * 100) / e.total))
+      },
+    })
+  },
+
   // ============ 运行期设置（改完立即生效，不需要重启容器） ============
   settings: () => api.get('/api/system/settings'),
   // 只提交发生改动的项；后端逐项校验，任一项不过关则整体不落盘

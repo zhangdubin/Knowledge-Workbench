@@ -16,8 +16,13 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import logging
 import os
+import re
+import shutil
+import tarfile
+import tempfile
 import time
 
 from sqlalchemy import text
@@ -901,18 +906,7 @@ async def list_backups() -> list[dict]:
         for name in sorted(os.listdir(d), reverse=True):
             p = os.path.join(d, name)
             if os.path.isdir(p) and name.startswith(SNAP_PREFIX):
-                st = os.stat(p)
-                stats = _snapshot_stats(p)
-                out.append({
-                    "name": name, "path": p, "kind": "snapshot",
-                    "complete": True,
-                    "bytes": stats["bytes"],
-                    "db_bytes": stats["db_bytes"],
-                    "files_count": stats["files_count"],
-                    "files_bytes": stats["files_bytes"],
-                    "mtime": time.strftime("%Y-%m-%d %H:%M:%S",
-                                           time.localtime(st.st_mtime)),
-                })
+                out.append(_snapshot_entry(d, name))
             elif name.endswith(".db"):
                 st = os.stat(p)
                 out.append({
@@ -1066,6 +1060,10 @@ async def make_backup(target_dir: str | None = None, *,
                 _snapshot_files, str(filestore.root()),
                 os.path.join(snap, "files"), prev
             )
+            # 空目录也要建出来：「一个文件都没有」和「原文没被备份」
+            # 是两回事 —— 前者是完整备份，后者是空壳。
+            # 少这个目录，快照会被判定成不完整，界面上的提示就会误导人。
+            os.makedirs(os.path.join(snap, "files"), exist_ok=True)
 
     stats = await asyncio.to_thread(_snapshot_stats, snap)
     meta = {
@@ -1123,6 +1121,560 @@ def _rotate(target_dir: str, keep: int) -> list[str]:
         _rmtree_quiet(p)
         removed.append(name)
     return removed
+
+
+# ============================================================ 备份的导出 / 导入
+#
+# 为什么要有这两个动作：备份目录在容器里，宿主机上的运维、离线归档、
+# 「把备份搬到另一台机器上再还原」全都缺一个**能拿走的单文件**。
+#   导出 = 把一份备份打成 .tar.gz 交给浏览器下载；
+#   导入 = 把这样一份 .tar.gz 收进备份目录、登记成新的快照，
+#          之后就能用现有的「还原」流程把它应用回去。
+#
+# 两条安全边界必须守住：
+#   1. 名字来自 URL，必须严查（../、绝对路径、符号链接逃逸）——
+#      否则就成了「让服务器吐出任意文件」的漏洞；
+#   2. 导入的归档是**用户上传的任意文件**，解压时要防路径穿越与解压炸弹。
+
+EXPORT_SUFFIX = ".tar.gz"
+# 上传包本体的上限（相对 upload_max_mb 推导）：导入的是压缩后的包，
+# 至少要保证「nginx 放得进来、后端也写得下去」
+IMPORT_UPLOAD_FACTOR = 4
+# 解压后**绝对**上限：一份备份本来就比上传上限大（库文件 + 全部原文），
+# 所以给一个宽裕的倍数；真正的防线是下面的膨胀比与磁盘余量
+IMPORT_EXPAND_FACTOR = 8
+# 解压膨胀比上限：备份数据本身高度重复（sqlite 页结构、文档头），
+# 正常 tar.gz 的膨胀比在 5~20 之间；给到 200 已经很宽松，
+# 超过基本可以判定是解压炸弹
+IMPORT_MAX_RATIO = 200
+# 展开体积的兜底下限：2MB 的包撑出 1GB 也是炸弹
+IMPORT_MIN_EXPANDED = 256 * MB
+# 归档内最多允许多少个成员：几万个文件很正常，几百万个就是攻击
+IMPORT_MAX_MEMBERS = 200_000
+
+
+class BackupError(Exception):
+    """备份导出/导入里的「可解释错误」
+
+    单独一个异常类型而不是复用 HTTPException：这一层是服务，
+    不该知道 HTTP 的存在；路由层负责把它翻译成 400 + 中文提示。
+    """
+
+
+# ------------------------------------------------------------ 名字与条目定位
+
+def _safe_backup_name(name: str) -> bool:
+    """备份名的白名单校验
+
+    名字会被直接拼进文件路径，所以只放行「字母数字 + . _ -」，
+    并显式否掉 .. 与绝对路径 —— 少判一个字符都可能变成目录穿越。
+    """
+    if not name or len(name) > 200:
+        return False
+    if "/" in name or "\\" in name or "\x00" in name:
+        return False
+    if name.startswith(".") or ".." in name:
+        return False
+    return all(c.isalnum() or c in "._-" for c in name)
+
+
+async def _resolve_backup_entry(name: str) -> dict | None:
+    """在备份列表里定位一份备份（导出与还原共用同一套判据）
+
+    刻意**只认 list_backups() 里出现过的东西**：这样「名字合法」与
+    「它确实是备份」是同一条判据，不会出现备份目录里恰好有个同名
+    的其它文件被当成备份导出去。
+    """
+    if not _safe_backup_name(name):
+        return None
+    for item in await list_backups():
+        if item["name"] == name:
+            return item
+    return None
+
+
+def _read_snapshot_meta(root: str) -> dict:
+    """读快照的 meta.json
+
+    读不到或读坏了就当没有：元信息缺失不该让一份可用的备份「消失」，
+    但完整性判断要因此更保守（见 _snapshot_complete）。
+    """
+    import json
+    try:
+        with open(os.path.join(root, "meta.json"), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _snapshot_complete(root: str, meta: dict) -> bool:
+    """快照是否「完整」
+
+    原文外置之后，一份缺 files/ 目录的快照只是空壳：库里记着附件、
+    盘上却没有内容，还原后附件全部打不开。这种备份必须显式标成不完整，
+    否则运维会以为「有备份」，出事时才发现文件全没了。
+    """
+    if meta.get("complete") is False:
+        return False          # 导入时就没有 files/ 目录（显式标记）
+    if os.path.isdir(os.path.join(root, "files")):
+        return True
+    # 原文本来就在库里（file_store=db）时，快照不需要 files/ 目录
+    mode = str(meta.get("file_store") or settings.file_store or "fs").lower()
+    return mode != "fs"
+
+
+def _snapshot_entry(bdir: str, name: str) -> dict:
+    """备份列表里的一条快照（列表、导入返回共用同一份形状）"""
+    p = os.path.join(bdir, name)
+    st = os.stat(p)
+    stats = _snapshot_stats(p)
+    meta = _read_snapshot_meta(p)
+    return {
+        "name": name, "path": p, "kind": "snapshot",
+        "complete": _snapshot_complete(p, meta),
+        "bytes": stats["bytes"],
+        "db_bytes": stats["db_bytes"],
+        "files_count": stats["files_count"],
+        "files_bytes": stats["files_bytes"],
+        "mtime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime)),
+        # 导入来的快照标一下：它可能来自另一台机器，版本与文件存储模式未必一致
+        "imported": bool(meta.get("imported")),
+        "app_version": meta.get("app_version") or "",
+    }
+
+
+# ------------------------------------------------------------ 导出
+
+def _add_regular(tf, path: str, arcname: str) -> int:
+    """往归档里塞一个普通文件（自己构造 TarInfo，不走 tarfile.add）
+
+    为什么不用 tarfile.add()：它会把符号链接原样打进归档
+    （解压端那是个坑），也不保证归档里只有普通文件。
+    """
+    import stat as _stat
+    st = os.lstat(path)
+    if not _stat.S_ISREG(st.st_mode):
+        # 符号链接 / 设备文件 / fifo 一律不进归档
+        return 0
+    ti = tarfile.TarInfo(name=arcname)
+    ti.size = st.st_size
+    ti.mtime = int(st.st_mtime)
+    ti.mode = 0o644
+    ti.uid = ti.gid = 0
+    ti.uname = ti.gname = ""
+    with open(path, "rb") as fh:
+        tf.addfile(ti, fh)
+    return 1
+
+
+def _add_dir(tf, arcname: str) -> None:
+    """往归档里写一个目录项
+
+    为什么目录项也要写：一份**没有任何附件**的备份，files/ 是个空目录。
+    只写文件的话，这个空目录在归档里凭空消失 ——
+    导入端拿不到 files/，就会把这份本来完整的备份标成「不完整」，
+    界面上还挂一句「还原后附件会打不开」的吓人提示（其实压根没有附件）。
+    """
+    ti = tarfile.TarInfo(name=arcname)
+    ti.type = tarfile.DIRTYPE
+    ti.mode = 0o755
+    ti.mtime = 0
+    ti.uid = ti.gid = 0
+    ti.uname = ti.gname = ""
+    tf.addfile(ti)
+
+
+def _build_archive(src: str, out_path: str) -> dict:
+    """把一个备份条目打成 tar.gz
+
+    归档里的结构固定为「快照目录的内容」：kb.db / files/… / meta.json，
+    解开就是一份可直接还原的快照。
+
+    为什么不用 tarfile.add()：见 _add_regular 的说明。
+    """
+    files = 0
+    with open(out_path, "wb") as fp:
+        # mtime=0：同样的备份导两次应当得到同样的字节，方便比对。
+        # compresslevel=6：备份包里大多是**已经压过**的内容（PDF / zip /
+        # SQLite 页结构），压缩级 9 比 6 多花好几倍 CPU 却几乎不省空间；
+        # 而导出是要等在 HTTP 请求里的，每省一分钟都是实打实的等待。
+        gz = gzip.GzipFile(filename="", mode="wb", fileobj=fp, mtime=0,
+                           compresslevel=6)
+        try:
+            with tarfile.open(fileobj=gz, mode="w", format=tarfile.GNU_FORMAT) as tf:
+                if os.path.isdir(src):
+                    for dirpath, dirnames, filenames in os.walk(src):
+                        dirnames.sort()
+                        filenames.sort()
+                        rel_dir = os.path.relpath(dirpath, src).replace(os.sep, "/")
+                        if rel_dir != ".":
+                            # 目录项：空目录靠它才能在导入端原样还原
+                            _add_dir(tf, rel_dir)
+                        for fn in filenames:
+                            full = os.path.join(dirpath, fn)
+                            rel = os.path.relpath(full, src).replace(os.sep, "/")
+                            files += _add_regular(tf, full, rel)
+                else:
+                    # 旧格式（v0.2 的 kb-<时间>.db）：归档里就一个文件
+                    files += _add_regular(tf, src, os.path.basename(src))
+        finally:
+            gz.close()
+    return {"files": files, "bytes": os.path.getsize(out_path)}
+
+
+async def export_backup(name: str) -> dict:
+    """把一份备份打成 .tar.gz，交给调用方下载
+
+    归档先写到临时目录而不是在内存里拼 tar：几 GB 的文件目录
+    在内存里打包会直接把后端进程撑爆。
+
+    注意：打包时间算在这个 HTTP 请求里，而网关（nginx）的
+    proxy_read_timeout 默认 300s —— 超大备份（几十 GB）打包会超时，
+    这种规模得先把网关超时调大。
+    """
+    item = await _resolve_backup_entry(name)
+    if item is None:
+        # 名字非法与「备份不存在」要说清楚：前者是有人想试探路径穿越，
+        # 后者是正常的「备份已经被轮转掉了」
+        if not _safe_backup_name(name):
+            return {"ok": False, "error": f"非法的备份名：{name!r}"}
+        return {"ok": False, "error": f"备份目录里没有这个备份：{name}"}
+    if item["kind"] not in ("snapshot", "legacy"):
+        return {"ok": False, "error": f"不支持导出的备份类型：{item['kind']}"}
+
+    bdir = await backup_dir()
+    src = os.path.join(bdir, name)
+    # 快照必须真的有库文件：缺了 kb.db 的快照（半成品）导出去也用不了，
+    # 不如在这里说清楚，别让人拿到一个空包
+    if item["kind"] == "snapshot" and not os.path.isfile(os.path.join(src, "kb.db")):
+        return {"ok": False, "error": f"这份快照不完整（缺 kb.db），无法导出：{name}"}
+    # 双保险：解析后的真实路径必须仍在备份目录里（挡符号链接逃逸）
+    real_bdir = os.path.realpath(bdir)
+    real_src = os.path.realpath(src)
+    try:
+        inside = os.path.commonpath([real_bdir, real_src]) == real_bdir
+    except ValueError:
+        inside = False
+    if not inside:
+        return {"ok": False, "error": f"备份路径越界，已拒绝导出：{name}"}
+
+    tmpdir = tempfile.mkdtemp(prefix="kb-export-")
+    out_path = os.path.join(tmpdir, f"kb-backup-{name}{EXPORT_SUFFIX}")
+    try:
+        info = await asyncio.to_thread(_build_archive, src, out_path)
+    except Exception as e:
+        _rmtree_quiet(tmpdir)
+        return {"ok": False, "error": f"导出失败：{type(e).__name__}: {e}"}
+
+    return {"ok": True, "name": name, "kind": item["kind"],
+            "path": out_path, "tmp_dir": tmpdir,
+            "filename": f"kb-backup-{name}{EXPORT_SUFFIX}",
+            "bytes": info["bytes"], "files": info["files"]}
+
+
+def cleanup_export(out: dict) -> None:
+    """下载结束后清掉临时归档（由 FileResponse 的 BackgroundTask 调用）"""
+    try:
+        path = out.get("path")
+        if path and os.path.isfile(path):
+            os.remove(path)
+    except OSError:
+        pass
+    tmp = out.get("tmp_dir")
+    if tmp:
+        _rmtree_quiet(tmp)
+
+
+# ------------------------------------------------------------ 导入
+
+def import_upload_max_bytes() -> int:
+    """上传包本体的上限（相对 upload_max_mb 推导）"""
+    return max(int(settings.upload_max_mb or 0), 1) * MB * IMPORT_UPLOAD_FACTOR
+
+
+def _import_limits(compressed_bytes: int) -> dict:
+    """导入的体积上限
+
+    三道闸，缺一不可：
+      1. 绝对上限：upload_max_mb 的若干倍 —— 一份备份本来就比上传上限大
+         （库文件 + 全部原文），所以给一个宽裕的倍数；
+      2. 膨胀比上限：解压炸弹的典型特征就是「很小的包撑出巨大的内容」；
+      3. 磁盘余量：再离谱的上限也不能超过盘上还装得下的量。
+    """
+    absolute = max(int(settings.upload_max_mb or 0), 1) * MB * IMPORT_EXPAND_FACTOR
+    ratio = max(int(compressed_bytes) * IMPORT_MAX_RATIO, IMPORT_MIN_EXPANDED)
+    try:
+        free = shutil.disk_usage(tempfile.gettempdir()).free
+    except OSError:
+        free = 0
+    disk = int(free * 0.8) if free else 0
+    limit = min(absolute, ratio)
+    if disk:
+        limit = min(limit, disk)
+    return {"expanded": max(limit, 1), "absolute": absolute,
+            "ratio": ratio, "disk": disk}
+
+
+def _safe_member_name(name: str) -> str:
+    """归档成员名的安全校验（返回规范化后的相对路径）
+
+    tar 里的成员名是**攻击者完全可控**的字符串。这里逐条否掉：
+      - 绝对路径（/etc/passwd）与 Windows 盘符（C:\\...）
+      - 任何一段是 ..（目录穿越）
+      - 反斜杠（Windows 上会被当成分隔符）
+    """
+    if not name:
+        return ""
+    n = name.replace("\\", "/")
+    if n.startswith("/") or re.match(r"^[A-Za-z]:", n):
+        raise BackupError(f"压缩包里含非法路径（绝对路径）：{name}")
+    parts = []
+    for seg in n.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            raise BackupError(f"压缩包里含越界路径（..）：{name}")
+        parts.append(seg)
+    return "/".join(parts)
+
+
+def _extract_archive(archive_path: str, dest: str, limits: dict) -> dict:
+    """把归档解到临时目录（严格模式）
+
+    用流式模式（r|*）逐个成员处理：成员表不一次性读进内存，
+    边读边校验边落盘，任何一条不合法立刻中止（临时目录随后被删掉）。
+    """
+    dest_abs = os.path.abspath(dest)
+    total = 0
+    members = 0
+    files = 0
+    try:
+        tf = tarfile.open(archive_path, "r|*")
+    except Exception as e:
+        raise BackupError(f"压缩包无法读取（确认是 tar.gz）：{type(e).__name__}: {e}")
+
+    with tf:
+        for m in tf:
+            members += 1
+            if members > IMPORT_MAX_MEMBERS:
+                raise BackupError("压缩包里的条目太多，已拒绝导入")
+            rel = _safe_member_name(m.name)
+            if m.isdir():
+                # 目录项也要落地：空目录（没有附件的备份）靠它才能
+                # 在导入端还原出 files/ 这个结构
+                target = os.path.join(dest, rel.replace("/", os.sep)) if rel else dest
+                if os.path.commonpath([dest_abs, os.path.abspath(target)]) != dest_abs:
+                    raise BackupError(f"压缩包里含越界路径：{m.name}")
+                os.makedirs(target, exist_ok=True)
+                continue
+            if not m.isfile():
+                # 符号链接 / 硬链接 / 设备文件 / fifo 一律拒绝：
+                # 它们在别的系统上能指向完全不同的东西
+                raise BackupError(
+                    f"压缩包里含非普通文件（{m.name}），已拒绝导入")
+            if not rel:
+                raise BackupError(f"压缩包里含非法路径：{m.name}")
+            target = os.path.join(dest, rel.replace("/", os.sep))
+            # 规范化后再比一次：即使前面漏了规则，也不可能写到 dest 之外
+            if os.path.commonpath([dest_abs, os.path.abspath(target)]) != dest_abs:
+                raise BackupError(f"压缩包里含越界路径：{m.name}")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            src = tf.extractfile(m)
+            if src is None:
+                continue
+            with src, open(target, "wb") as out:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > limits["expanded"]:
+                        raise BackupError(
+                            f"压缩包解压后超过上限"
+                            f"（{limits['expanded'] // MB} MB），疑似解压炸弹，"
+                            "已拒绝导入")
+                    out.write(chunk)
+            files += 1
+    return {"members": members, "files": files, "bytes": total}
+
+
+def _pick_files_dir(root: str, base: str) -> str:
+    """找文件原文目录：优先库文件旁边那份，其次包根目录那份
+
+    两种摆法都见过：files/ 与 kb.db 同级；或者 files/ 在包根目录、
+    而库文件被多包了一层目录。
+    """
+    for cand in (os.path.join(base, "files"), os.path.join(root, "files")):
+        if os.path.isdir(cand):
+            return cand
+    return ""
+
+
+def _locate_kb_db(root: str) -> tuple[str, str, str] | None:
+    """在解压结果里找库文件，返回 (库文件, 库文件所在目录, files 目录或 "")
+
+    允许两种位置：根目录的 kb.db，或一层子目录里的 kb.db
+    （别人手工打的包常常多包一层目录）。
+
+    找不到 kb.db 但整个包里只有一个 .db 文件时，把它当库文件用 ——
+    那是 v0.2 时代的备份（kb-<时间>.db）导出来的包，
+    直接拒掉等于让「导出旧备份」变成死路。
+    """
+    direct = os.path.join(root, "kb.db")
+    if os.path.isfile(direct):
+        return direct, root, _pick_files_dir(root, root)
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        entries = []
+    for name in entries:
+        sub = os.path.join(root, name)
+        if not os.path.isdir(sub):
+            continue
+        cand = os.path.join(sub, "kb.db")
+        if os.path.isfile(cand):
+            return cand, sub, _pick_files_dir(root, sub)
+    dbs: list[str] = []
+    for dirpath, _dirs, files in os.walk(root):
+        for fn in files:
+            if fn.lower().endswith(".db"):
+                dbs.append(os.path.join(dirpath, fn))
+    if len(dbs) == 1:
+        base = os.path.dirname(dbs[0])
+        return dbs[0], base, _pick_files_dir(root, base)
+    return None
+
+
+def _meta_has_no_files(meta: dict) -> bool:
+    """这份备份本来就没有文件原文吗
+
+    为什么要问：一份**一个附件都没有**的备份，files/ 是空的，
+    归档里未必带得上这个空目录（别的工具打的包常常不带目录项）。
+    缺 files/ 目录 ≠ 缺东西 —— 库里本来就没记着任何附件。
+    判错了的后果是吓人：界面会给一份完好的备份挂上
+    「不完整，还原后附件会打不开」的警告。
+
+    没有 meta.json 时不猜（返回 False）—— 宁可保守，也不能把
+    「真的缺原文」的包说成完整。
+    """
+    try:
+        n = int(meta.get("files_count"))
+    except (TypeError, ValueError):
+        return False
+    return n == 0
+
+
+def _install_imported(kb_db: str, files_src: str, bdir: str, report: dict,
+                      original_name: str, src_meta: dict | None = None) -> dict:
+    """把解压出来的备份装进备份目录，登记成一个新的快照"""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    name = f"{SNAP_PREFIX}{stamp}-imported"
+    # 同一秒内导入两份要错开名字，否则第二份会把第一份顶掉
+    seq = 1
+    dest = os.path.join(bdir, name)
+    while os.path.exists(dest):
+        name = f"{SNAP_PREFIX}{stamp}-imported-{seq}"
+        dest = os.path.join(bdir, name)
+        seq += 1
+    os.makedirs(dest, exist_ok=True)
+
+    shutil.move(kb_db, os.path.join(dest, "kb.db"))
+    complete = True
+    if files_src and os.path.isdir(files_src):
+        shutil.move(files_src, os.path.join(dest, "files"))
+    elif _meta_has_no_files(src_meta or {}):
+        # 这份备份本来就没有原文（一个附件都没有）——
+        # files/ 只是空着，不是「缺东西」。
+        # 补一个空目录，结构与本机做的快照保持一致。
+        os.makedirs(os.path.join(dest, "files"), exist_ok=True)
+    else:
+        # 没有 files/ 目录 = 只有库，没有原文。
+        # 接受它（总比把人挡在门外强），但必须标成不完整：
+        # 还原之后这些附件会打不开，运维得知道。
+        complete = False
+
+    stats = _snapshot_stats(dest)
+    meta = {
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "app_version": settings.app_version,
+        "file_store": settings.file_store,
+        "quick_check": report["quick_check"],
+        "counts": report["counts"],
+        "db_bytes": stats["db_bytes"],
+        "files_count": stats["files_count"],
+        "files_bytes": stats["files_bytes"],
+        "imported": True,
+        "imported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "imported_from": original_name,
+        "complete": complete,
+    }
+    try:
+        import json as _json
+        with open(os.path.join(dest, "meta.json"), "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(meta, ensure_ascii=False, indent=2))
+    except Exception as e:
+        log.warning("导入快照的元信息写入失败（不影响备份可用性）：%s", e)
+
+    return _snapshot_entry(bdir, name)
+
+
+def _import_sync(archive_path: str, bdir: str, original_name: str) -> dict:
+    """导入的主体（同步，跑在线程里）"""
+    tmpdir = tempfile.mkdtemp(prefix="kb-import-")
+    try:
+        ex = os.path.join(tmpdir, "extract")
+        os.makedirs(ex)
+        limits = _import_limits(os.path.getsize(archive_path))
+        info = _extract_archive(archive_path, ex, limits)
+
+        found = _locate_kb_db(ex)
+        if not found:
+            raise BackupError("压缩包里没有找到 kb.db")
+        kb_db, base, files_src = found
+        # 原备份的元信息：用来判断「它本来就没有附件」
+        # （那种备份的 files/ 是空目录，别的工具打的包常常不带目录项）
+        src_meta = _read_snapshot_meta(base) if base else {}
+        try:
+            report = _verify_snapshot_db(kb_db)
+        except Exception as e:
+            raise BackupError(
+                f"压缩包里的 kb.db 打不开（{type(e).__name__}），已拒绝导入")
+        if not report["ok"]:
+            raise BackupError(
+                f"压缩包里的库文件校验失败（{report['quick_check']}），已拒绝导入")
+
+        entry = _install_imported(kb_db, files_src, bdir, report,
+                                  original_name, src_meta)
+        return {"ok": True, "entry": entry, "verify": report,
+                "complete": entry["complete"], "extracted": info}
+    finally:
+        # 临时目录一律不留：解压出来的东西只是过路，不该在盘上留一份
+        _rmtree_quiet(tmpdir)
+
+
+async def import_backup(archive_path: str, *, original_name: str = "") -> dict:
+    """导入一份本地备份文件，登记成新的快照（**不触碰线上数据**）
+
+    导入只做一件事：把备份放进备份目录、让它出现在备份列表里。
+    真正的还原仍然走 restore_snapshot —— 那条路有退路快照、自检与自动回滚，
+    不能因为「文件是用户自己导出的」就绕过去。
+
+    名字带 -imported 后缀：一眼能看出这份备份来自别的机器。
+    时间戳用的是**导入时刻**而不是原备份的时刻，所以导入的快照在列表里
+    排在最新，不会被轮转立刻清掉 —— 但它同样计入保留份数。
+    """
+    bdir = await backup_dir()
+    try:
+        os.makedirs(bdir, exist_ok=True)
+    except OSError as e:
+        return {"ok": False, "error": f"备份目录不可写：{e}"}
+    try:
+        return await asyncio.to_thread(_import_sync, archive_path, bdir, original_name)
+    except BackupError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"导入失败：{type(e).__name__}: {e}"}
 
 
 # ==================== 在线还原（不停止服务） ====================

@@ -11,6 +11,9 @@ import {
   hasUpgradeScript,
   upgradeCommand,
   upgradeTip,
+  normVersion,
+  sameVersion,
+  versionMismatchText,
   UPGRADE_SCRIPT_SINCE,
   DEPLOY_MODE,
 } from '../src/utils/update.js'
@@ -174,4 +177,36 @@ console.log(`✅ 升级指引 ${n} 项断言全部通过`)
     '没有 has_update 字段 ⇒ 按「不是最新」处理（别乱下结论）',
   )
   console.log('✅ 「已是最新版本」判定 6 项断言全部通过')
+}
+
+// ============ v0.6.10：升级后核对「跑的是不是新版本」 ============
+// 用户反馈：「一键升级」显示升级完成，刷新后还是 0.6.8。
+// 根因之一就是版本比较没做对 —— 目标版本是 git tag（v0.6.9），
+// 运行版本是后端报的（0.6.9），字符串不相等就被当成「没升成」。
+{
+  assert.equal(normVersion('v0.6.9'), '0.6.9', '去掉 v 前缀')
+  assert.equal(normVersion('  v1.2.3 '), '1.2.3', '去空白 + 去 v')
+  assert.equal(normVersion(''), '', '空串就是空串')
+  assert.equal(normVersion(null), '', 'null 当空串')
+
+  assert.equal(sameVersion('v0.6.9', '0.6.9'), true, '带 v 与不带 v 是同一个版本')
+  assert.equal(sameVersion('0.6.9', '0.6.9'), true, '完全相同')
+  assert.equal(sameVersion('v0.6.8', '0.6.9'), false, '版本确实不同')
+  assert.equal(sameVersion('', '0.6.9'), false, '拿不到版本号不能算「一样」')
+  assert.equal(sameVersion('0.6.9', ''), false, '目标拿不到也不能算「一样」')
+  assert.equal(sameVersion('', ''), false, '两个空都不能算「一样」')
+
+  assert.ok(
+    versionMismatchText('0.6.8', 'v0.6.9').includes('0.6.8'),
+    '不一致时要说清现在跑的是哪个版本'
+  )
+  assert.ok(
+    versionMismatchText('0.6.8', 'v0.6.9').includes('0.6.9'),
+    '不一致时也要说清期望的是哪个版本'
+  )
+  assert.ok(
+    versionMismatchText('', 'v0.6.9').includes('无法确认'),
+    '拿不到运行版本时要说「无法确认」，不能装作对上了'
+  )
+  console.log('✅ 升级后版本核对 15 项断言全部通过')
 }

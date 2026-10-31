@@ -391,8 +391,19 @@
 
         <el-alert v-if="upgrade.error" :title="upgrade.error" type="error" show-icon :closable="false" />
 
-        <!-- 判定结果：能升就直说，不能升就把缺什么、怎么补一条条摆出来 -->
-        <template v-if="upgrade.plan && !upgradeBusy">
+        <!-- 后端核对过的结论（例如「已确认运行版本 v0.6.9」）。
+             它是后端拿自己跑的版本号对过账之后给的，
+             比界面自己猜的可靠。 -->
+        <el-alert
+          v-if="upgrade.job?.note && !upgrade.error"
+          :title="upgrade.job.note"
+          type="success" show-icon :closable="false"
+        />
+
+        <!-- 判定结果：能升就直说，不能升就把缺什么、怎么补一条条摆出来。
+             有作业在跑（或已经跑完）时这块先让位 ——
+             那时用户关心的是「现在到哪一步了、为什么没成」。 -->
+        <template v-if="upgrade.plan && !upgradeBusy && !upgrade.job">
           <!-- 已是最新版本时先说这个。
                否则弹窗一上来就是「当前环境不能自动升级」+ 一串障碍，
                读起来像系统坏了 —— 其实只是没有更新的版本而已。 -->
@@ -506,17 +517,26 @@
           <div class="upgrade-manual-tip">{{ upgradeTip }}</div>
         </div>
 
-        <!-- 执行中：当前阶段 + 实时日志 -->
-        <template v-if="upgradeBusy">
-          <div class="upgrade-phase">
+        <!-- 当前状态：执行中 / 重启中 / 失败后都要看得见 -->
+        <template v-if="upgradeBusy || upgrade.phase === 'failed'">
+          <div class="upgrade-phase" :class="{ 'is-failed': upgrade.phase === 'failed' }">
             <el-icon v-if="upgrade.phase === 'restarting'" class="is-loading"><Loading /></el-icon>
+            <el-icon v-else-if="upgrade.phase === 'failed'"><WarningFilled /></el-icon>
             <el-icon v-else><Loading /></el-icon>
             <span v-if="upgrade.phase === 'restarting'">
               正在重启服务，请稍候……（最多等待 90 秒，还剩 {{ upgrade.waitLeft }} 秒）
             </span>
+            <span v-else-if="upgrade.phase === 'failed'">
+              升级没有完成 —— 原因见上面的红色提示，下面的日志里有细节
+            </span>
             <span v-else>正在执行：{{ upgrade.job?.stage_title || '准备中' }}</span>
           </div>
+        </template>
 
+        <!-- 步骤 + 日志：失败之后也要留着 ——
+             用户要靠日志判断到底卡在哪一步，
+             把日志藏起来等于让人自己猜。 -->
+        <template v-if="upgradeBusy || upgrade.job">
           <div class="upgrade-steps">
             <div
               v-for="s in jobSteps" :key="s.key"
@@ -587,7 +607,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../../api'
-import { upgradeCommand as upgradeCommandText, upgradeTip as upgradeTipText, DEPLOY_MODE, planSummary as planSummaryText, assetSize as assetSizeText, autoUpgradeSupported, enableCommands as enableCommandsOf, isLatestPlan } from '../../utils/update'
+import { upgradeCommand as upgradeCommandText, upgradeTip as upgradeTipText, DEPLOY_MODE, planSummary as planSummaryText, assetSize as assetSizeText, autoUpgradeSupported, enableCommands as enableCommandsOf, isLatestPlan, normVersion, sameVersion, versionMismatchText } from '../../utils/update'
 import { useAuthStore } from '../../stores/auth'
 import PageTitle from '../../components/PageTitle.vue'
 import MarkdownText from '../../components/MarkdownText.vue'
@@ -834,10 +854,13 @@ async function pollOnce() {
     if (job) {
       upgrade.job = job
       if (job.status === 'restarting') { enterRestartWait(); return }
-      if (job.status === 'succeeded') { finishUpgrade(); return }
+      // await：finishUpgrade 内部要核对运行版本，
+      // 不接住它的异常就可能变成一个没人看的 rejected promise。
+      if (job.status === 'succeeded') { await finishUpgrade(); return }
       if (job.status === 'failed') {
         upgrade.phase = 'failed'
         upgrade.error = job.error || '升级失败'
+        scrollLog()
         return
       }
     }
@@ -859,16 +882,105 @@ function enterRestartWait() {
   waitBackend()
 }
 
+/**
+ * 升级完成后刷新页面
+ *
+ * ⚠️ 不能直接用 location.reload()：
+ * 它不保证绕过浏览器缓存 —— 用户看到的还是旧版本，
+ * 但后端已经是新版本了（于是「显示 0.6.8、实际 0.6.9」这种错觉）。
+ *
+ * 加一个时间戳参数强制重新拉 index.html，
+ * 同时把 Pinia 里缓存的版本号清掉（auth store 的 sysVersion 只拉一次）。
+ */
+async function reloadAfterUpgrade() {
+  try {
+    // 先把版本号刷成新的 —— 侧栏显示的就是它。
+    // 刷新页面后 store 会重建、bootstrap 会重新拉一次 /auth/status，
+    // 但先把这一份刷掉，刷新前后看到的都是同一个新版本号。
+    await auth.refreshVersion?.()
+  } catch { /* 忽略 */ }
+  const url = new URL(window.location.href)
+  url.searchParams.set('_up', Date.now().toString())
+  window.location.replace(url.toString())
+}
+
+/**
+ * 核对后端此刻**真正在跑的**版本
+ *
+ * 为什么必须核对：`/api/health` 里的 version 是后端此刻在跑的版本。
+ * 「服务回来了」不等于「升级生效了」——
+ * 容器可能起来了，跑的还是旧镜像（compose 拿旧源码重建了一遍、
+ * 或者镜像标签压根没换成功），这时界面若照旧弹一句「升级完成」，
+ * 用户刷新后看到的还是旧版本，而全程没有任何报错。
+ * 这正是这次要修的现象。
+ *
+ * 与 scripts/upgrade.sh 是同一套做法：那边在重启后轮询 /api/health 对账，
+ * 这边在界面上做同一件事。
+ *
+ * @param {object} health /api/health 的响应体（拦截器已经把 data 摘出来了）
+ * @returns {{ok: boolean, running: string, target: string, reason: string}}
+ */
+function checkRunningVersion(health) {
+  const running = String(health?.version || '')
+  const target = String(upgrade.plan?.target || upgrade.job?.target || '')
+  if (!running) {
+    // 拿不到版本号就不能说「升级成功」——
+    // 「不知道」不等于「一样」，报个含糊的成功比报错更害人。
+    return { ok: false, running, target,
+             reason: '拿不到后端当前的版本号，无法确认升级是否生效' }
+  }
+  if (!target) {
+    return { ok: false, running, target,
+             reason: `拿不到目标版本号，无法确认升级是否生效（当前 v${normVersion(running)}）` }
+  }
+  if (sameVersion(running, target)) {
+    return { ok: true, running, target, reason: '' }
+  }
+  // 措辞统一用 utils/update.js 里的那一份 ——
+  // 升级弹窗与侧栏的版本核对回答的是同一个问题，
+  // 两处说法不一致，用户会以为系统自相矛盾。
+  return {
+    ok: false, running, target,
+    reason: `服务已恢复，但${versionMismatchText(running, target)} —— `
+          + '升级没有真正生效。请检查 docker compose logs backend '
+          + '与镜像标签是否换成功。',
+  }
+}
+
+/** 拿一次 /api/health；后端刚起来时可能还在喘，重试几次再放弃 */
+async function fetchHealth(retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await Api.upgradeHealth()
+    } catch (e) {
+      if (i === retries - 1) return null
+      await new Promise((r) => setTimeout(r, 1500))
+    }
+  }
+  return null
+}
+
 async function waitBackend() {
   const deadline = Date.now() + RESTART_WAIT_MS
   while (Date.now() < deadline) {
     try {
-      await Api.upgradeHealth()
-      // 后端回来了 —— 升级完成
+      const health = await Api.upgradeHealth()
+      // 后端回来了 —— 但「后端在」不等于「升级成了」。
+      // /api/health 的 body 里带着它此刻真正在跑的版本号，
+      // 拿它跟目标版本对一下：对不上就不能说「升级完成」。
+      const check = checkRunningVersion(health)
+      if (!check.ok) {
+        upgrade.phase = 'failed'
+        upgrade.waitLeft = 0
+        upgrade.error = check.reason
+        ElMessage.error(check.reason)
+        scrollLog()
+        return
+      }
       upgrade.phase = 'done'
       upgrade.waitLeft = 0
       ElMessage.success('服务已恢复，升级完成，正在刷新页面…')
-      setTimeout(() => window.location.reload(), 2000)
+      setTimeout(reloadAfterUpgrade, 2000)
       return
     } catch {
       upgrade.waitLeft = Math.max(0, Math.round((deadline - Date.now()) / 1000))
@@ -880,10 +992,30 @@ async function waitBackend() {
     + 'docker compose logs backend 看看到底卡在哪一步。')
 }
 
-function finishUpgrade() {
+async function finishUpgrade() {
+  // 作业报成功也不能直接说「升级完成」——
+  // 后端会用自己跑的版本号跟目标对账（见 services/upgrade.py 的 get_job），
+  // 但「作业与后端在同一个进程里跑完」的那种场景那次核对不会发生，
+  // 所以这里再核一遍：/api/health 的 version 才是「现在跑的是哪一版」。
+  const health = await fetchHealth()
+  if (!health) {
+    upgrade.phase = 'failed'
+    upgrade.error = '升级作业已完成，但连不上后端，无法确认运行版本。'
+                   + '请刷新页面后再看版本号。'
+    ElMessage.error(upgrade.error)
+    return
+  }
+  const check = checkRunningVersion(health)
+  if (!check.ok) {
+    upgrade.phase = 'failed'
+    upgrade.error = check.reason
+    ElMessage.error(check.reason)
+    scrollLog()
+    return
+  }
   upgrade.phase = 'done'
   ElMessage.success('升级完成，正在刷新页面…')
-  setTimeout(() => window.location.reload(), 1500)
+  setTimeout(reloadAfterUpgrade, 1500)
 }
 
 function copyManual() {
@@ -1503,6 +1635,13 @@ onMounted(load)
   font-size: var(--text-sm); font-weight: 500; color: var(--text-primary);
 }
 .upgrade-phase .el-icon { color: var(--primary); }
+/* 失败后的状态行：跟「执行中」区分开，
+   否则那个转圈图标会让人以为还在跑 —— 明明已经停在那儿了。 */
+.upgrade-phase.is-failed {
+  background: var(--danger-bg);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.upgrade-phase.is-failed .el-icon { color: var(--danger); }
 
 .upgrade-steps {
   display: flex; flex-direction: column; gap: var(--space-1);

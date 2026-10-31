@@ -257,6 +257,13 @@
           <el-tooltip content="备份目录（生产环境应指向另一块盘或网络存储）" placement="top">
             <el-tag size="small" type="info" effect="plain" class="mono">{{ backupsDir || '/app/backups' }}</el-tag>
           </el-tooltip>
+          <el-button size="small" :loading="exporting" @click="exportCurrent">导出当前数据</el-button>
+          <el-button size="small" type="primary" plain :loading="importing" @click="pickImportFile">
+            {{ importing ? `导入中 ${importPct}%` : '导入备份' }}
+          </el-button>
+          <!-- 隐藏的文件选择框：只收 .tar.gz，真正的上传走 storageBackupImport -->
+          <input ref="importInput" type="file" accept=".tar.gz,.tgz,application/gzip"
+                 class="hidden-file" @change="onImportFile" />
         </span>
       </div>
 
@@ -265,6 +272,13 @@
           一份备份 = 一个快照目录：<code>kb.db</code>（元数据与索引，VACUUM INTO 一致性副本）
           ＋ <code>files/</code>（文件原文，与上一份快照硬链接共享未变动的文件）。
           产出后自动做 <code>quick_check</code> 并核对行数 —— <b>没校验过的备份不算备份</b>。
+        </p>
+        <p>
+          <b>导出 / 导入：</b>点某一行的「导出」会把这个快照打包成一个 <code>.tar.gz</code>
+          文件下载到本机；把它拷到别的机器、U 盘或离线盘上保存，
+          在那台机器上点「导入备份」装回备份列表，再点「还原」就能应用。
+          <b>导入只登记备份、不会动当前数据</b> —— 真正的还原仍然要走「还原」确认流程
+          （有退路快照、自检与自动回滚）。
         </p>
         <p class="warn-line">
           <el-icon><WarningFilled /></el-icon>
@@ -298,6 +312,10 @@
             <span class="mono">{{ row.name }}</span>
             <el-tag v-if="row.kind === 'legacy'" type="warning" size="small" effect="light"
                     style="margin-left:6px">旧格式</el-tag>
+            <el-tag v-else-if="!row.complete" type="danger" size="small" effect="light"
+                    style="margin-left:6px">不完整</el-tag>
+            <el-tag v-if="row.imported" type="info" size="small" effect="plain"
+                    style="margin-left:6px">导入</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="库文件" width="100">
@@ -315,10 +333,15 @@
           <template #default="{ row }">{{ fmtBytes(row.bytes) }}</template>
         </el-table-column>
         <el-table-column prop="mtime" label="生成时间" width="170" />
-        <el-table-column label="操作" width="76" align="center">
+        <el-table-column label="操作" width="150" align="center">
           <template #default="{ row }">
+            <el-tooltip content="把这个备份打包成 .tar.gz 下载到本机（超大备份打包会超过网关的 5 分钟超时）"
+                        placement="top">
+              <el-button size="small" type="primary" effect="plain"
+                         @click="exportBackup(row)">导出</el-button>
+            </el-tooltip>
             <el-button v-if="row.kind === 'snapshot'" size="small" type="warning"
-                       effect="plain" @click="openRestore(row)">还原</el-button>
+                       effect="plain" style="margin-left:6px" @click="openRestore(row)">还原</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -327,6 +350,13 @@
         <span>
           标记「旧格式」的备份只含数据库、不含文件原文，原文外置之后它们已不完整，
           只能作为历史留档，不能用来恢复。可用 <code>backup.sh</code> 做一份新快照后删除。
+        </span>
+      </div>
+      <div v-if="backups.some(b => b.kind === 'snapshot' && !b.complete)" class="fs-note warn" style="margin-top:12px">
+        <el-icon><WarningFilled /></el-icon>
+        <span>
+          标了「不完整」的快照缺 <code>files/</code> 目录：库里的记录在，文件原文不在。
+          还原它会让这些附件全部打不开 —— 这类备份只作留档，别拿它还原。
         </span>
       </div>
 
@@ -436,6 +466,11 @@ const migrating = ref(false)
 const verifying = ref(false)
 const running = ref('')
 const lastOp = ref(null)
+// 导出 / 导入
+const exporting = ref(false)
+const importing = ref(false)
+const importPct = ref(0)
+const importInput = ref(null)
 
 const rep = ref({})
 const idx = ref({})
@@ -595,6 +630,79 @@ async function doBackup() {
   } catch (e) {
     ElMessage.error(e?.response?.data?.detail || '备份失败')
   } finally { backing.value = false }
+}
+
+// ---- 导出 / 导入 ----
+
+/**
+ * 导出某一份备份到本地。
+ *
+ * 走同源 <a download>，不用 axios：
+ *   - 会话是 HttpOnly Cookie，浏览器发起同源下载时会自动带上；
+ *     走 axios 就得把整个包读进 blob 内存再存盘，几 GB 的备份会把标签页吃满。
+ *   - URL 里不能挂 token —— 会进浏览历史、服务器日志和 Referer。
+ * 文件名由服务端的 Content-Disposition 决定（download 留空即可）。
+ */
+function exportBackup(row) {
+  const a = document.createElement('a')
+  a.href = Api.storageBackupExportUrl(row.name)
+  a.download = ''
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  ElMessage.success(`已开始下载 ${row.name}（打包大备份要一会儿，文件越大越慢）`)
+}
+
+/**
+ * 「导出当前数据」= 先做一份新快照，再把它导出去。
+ * 两步都走服务端，快照的一致性由 VACUUM INTO 保证。
+ */
+async function exportCurrent() {
+  exporting.value = true
+  try {
+    const r = await Api.storageBackup()
+    ElMessage.success(`已备份 ${r.name}，正在打包下载…`)
+    exportBackup({ name: r.name })
+    loadBackups(); loadReport()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '备份失败')
+  } finally { exporting.value = false }
+}
+
+function pickImportFile() {
+  importInput.value?.click()
+}
+
+/**
+ * 导入一个本地备份包（.tar.gz）。
+ *
+ * 导入只做「登记」：包会被装进备份目录、出现在下面的列表里，
+ * **不会动当前数据** —— 要应用它还得点「还原」，走原有的确认流程。
+ */
+async function onImportFile(e) {
+  const f = e.target.files?.[0]
+  // 清空选择：否则连续导入同一个文件不会再触发 change
+  e.target.value = ''
+  if (!f) return
+  importing.value = true
+  importPct.value = 0
+  try {
+    const r = await Api.storageBackupImport(f, (pct) => { importPct.value = pct })
+    const name = r?.entry?.name || ''
+    if (r?.complete) {
+      ElMessage.success(`导入完成：${name} 已加入备份列表，可点「还原」应用`)
+    } else {
+      ElMessage.warning(
+        `导入完成：${name} 已加入备份列表，但包里没有文件原文目录（files/），` +
+        '还原后附件会打不开 —— 只作留档用。')
+    }
+    loadBackups()
+  } catch (err) {
+    ElMessage.error(`导入失败：${err?.response?.data?.detail || err?.message || '未知错误'}`)
+  } finally {
+    importing.value = false
+  }
 }
 
 // ---- 在线还原 ----
@@ -878,6 +986,8 @@ onMounted(() => {
 
 /* ---- 备份 ---- */
 .bk-note { font-size: 12.5px; color: var(--text-secondary); line-height: 1.8; margin-bottom: 12px; }
+/* 隐藏的文件选择框：可见的按钮在卡片标题栏，这个 input 只负责接收文件 */
+.hidden-file { display: none; }
 .bk-note p { margin: 0 0 6px; }
 .bk-note code, .bk-cli code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

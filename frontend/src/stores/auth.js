@@ -51,6 +51,24 @@ export const useAuthStore = defineStore('auth', () => {
     return (LEVEL_ORDER[modelLevel(key)] || 0) >= (LEVEL_ORDER[need] || 1)
   }
 
+  /**
+   * 单独刷新版本号
+   *
+   * 版本号原来只在 bootstrap 时拉一次（拉过就再也不拉）——
+   * 于是「一键升级」完成后，就算刷新了页面，
+   * 只要这个 Pinia 实例还活着，侧栏就还显示旧版本。
+   * 用户看到的「升级完还是 0.6.8」就是这么来的。
+   */
+  async function refreshVersion() {
+    try {
+      const s = await Api.authStatus()
+      sysVersion.value = s.version || ''
+      return sysVersion.value
+    } catch {
+      return sysVersion.value
+    }
+  }
+
   /** 首次进入应用时调用：拿登录态（未登录不报错，交给路由守卫处理） */
   async function bootstrap() {
     if (ready.value) return user.value
@@ -105,6 +123,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   return {
     ready, authEnabled, initialPassword, sysVersion, user, meta,
+    refreshVersion,
     isLoggedIn, isSuper, mustChangePassword, displayName, roleLabel,
     canPage, can, modelLevel, canModel,
     bootstrap, login, logout, changePassword, refresh, loadMeta,

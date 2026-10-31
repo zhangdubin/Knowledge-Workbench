@@ -237,12 +237,15 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Collection, Menu, Plus } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { isDark, toggleTheme } from '../utils/theme'
+import { sameVersion, normVersion } from '../utils/update'
 import { useNavItems, mergeNavGroups } from '../composables/useNavItems'
 
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 const navItems = useNavItems()
+/** 版本号定期核对的定时器 */
+let versionTimer = null
 
 // 导航表：perm 与后端 PAGES 对应；feature 是更细的操作级权限
 // （比如「系统管理」页要进得去，还得有 user_manage 才看得到用户管理）
@@ -446,8 +449,37 @@ onMounted(async () => {
   window.addEventListener('keydown', handleKey)
   checkMobile()
   window.addEventListener('resize', checkMobile)
+
+  // 定期核对版本号
+  //
+  // 版本号原来只在首次加载时拉一次（拉过就再也不拉）——
+  // 所以「一键升级」完成、用户刷新了页面，侧栏还是显示升级前的版本
+  // （用户反馈「显示升级完成，请刷新页面，怎么还是 0.6.8」）。
+  //
+  // 每 5 分钟核一次：后端被升级/换镜像后，不用等用户手动刷新，
+  // 界面上的版本号自己就跟上。顺带检测到不一致时提示重新加载。
+  versionTimer = setInterval(async () => {
+    if (document.hidden) return          // 页面在后台就不打扰
+    const before = auth.sysVersion
+    const now = await auth.refreshVersion()
+    // 用共享的版本比较（utils/update.js）：
+    // 「v0.6.9」与「0.6.9」指的是同一个版本，
+    // 直接比字符串会白白误报一次「请刷新页面」。
+    //
+    // ⚠️ 注意方向：这里是**后端**跑新版本、**页面**还停在旧版本，
+    // 与升级弹窗那边（后端压根没换成功）正好相反 ——
+    // 措辞不能照抄那边的「当前运行版本…期望…」，那样说会把谁新谁旧讲反。
+    if (before && now && !sameVersion(before, now)) {
+      ElMessage.warning(
+        `后端已升级到 v${normVersion(now)}，`
+        + `当前页面显示的还是 v${normVersion(before)}，建议刷新页面`,
+        { duration: 8000 }
+      )
+    }
+  }, 5 * 60 * 1000)
 })
 onUnmounted(() => {
+  if (versionTimer) clearInterval(versionTimer)
   window.removeEventListener('keydown', handleKey)
   window.removeEventListener('resize', checkMobile)
 })

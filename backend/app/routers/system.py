@@ -488,8 +488,17 @@ async def storage_backup_export(name: str, request: Request,
         path=f"/api/system/storage/backups/{name}/export",
         detail={"name": name, "bytes": out.get("bytes")})
     # 归档先落在临时文件里（不在内存里拼 tar），下载完由后台任务删掉
+    #
+    # 额外两个响应头：压缩包实际大小 + 展开后的原始容量。
+    # 为什么：用户看到列表里写「7.5 MB」，下载到的 .tar.gz 却只有 871 KB，
+    # 会以为导出丢了东西。两个数都摆出来，界面才说得清「差的是 gzip 压掉的」。
+    headers = {
+        "Content-Disposition": disp,
+        "X-KB-Export-Bytes": str(out.get("bytes") or 0),
+        "X-KB-Export-Raw-Bytes": str(out.get("raw_bytes") or 0),
+    }
     return FileResponse(out["path"], media_type="application/gzip",
-                        headers={"Content-Disposition": disp},
+                        headers=headers,
                         background=BackgroundTask(maint.cleanup_export, out))
 
 

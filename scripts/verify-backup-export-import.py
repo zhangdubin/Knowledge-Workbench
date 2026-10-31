@@ -93,6 +93,15 @@ async def _init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
+def _sha(path: str) -> str:
+    """文件的 sha256（逐块读，别把大文件整个塞进内存）"""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 async def _seed() -> str:
     """塞一条外置原文的文档（这样 files/ 目录里真的有东西可备）"""
     from app.database import SessionLocal
@@ -178,6 +187,56 @@ async def run() -> None:
           f"归档里有 files/（共 {len(members)} 个成员）")
     check(not any(m.startswith("/") or ".." in m for m in members),
           "归档里没有绝对路径或 .. 成员")
+
+    # ---- 1b. 「导出的包比备份列表小」是压缩，不是丢东西 ----
+    #
+    # 用户会拿下载到的 .tar.gz 大小跟列表里的「合计」比，然后以为导出丢了内容。
+    # 这里把两件事钉死：
+    #   1) 归档**展开后**的字节数 ≥ 快照目录的实际字节数（内容没少）
+    #   2) 压缩后的大小 ≤ 展开后的大小（差的是 gzip）
+    section("1b. 压缩包大小与原始容量的关系")
+    raw_in_archive = 0
+    n_files = 0
+    with tarfile.open(archive, "r:gz") as tf:
+        for m in tf.getmembers():
+            if m.isfile():
+                raw_in_archive += m.size
+                n_files += 1
+    snap_bytes = 0
+    n_snap_files = 0
+    for dp, _dn, fns in os.walk(snap_dir):
+        for fn in fns:
+            snap_bytes += os.path.getsize(os.path.join(dp, fn))
+            n_snap_files += 1
+    check(raw_in_archive >= snap_bytes,
+          f"归档展开后 {raw_in_archive} 字节 ≥ 快照目录 {snap_bytes} 字节（内容没少）")
+    check(n_files == n_snap_files,
+          f"归档里的文件数 {n_files} = 快照里的文件数 {n_snap_files}")
+    check(exp.get("raw_bytes", 0) >= snap_bytes,
+          f"export_backup 报的 raw_bytes（{exp.get('raw_bytes')}）≥ 快照实际字节（{snap_bytes}）")
+    check(exp.get("bytes", 0) <= exp.get("raw_bytes", 0),
+          f"压缩后 {exp.get('bytes')} 字节 ≤ 展开后 {exp.get('raw_bytes')} 字节（差的是 gzip）")
+    # 逐字节比对：解出来的内容必须与快照完全一致
+    tmp_x = tempfile.mkdtemp(prefix="kb-x-")
+    try:
+        with tarfile.open(archive, "r:gz") as tf:
+            tf.extractall(tmp_x)
+        diff = []
+        for dp, _dn, fns in os.walk(snap_dir):
+            for fn in fns:
+                a = os.path.join(dp, fn)
+                # ⚠️ 变量名别用 rel：外层的 rel 是「测试原文在线上文件目录里的
+                # 相对路径」，后面第 7 步还要用它。覆盖掉会让那一步查错文件，
+                # 变成一条假失败。
+                rel_in_snap = os.path.relpath(a, snap_dir)
+                b = os.path.join(tmp_x, rel_in_snap)
+                if not os.path.isfile(b):
+                    diff.append(f"缺 {rel_in_snap}")
+                elif _sha(a) != _sha(b):
+                    diff.append(f"内容不同 {rel_in_snap}")
+        check(not diff, f"解开后与快照逐字节一致（{n_snap_files} 个文件）")
+    finally:
+        shutil.rmtree(tmp_x, ignore_errors=True)
 
     # ---- 2. 导入刚导出的包 ----
     section("2. 导入刚导出的包")

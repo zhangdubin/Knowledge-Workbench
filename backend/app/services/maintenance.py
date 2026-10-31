@@ -1320,7 +1320,26 @@ def _build_archive(src: str, out_path: str) -> dict:
                     files += _add_regular(tf, src, os.path.basename(src))
         finally:
             gz.close()
-    return {"files": files, "bytes": os.path.getsize(out_path)}
+    # raw_bytes = 展开后的原始字节数（压缩之前）。
+    #
+    # 为什么单独报出来：用户看到「备份 7.5 MB」、下载到的 .tar.gz 却只有
+    # 871 KB，会以为导出丢了东西 —— 其实差的全是 gzip 压掉的。
+    # 把两个数都摆出来（响应头 X-KB-Export-Raw-Bytes），界面上才能说清楚
+    # 「压缩包本来就比原始容量小」，而不是让人自己去猜。
+    raw = 0
+    if os.path.isdir(src):
+        for dp, _dn, fns in os.walk(src):
+            for fn in fns:
+                try:
+                    raw += os.path.getsize(os.path.join(dp, fn))
+                except OSError:
+                    pass
+    else:
+        try:
+            raw = os.path.getsize(src)
+        except OSError:
+            raw = 0
+    return {"files": files, "bytes": os.path.getsize(out_path), "raw_bytes": raw}
 
 
 async def export_backup(name: str) -> dict:
@@ -1370,7 +1389,10 @@ async def export_backup(name: str) -> dict:
     return {"ok": True, "name": name, "kind": item["kind"],
             "path": out_path, "tmp_dir": tmpdir,
             "filename": f"kb-backup-{name}{EXPORT_SUFFIX}",
-            "bytes": info["bytes"], "files": info["files"]}
+            # bytes = 压缩包实际大小（用户下载到的就是它）
+            # raw_bytes = 展开后的原始容量（跟备份列表里的「合计」一个口径）
+            "bytes": info["bytes"], "raw_bytes": info.get("raw_bytes", 0),
+            "files": info["files"]}
 
 
 def cleanup_export(out: dict) -> None:

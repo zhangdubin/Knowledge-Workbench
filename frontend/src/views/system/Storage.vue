@@ -280,6 +280,12 @@
           <b>导入只登记备份、不会动当前数据</b> —— 真正的还原仍然要走「还原」确认流程
           （有退路快照、自检与自动回滚）。
         </p>
+        <p>
+          <b>表里的「合计」是展开后的原始容量，下载到的 .tar.gz 是 gzip 压缩包，
+          本来就该比它小</b>（SQLite 库、PDF、PNG 都压得很狠，实测常见压缩比 5～10 倍）。
+          两个数不是一回事，别拿压缩包的大小跟表里的合计比 ——
+          想确认有没有丢东西，把 <code>.tar.gz</code> 解开看里面的文件数与总字节即可。
+        </p>
         <p class="warn-line">
           <el-icon><WarningFilled /></el-icon>
           <span>
@@ -329,13 +335,19 @@
             <span v-else class="sub-warn" style="display:inline">未包含</span>
           </template>
         </el-table-column>
-        <el-table-column label="合计" width="100">
-          <template #default="{ row }">{{ fmtBytes(row.bytes) }}</template>
+        <el-table-column label="合计（原始）" width="120">
+          <template #default="{ row }">
+            <!-- 「合计」是展开后的原始容量，不是压缩包大小 -->
+            <el-tooltip :content="`展开后的原始容量（${fmtBytes(row.bytes)}）。导出的 .tar.gz 是 gzip 压缩包，会比这个小好几倍，不是丢了东西。`"
+                        placement="top">
+              <span>{{ fmtBytes(row.bytes) }}</span>
+            </el-tooltip>
+          </template>
         </el-table-column>
         <el-table-column prop="mtime" label="生成时间" width="170" />
         <el-table-column label="操作" width="150" align="center">
           <template #default="{ row }">
-            <el-tooltip content="把这个备份打包成 .tar.gz 下载到本机（超大备份打包会超过网关的 5 分钟超时）"
+            <el-tooltip :content="`把这个备份打包成 .tar.gz 下载到本机。包是 gzip 压缩的，所以会比表里的「合计 ${fmtBytes(row.bytes)}」小好几倍 —— 差的是压缩，不是内容。`"
                         placement="top">
               <el-button size="small" type="primary" effect="plain"
                          @click="exportBackup(row)">导出</el-button>
@@ -651,7 +663,17 @@ function exportBackup(row) {
   document.body.appendChild(a)
   a.click()
   a.remove()
-  ElMessage.success(`已开始下载 ${row.name}（打包大备份要一会儿，文件越大越慢）`)
+  // 一定要把「两个数」说清楚：
+  // 用户看到列表里写 7.5 MB，下载到的却只有 871 KB，第一反应是「导出丢了东西」。
+  // 差的那部分全是 gzip 压掉的（SQLite 库、PDF、PNG 都压得很狠）。
+  // 把展开后的容量摆出来，浏览器下载条上的数字变小才不会被人当成故障。
+  const raw = row.bytes ? `展开后 ${fmtBytes(row.bytes)}` : ''
+  ElMessage.success(
+    `已开始下载 kb-backup-${row.name}.tar.gz`
+    + (raw ? `（${raw}，压缩包会比这个小好几倍，差的是压缩不是内容）` : '')
+    + '，打包大备份要一会儿',
+    { duration: 6000 }
+  )
 }
 
 /**
@@ -663,7 +685,8 @@ async function exportCurrent() {
   try {
     const r = await Api.storageBackup()
     ElMessage.success(`已备份 ${r.name}，正在打包下载…`)
-    exportBackup({ name: r.name })
+    // 把新快照的容量带过去，好让下载提示里说清「展开后多大」
+    exportBackup({ name: r.name, bytes: r.bytes })
     loadBackups(); loadReport()
   } catch (e) {
     ElMessage.error(e?.response?.data?.detail || '备份失败')

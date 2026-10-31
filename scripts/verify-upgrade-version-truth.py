@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 import types
@@ -233,11 +234,15 @@ def test_declared_version(module) -> None:
 
     cfg = (BACKEND / "app" / "config.py").read_text(encoding="utf-8")
     declared = module._declared_version(cfg)
-    check(declared == "0.6.9",
+    # 这里刻意不写死版本号：写死的话，每发一次版这个脚本就假报警一次
+    # （0.6.9 → 0.7.0 时它就红过一次）。要验的是三件事：
+    #   读得出来、格式是 x.y.z、带不带 v 前缀都算同一版。
+    check(bool(re.fullmatch(r"v?\d+\.\d+\.\d+", declared)),
           "能从 config.py 里读出 app_version",
           f"读出来的是 {declared!r}")
-    check(module._same_version(declared, "v0.6.9"),
-          "config.py 里的 0.6.9 与 tag v0.6.9 判为同一版")
+    check(module._same_version(declared, "v" + declared.lstrip("v")),
+          "config.py 里的版本与同版本 tag 判为同一版",
+          f"declared={declared!r}")
 
 
 def test_compose_image_refs(module) -> None:

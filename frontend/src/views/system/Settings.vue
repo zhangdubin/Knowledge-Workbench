@@ -1,8 +1,8 @@
 <template>
-  <div class="page">
+  <div class="page set-page">
     <PageTitle
       title="系统设置"
-      subtitle="这里的改动立即生效，不需要重启容器 —— 备份目录、保留份数、初始管理员口令、升级仓库"
+      subtitle="这里的改动立即生效，不需要重启容器 —— 备份目录、保留份数、初始管理员口令、升级来源"
       icon-key="Setting"
     >
       <el-button :loading="loading" @click="load">
@@ -14,23 +14,27 @@
       <template #title>{{ loadError }}</template>
     </el-alert>
 
-    <!-- 配置从哪来：把优先级摆明，避免「改了没生效」的困惑 -->
-    <div class="card">
-      <div class="card-title">
-        <span class="card-title-text">
-          <el-icon class="title-ico"><InfoFilled /></el-icon>配置从哪来
-        </span>
-      </div>
+    <!-- ① 配置优先级：原来占掉一整张卡（250px 高）才说清一件事，
+         现在压成一条横排：规则本身一眼可见，详细说明收在后面。 -->
+    <div class="src-strip">
+      <span class="src-chain">
+        <el-tag size="small" type="success" effect="light">本页设置</el-tag>
+        <el-icon class="src-arrow"><Right /></el-icon>
+        <el-tag size="small" type="warning" effect="light">环境变量</el-tag>
+        <el-icon class="src-arrow"><Right /></el-icon>
+        <el-tag size="small" type="info" effect="light">代码默认值</el-tag>
+      </span>
+      <span class="src-hint">左边的赢</span>
+      <el-button link type="primary" class="src-toggle" @click="showPrecedence = !showPrecedence">
+        {{ showPrecedence ? '收起说明' : '配置存在哪、为什么' }}
+      </el-button>
+    </div>
+
+    <div v-if="showPrecedence" class="src-detail">
       <div class="legend">
         <div v-for="p in precedence" :key="p.source" class="legend-row">
           <el-tag size="small" :type="srcTagType(p.source)" effect="light">{{ p.label }}</el-tag>
           <span class="legend-note">{{ p.note }}</span>
-        </div>
-        <div class="legend-row">
-          <el-tag size="small" type="info" effect="plain">优先级</el-tag>
-          <span class="legend-note">
-            本页设置 &gt; 环境变量 &gt; 代码默认值。同一项被多处设置时，左边的赢。
-          </span>
         </div>
       </div>
       <div class="note">
@@ -43,20 +47,42 @@
       </div>
     </div>
 
-    <!-- 按分组渲染 -->
-    <div v-for="g in groups" :key="g.name" class="card">
+    <!-- ② 分组导航：这一页有两千多像素高，没有导航就只能一路滚。
+         芯片跟着视口顶部走，滚到哪一段就亮哪一个。 -->
+    <nav class="group-nav">
+      <button
+        v-for="(g, i) in groups" :key="g.name"
+        class="group-nav-item" :class="{ active: activeSection === i }"
+        @click="jumpToSection(i)"
+      >
+        <el-icon><component :is="groupIcon(g.name)" /></el-icon>{{ groupTitle(g.name) }}
+      </button>
+      <button
+        class="group-nav-item" :class="{ active: activeSection === 'update' }"
+        @click="jumpToSection('update')"
+      >
+        <el-icon><Refresh /></el-icon>版本与更新
+      </button>
+    </nav>
+
+    <!-- ③ 按分组渲染：每组一张卡，组内每条设置是「左说明 / 右控件」两栏。
+         两栏的意义：控件的左边缘能对齐成一条竖线，扫一眼就知道该往哪儿填；
+         原来一条设置占满 1178px，180px 的数字框孤零零贴在左边，右边全是空。 -->
+    <div v-for="(g, gi) in groups" :key="g.name" class="card set-card" :id="`sec-${gi}`">
       <div class="card-title">
         <span class="card-title-text">
           <el-icon class="title-ico">
             <component :is="groupIcon(g.name)" />
-          </el-icon>{{ g.name }}
+          </el-icon>{{ groupTitle(g.name) }}
         </span>
+        <span class="card-sub">{{ groupDesc(g.name) }}</span>
       </div>
 
       <div v-for="it in g.items" :key="it.key" class="set-row" :class="{ dirty: isDirty(it) }">
-        <div class="set-head">
+        <!-- 左栏：这是什么、它从哪来、为什么 -->
+        <div class="set-main">
           <div class="set-name">
-            {{ it.label }}
+            <span class="set-label">{{ it.label }}</span>
             <el-tag size="small" :type="srcTagType(it.source)" effect="light">
               来源：{{ srcLabel(it.source) }}
             </el-tag>
@@ -68,51 +94,54 @@
               <el-tag v-else-if="it.is_weak" size="small" type="danger" effect="plain">仍是默认弱口令</el-tag>
             </template>
           </div>
-          <div class="set-key mono">{{ it.key }}</div>
+          <div class="set-meta">
+            <code class="set-key mono">{{ it.key }}</code>
+            <span class="set-help">{{ it.help }}</span>
+          </div>
         </div>
 
-        <div class="set-help">{{ it.help }}</div>
+        <!-- 右栏：控件 + 这一条的状态与动作 -->
+        <div class="set-ctrl">
+          <div class="set-body">
+            <!-- 整数 -->
+            <el-input-number
+              v-if="it.kind === 'int'"
+              v-model="draft[it.key]"
+              :min="it.min" :max="it.max"
+              controls-position="right"
+              style="width: 100%"
+            />
 
-        <div class="set-body">
-          <!-- 整数 -->
-          <el-input-number
-            v-if="it.kind === 'int'"
-            v-model="draft[it.key]"
-            :min="it.min" :max="it.max"
-            controls-position="right"
-            style="width: 180px"
-          />
-
-          <!-- 路径：候选下拉 + 可手填 -->
-          <template v-else-if="it.kind === 'path'">
-            <div class="path-row">
-              <el-select
-                v-model="draft[it.key]"
-                filterable allow-create default-first-option
-                placeholder="选择一个候选目录，或直接输入容器内绝对路径"
-                style="flex: 1; min-width: 280px"
-              >
-                <el-option
-                  v-for="c in candidates"
-                  :key="c.path"
-                  :value="c.path"
-                  :disabled="!!c.blocked || !c.ok"
-                  :label="c.path"
+            <!-- 路径：候选下拉 + 可手填 -->
+            <template v-else-if="it.kind === 'path'">
+              <div class="path-row">
+                <el-select
+                  v-model="draft[it.key]"
+                  filterable allow-create default-first-option
+                  placeholder="选择候选目录，或直接输入容器内绝对路径"
+                  style="flex: 1; min-width: 0"
                 >
-                  <span class="opt-path mono">{{ c.path }}</span>
-                  <span class="opt-tags">
-                    <el-tag v-if="c.is_current" size="small" type="info" effect="plain">当前</el-tag>
-                    <el-tag v-if="c.recommended" size="small" type="success" effect="plain">推荐</el-tag>
-                    <el-tag v-else-if="c.blocked" size="small" type="danger" effect="plain">不可用</el-tag>
-                    <el-tag v-else-if="!c.ok" size="small" type="info" effect="plain">不存在</el-tag>
-                    <el-tag v-else-if="c.same_device_as_data" size="small" type="warning" effect="plain">与数据同盘</el-tag>
-                  </span>
-                </el-option>
-              </el-select>
-              <el-button :loading="probing" @click="doProbe">
-                <el-icon><Aim /></el-icon>测试
-              </el-button>
-            </div>
+                  <el-option
+                    v-for="c in candidates"
+                    :key="c.path"
+                    :value="c.path"
+                    :disabled="!!c.blocked || !c.ok"
+                    :label="c.path"
+                  >
+                    <span class="opt-path mono">{{ c.path }}</span>
+                    <span class="opt-tags">
+                      <el-tag v-if="c.is_current" size="small" type="info" effect="plain">当前</el-tag>
+                      <el-tag v-if="c.recommended" size="small" type="success" effect="plain">推荐</el-tag>
+                      <el-tag v-else-if="c.blocked" size="small" type="danger" effect="plain">不可用</el-tag>
+                      <el-tag v-else-if="!c.ok" size="small" type="info" effect="plain">不存在</el-tag>
+                      <el-tag v-else-if="c.same_device_as_data" size="small" type="warning" effect="plain">与数据同盘</el-tag>
+                    </span>
+                  </el-option>
+                </el-select>
+                <el-button :loading="probing" @click="doProbe">
+                  <el-icon><Aim /></el-icon>测试
+                </el-button>
+              </div>
 
             <div v-if="probeResult" class="probe" :class="probeResult.ok ? 'ok' : 'bad'">
               <el-icon><component :is="probeResult.ok ? 'CircleCheck' : 'WarningFilled'" /></el-icon>
@@ -125,69 +154,73 @@
               <span v-else>{{ probeResult.error }}</span>
             </div>
 
-            <!-- 候选目录表：让「有没有别的盘可用」一眼可见 -->
+            <!-- 候选目录表：让「有没有别的盘可用」一眼可见。
+                 原来这张表是**常驻展开**的，单独一个「备份目录」就占了 832px，
+                 把整页撑成一条长卷轴。现在默认收起成一行摘要，
+                 需要挑盘时再展开 —— 常用信息（当前目录、是不是独立盘）留在摘要里。 -->
             <div class="cand-box">
-              <div class="cand-title">
+              <button class="cand-toggle" @click="showCandidates = !showCandidates">
+                <el-icon><component :is="showCandidates ? 'ArrowDown' : 'ArrowRight'" /></el-icon>
                 <span>容器内可用作备份的目录（{{ candidates.length }}）</span>
                 <span v-if="!hasAlternate" class="cand-warn">
                   <el-icon><WarningFilled /></el-icon>
-                  没有与数据盘分离的盘 —— 见下方挂载指引
+                  没有与数据盘分离的盘
+                </span>
+                <span class="cand-toggle-hint">{{ showCandidates ? '收起' : '展开看看有没有别的盘' }}</span>
+              </button>
+
+              <!-- 摘要：当前目录 + 是不是独立盘 —— 不用展开也能判断 -->
+              <div v-if="currentCandidate" class="cand-current">
+                <el-icon><FolderOpened /></el-icon>
+                <span>
+                  当前生效：<code class="mono">{{ currentCandidate.path }}</code>
+                  <template v-if="currentCandidate.free_bytes">
+                    · 剩余 {{ fmtBytes(currentCandidate.free_bytes) }}
+                  </template>
+                  <template v-if="currentCandidate.same_device_as_data"> · 与数据同盘</template>
+                  <template v-else> · 独立盘{{ currentCandidate.separate_declared ? '（按部署声明）' : '' }}</template>
                 </span>
               </div>
-              <el-table :data="candidates" size="small" class="data-table"
-                        :row-class-name="candRowClass"
-                        empty-text="没有探测到可用目录">
-                <el-table-column label="路径" min-width="200">
-                  <template #default="{ row }">
-                    <span class="mono">{{ row.path }}</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="状态" width="190">
-                  <template #default="{ row }">
-                    <el-tag v-if="row.is_current" size="small" type="info" effect="plain">当前生效</el-tag>
-                    <el-tag v-else-if="row.recommended" size="small" type="success" effect="plain">推荐</el-tag>
-                    <el-tag v-else-if="row.blocked" size="small" type="danger" effect="plain">禁止</el-tag>
-                    <el-tag v-else-if="!row.ok" size="small" type="info" effect="plain">不可用</el-tag>
-                    <el-tag v-else size="small" type="warning" effect="plain">可用</el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column label="说明" min-width="260">
-                  <template #default="{ row }">
-                    <span v-if="row.blocked" class="bad-text">{{ row.blocked }}</span>
-                    <span v-else-if="!row.ok" class="bad-text">{{ row.error }}</span>
-                    <span v-else class="dim">
-                      {{ row.note }}
-                      <template v-if="row.same_device_as_data"> · 与数据同盘</template>
-                      <template v-else> · 独立盘{{ row.separate_declared ? '（按部署声明）' : '' }}</template>
-                    </span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="剩余" width="100">
-                  <template #default="{ row }">{{ row.free_bytes ? fmtBytes(row.free_bytes) : '—' }}</template>
-                </el-table-column>
-                <el-table-column label="" width="70">
-                  <template #default="{ row }">
-                    <el-button v-if="row.ok && !row.blocked && !row.is_current" link type="primary"
-                               @click="draft[it.key] = row.path">选用</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </div>
 
-            <!-- 没有独立盘时给出可复制的挂载指引：这是 Docker 层的边界，
-                 应用层绕不过去，所以如实告诉用户下一步在宿主机做什么 -->
-            <div v-if="!hasAlternate" class="note warn">
-              <el-icon><WarningFilled /></el-icon>
-              <div class="guide">
-                <p>
-                  当前所有候选都与数据目录在<b>同一块盘</b>上 —— 这样的备份只能防误删，
-                  防不了磁盘故障。要真正分盘，需要在 <code class="mono">docker-compose.yml</code>
-                  里把宿主机上另一块盘挂进容器：
-                </p>
-                <div v-for="(s, i) in guides" :key="i" class="guide-step">
-                  <div class="guide-title">{{ i + 1 }}. {{ s.title }}</div>
-                  <pre class="guide-code">{{ s.snippet }}</pre>
-                </div>
+              <div v-if="showCandidates" class="cand-content">
+                <el-table :data="candidates" size="small" class="data-table"
+                          :row-class-name="candRowClass"
+                          empty-text="没有探测到可用目录">
+                  <el-table-column label="路径" min-width="200">
+                    <template #default="{ row }">
+                      <span class="mono">{{ row.path }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="190">
+                    <template #default="{ row }">
+                      <el-tag v-if="row.is_current" size="small" type="info" effect="plain">当前生效</el-tag>
+                      <el-tag v-else-if="row.recommended" size="small" type="success" effect="plain">推荐</el-tag>
+                      <el-tag v-else-if="row.blocked" size="small" type="danger" effect="plain">禁止</el-tag>
+                      <el-tag v-else-if="!row.ok" size="small" type="info" effect="plain">不可用</el-tag>
+                      <el-tag v-else size="small" type="warning" effect="plain">可用</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="说明" min-width="260">
+                    <template #default="{ row }">
+                      <span v-if="row.blocked" class="bad-text">{{ row.blocked }}</span>
+                      <span v-else-if="!row.ok" class="bad-text">{{ row.error }}</span>
+                      <span v-else class="dim">
+                        {{ row.note }}
+                        <template v-if="row.same_device_as_data"> · 与数据同盘</template>
+                        <template v-else> · 独立盘{{ row.separate_declared ? '（按部署声明）' : '' }}</template>
+                      </span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="剩余" width="100">
+                    <template #default="{ row }">{{ row.free_bytes ? fmtBytes(row.free_bytes) : '—' }}</template>
+                  </el-table-column>
+                  <el-table-column label="" width="70">
+                    <template #default="{ row }">
+                      <el-button v-if="row.ok && !row.blocked && !row.is_current" link type="primary"
+                                 @click="draft[it.key] = row.path">选用</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
               </div>
             </div>
           </template>
@@ -198,7 +231,7 @@
               v-model="draft[it.key]"
               type="password" show-password
               :placeholder="it.is_set ? '已自定义过；留空表示不修改' : '留空表示沿用环境变量/默认值'"
-              style="max-width: 360px"
+              style="width: 100%"
             />
             <span class="dim">至少 {{ it.min_len }} 位</span>
           </div>
@@ -210,7 +243,7 @@
             <el-input
               v-model="draft[it.key]"
               :placeholder="it.placeholder || ''"
-              style="max-width: 420px"
+              style="width: 100%"
               @blur="markTouched(it.key)"
             />
             <span v-if="fieldError(it)" class="field-err">
@@ -219,48 +252,55 @@
             <span v-else class="dim">{{ kindHint(it) }}</span>
           </div>
 
-          <el-input v-else v-model="draft[it.key]" style="max-width: 360px" />
+          <el-input v-else v-model="draft[it.key]" style="width: 100%" />
+          </div>
+
+          <!-- 这一条的状态与动作：贴在控件下面，不另起一行 -->
+          <div class="set-foot">
+            <span v-if="isDirty(it)" class="dirty-tip">
+              <el-icon><EditPen /></el-icon>已修改，尚未保存
+            </span>
+            <span v-else-if="it.source === 'file'" class="dim">
+              与 <code class="mono">{{ file }}</code> 中的值一致
+            </span>
+            <span v-else class="dim">沿用{{ srcLabel(it.source) }}，未做本页设置</span>
+            <el-button v-if="it.source === 'file'" link type="danger"
+                       @click="doReset(it)">恢复默认</el-button>
+            <el-button v-else-if="isDirty(it)" link @click="revert(it)">撤销改动</el-button>
+          </div>
         </div>
 
-        <div class="set-foot">
-          <span v-if="isDirty(it)" class="dirty-tip">
-            <el-icon><EditPen /></el-icon>已修改，尚未保存
-          </span>
-          <span v-else-if="it.source === 'file'" class="dim">
-            与 <code class="mono">{{ file }}</code> 中的值一致
-          </span>
-          <span v-else class="dim">沿用{{ srcLabel(it.source) }}，未做本页设置</span>
-          <el-button v-if="it.source === 'file'" link type="danger"
-                     @click="doReset(it)">恢复默认</el-button>
-          <el-button v-else-if="isDirty(it)" link @click="revert(it)">撤销改动</el-button>
+        <!-- 通栏块：候选目录与挂载指引（它们要整行宽度才读得懂） -->
+        <div v-if="it.kind === 'path'" class="set-wide">
+          <!-- 没有独立盘时给出可复制的挂载指引：这是 Docker 层的边界，
+               应用层绕不过去，所以如实告诉用户下一步在宿主机做什么 -->
+          <div v-if="!hasAlternate" class="note warn">
+            <el-icon><WarningFilled /></el-icon>
+            <div class="guide">
+              <p>
+                当前所有候选都与数据目录在<b>同一块盘</b>上 —— 这样的备份只能防误删，
+                防不了磁盘故障。要真正分盘，需要在 <code class="mono">docker-compose.yml</code>
+                里把宿主机上另一块盘挂进容器：
+              </p>
+              <div v-for="(s, i) in guides" :key="i" class="guide-step">
+                <div class="guide-title">{{ i + 1 }}. {{ s.title }}</div>
+                <pre class="guide-code">{{ s.snippet }}</pre>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- 底部操作条 -->
-    <div class="save-bar">
-      <div class="save-info">
-        <template v-if="dirtyKeys.length">
-          <el-icon><WarningFilled /></el-icon>
-          待保存 {{ dirtyKeys.length }} 项：<span class="mono">{{ dirtyKeys.join('、') }}</span>
-        </template>
-        <template v-else>没有未保存的改动</template>
-      </div>
-      <div>
-        <el-button :disabled="!dirtyKeys.length || saving" @click="revertAll">全部撤销</el-button>
-        <el-button type="primary" :disabled="!dirtyKeys.length" :loading="saving" @click="save">
-          <el-icon><Select /></el-icon>保存修改
-        </el-button>
-      </div>
-    </div>
-
-    <!-- 系统更新：依托 GitHub Releases 检查新版本，升级动作在宿主机执行 -->
-    <div class="card">
+    <!-- ④ 版本与更新：把原来的「系统更新」与「关于系统」并成一张卡。
+         两张卡说的有一半是同一件事（版本号、升级仓库各出现两次），
+         拆开只会让人怀疑「这两个版本号怎么不一样」。 -->
+    <div class="card set-card" id="sec-update">
       <div class="card-title">
         <span class="card-title-text">
-          <el-icon class="title-ico"><Refresh /></el-icon>系统更新
+          <el-icon class="title-ico"><Refresh /></el-icon>版本与更新
         </span>
-        <div class="card-actions">
+        <span class="ct-actions">
           <el-button size="small" :loading="updateLoading" @click="checkUpdate(true)">
             {{ updateLoading ? '检查中…' : '检查更新' }}
           </el-button>
@@ -268,30 +308,36 @@
           <el-button size="small" type="primary" plain @click="openUpgrade">
             <el-icon><Upload /></el-icon>一键升级
           </el-button>
-        </div>
+        </span>
       </div>
 
-      <!-- 先说清「在查哪个仓库、这个值来自哪一层」：
-           否则出了错也不知道该去核对哪里，配置了却没生效更是无从查起 -->
-      <div class="about-rows">
-        <div class="about-row">
-          <span class="about-label">升级仓库</span>
-          <span class="about-value">
-            <span class="mono">{{ effectiveRepo || '未配置' }}</span>
-            <el-tag size="small" :type="srcTagType(repoSource)" effect="light" class="upd-tag">
-              来源：{{ srcLabel(repoSource) }}
+      <!-- 版本条：当前版本 → 最新版本，一眼看出差多少。
+           刻意不放「升级仓库/出站代理」：上面「升级与更新」分组里
+           已经有这两项的可编辑控件了，同样的信息摆两遍只会让人怀疑
+           「这两个是不是不一样的东西」。真查失败时再在提示里说明。 -->
+      <div class="ver-bar">
+        <div class="ver-cell">
+          <div class="ver-label">当前版本</div>
+          <div class="ver-value mono">v{{ updateInfo?.current || auth.sysVersion || '—' }}</div>
+        </div>
+        <el-icon class="ver-arrow"><Right /></el-icon>
+        <div class="ver-cell">
+          <div class="ver-label">最新版本</div>
+          <div class="ver-value mono">
+            {{ updateInfo?.ok ? (updateInfo.latest || '—') : '未检查' }}
+            <el-tag v-if="updateInfo?.has_update" type="danger" size="small" effect="dark">
+              有新版本
             </el-tag>
-          </span>
+            <el-tag v-else-if="updateInfo?.ok" type="success" size="small">
+              已是最新
+            </el-tag>
+          </div>
         </div>
-        <div class="about-row">
-          <span class="about-label">出站代理</span>
-          <span class="about-value dim">
-            {{ proxyItem?.value ? '已配置' : '未配置（直连）' }}
-          </span>
-        </div>
-        <div class="about-row">
-          <span class="about-label">当前版本</span>
-          <span class="about-value mono">v{{ updateInfo?.current || auth.sysVersion || '—' }}</span>
+        <div class="ver-cell ver-meta">
+          <div class="ver-label">发布时间</div>
+          <div class="ver-value dim">
+            {{ updateInfo?.published_at ? updateInfo.published_at.slice(0, 10) : '—' }}
+          </div>
         </div>
       </div>
 
@@ -304,31 +350,23 @@
         :closable="false" show-icon class="update-alert"
       >
         <div v-if="updateAlert.hint" class="update-hint">{{ updateAlert.hint }}</div>
+        <!-- 查失败时最需要知道的就是「刚才查的是哪个仓库」：
+             仓库填错、代理没配，症状都是「检查失败」，但处理方式完全不同。 -->
+        <div class="update-hint dim">
+          刚才查的是 <span class="mono">{{ effectiveRepo || '未配置' }}</span>
+          （{{ srcLabel(repoSource) }}）· 出站代理{{ proxyItem?.value ? '已配置' : '未配置（直连）' }}
+        </div>
       </el-alert>
 
       <template v-if="updateInfo && updateInfo.ok">
-        <div class="about-rows">
-          <div class="about-row">
-            <span class="about-label">最新版本</span>
-            <span class="about-value mono">
-              {{ updateInfo.latest || '—' }}
-              <el-tag v-if="updateInfo.has_update" type="danger" size="small" effect="dark" class="upd-tag">
-                有新版本
-              </el-tag>
-              <el-tag v-else type="success" size="small" class="upd-tag">
-                已是最新
-              </el-tag>
-            </span>
-          </div>
-          <div v-if="updateInfo.published_at" class="about-row">
-            <span class="about-label">发布时间</span>
-            <span class="about-value dim">{{ updateInfo.published_at.slice(0, 10) }}</span>
-          </div>
-        </div>
-
         <!-- Release Notes -->
         <div v-if="updateInfo.notes" class="update-notes">
-          <div class="update-notes-title">更新内容</div>
+          <div class="update-notes-title">
+            更新内容
+            <span v-if="updateInfo.published_at" class="dim">
+              发布于 {{ updateInfo.published_at.slice(0, 10) }}
+            </span>
+          </div>
           <MarkdownText :content="updateInfo.notes" class="update-notes-body" />
         </div>
 
@@ -350,11 +388,48 @@
         </div>
       </template>
 
-      <div v-else-if="!updateInfo" class="about-rows">
-        <div class="about-row">
-          <span class="about-label">版本说明</span>
-          <span class="about-value dim">点「检查更新」对比 GitHub 上的最新 Release</span>
-        </div>
+      <div v-else-if="!updateInfo" class="update-idle">
+        <el-icon><InfoFilled /></el-icon>
+        点右上角「检查更新」，跟 GitHub 上的最新 Release 对一下版本。
+      </div>
+
+      <!-- 「关于系统」原来是单独一张卡，现在收在这里当页脚：
+           版本号、服务名、报障提示 —— 都是排障时用得上的信息，
+           但不值得各占一张卡。 -->
+      <div class="about-foot">
+        <span class="about-foot-item">
+          <span class="about-foot-label">服务</span>
+          知识工作台 · Knowledge Workbench
+        </span>
+        <span class="about-foot-item">
+          <span class="about-foot-label">版本</span>
+          <span class="mono">v{{ auth.sysVersion || '—' }}</span>
+        </span>
+        <span class="about-foot-item dim">
+          报障时请附上版本号与「存储与备份」页的深度自检结果。
+        </span>
+      </div>
+    </div>
+
+    <!-- ⑤ 底部操作条：放在页面最后（原来夹在设置与「系统更新」之间，
+         滚到下面时它会提前离场）。sticky 在视口底部，改了什么一直看得见。 -->
+    <div class="save-bar">
+      <div class="save-info">
+        <template v-if="dirtyKeys.length">
+          <el-icon><WarningFilled /></el-icon>
+          <span>待保存 {{ dirtyKeys.length }} 项</span>
+          <span class="mono save-keys">{{ dirtyKeys.join('、') }}</span>
+        </template>
+        <template v-else>
+          <el-icon><CircleCheck /></el-icon>
+          <span>没有未保存的改动</span>
+        </template>
+      </div>
+      <div class="save-actions">
+        <el-button :disabled="!dirtyKeys.length || saving" @click="revertAll">全部撤销</el-button>
+        <el-button type="primary" :disabled="!dirtyKeys.length" :loading="saving" @click="save">
+          <el-icon><Select /></el-icon>保存修改
+        </el-button>
       </div>
     </div>
 
@@ -577,29 +652,6 @@
     </el-dialog>
 
     <!-- 关于系统：版本标识的「正式户口」——排障时让人一眼说清跑的是哪一版 -->
-    <div class="card">
-      <div class="card-title">
-        <span class="card-title-text">
-          <el-icon class="title-ico"><InfoFilled /></el-icon>关于系统
-        </span>
-      </div>
-      <div class="about-rows">
-        <div class="about-row">
-          <span class="about-label">版本</span>
-          <span class="about-value mono">v{{ auth.sysVersion || '—' }}</span>
-        </div>
-        <div class="about-row">
-          <span class="about-label">服务名</span>
-          <span class="about-value">知识工作台 · Knowledge Workbench</span>
-        </div>
-        <div class="about-row">
-          <span class="about-label">版本说明</span>
-          <span class="about-value dim">
-            升级离线包后此处的版本号会自动更新；报障时请附上版本号与「存储与备份」页的深度自检结果。
-          </span>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -1034,6 +1086,10 @@ function copyEnable() {
 
 onUnmounted(() => {
   clearTimeout(pollTimer)
+  if (navScroller) {
+    navScroller.removeEventListener('scroll', onNavScroll)
+    navScroller = null
+  }
 })
 
 const loading = ref(false)
@@ -1046,6 +1102,11 @@ const precedence = ref([])
 const targets = ref(null)
 const probeResult = ref(null)
 const draft = reactive({})
+
+// 「配置从哪来」的详细说明默认收起：它是一段解释，不是每天都要看的东西
+const showPrecedence = ref(false)
+// 候选目录表默认收起：一张七行的表常驻展开，单这一项就把页面撑到 800px 高
+const showCandidates = ref(false)
 
 const candidates = computed(() => targets.value?.candidates || [])
 const guides = computed(() => targets.value?.guides || [])
@@ -1087,6 +1148,96 @@ function srcTagType(s) {
 const GROUP_ICONS = { '存储与备份': 'Coin', '安全': 'Lock', '升级与更新': 'Upload' }
 function groupIcon(name) {
   return GROUP_ICONS[name] || 'Setting'
+}
+
+/**
+ * 分组的显示名
+ *
+ * 后端给的组名是「升级与更新」，而下面还有一张「版本与更新」卡 ——
+ * 两个名字长得几乎一样，导航芯片并排放着时用户会以为点错了。
+ * 这一组管的是「去哪里拿更新」（仓库、代理），所以显示成「升级来源」。
+ * 后端的组名不动，这只是显示层的改名。
+ */
+const GROUP_TITLES = { '升级与更新': '升级来源' }
+function groupTitle(name) {
+  return GROUP_TITLES[name] || name
+}
+
+// 卡片标题右边的一句话：说清这一组管什么，省得用户逐条读
+const GROUP_DESCS = {
+  '存储与备份': '备份落在哪、留几份 —— 出事时能不能救回来',
+  '安全': '初始口令与登录保护',
+  '升级与更新': '去哪里拿新版本 —— 仓库与出站代理',
+}
+function groupDesc(name) {
+  return GROUP_DESCS[name] || ''
+}
+
+// 当前生效的候选目录（摘要行用）：不展开表也知道备份落在哪、是不是独立盘
+const currentCandidate = computed(
+  () => candidates.value.find(c => c.is_current) || null
+)
+
+// ---- 分组导航 ----
+// 这一页两千多像素高，没有导航就只能一路滚。芯片跟着视口顶部走，
+// 滚到哪一段就亮哪一个 —— 用「离视口顶部最近的那张卡」来判断，
+// 比 IntersectionObserver 简单，也更符合人的直觉。
+const activeSection = ref(0)
+
+function jumpToSection(key) {
+  const el = document.getElementById(key === 'update' ? 'sec-update' : `sec-${key}`)
+  if (!el) return
+  // ⚠️ 页面真正的滚动容器是布局里的 .main，不是 window。
+  // 用 scrollIntoView 是因为浏览器会自己找到「最近的可滚动祖先」——
+  // 之前用 window.scrollTo，容器找错了，点了导航一点反应都没有。
+  // 卡片上的 scroll-margin-top 负责把标题让出来，别被导航条压住。
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  activeSection.value = key
+}
+
+let navObserver = null
+// 滚动容器是布局里的 .main，不是 window —— 监听错容器，导航就永远是死的
+let navScroller = null
+function onNavScroll() {
+  const scroller = navScroller
+  if (!scroller) return
+  // 判定线放在导航条下沿再往下一点：
+  // 点导航跳过去时，目标卡片的顶边正好落在导航条下面（scroll-margin-top），
+  // 判定线要在这条线之下，否则跳过去的那一段不会被点亮。
+  const nav = document.querySelector('.group-nav')
+  const navH = nav ? nav.getBoundingClientRect().height : 50
+  const line = scroller.getBoundingClientRect().top + navH + 28
+  let idx = 0
+  groups.value.forEach((_, i) => {
+    const el = document.getElementById(`sec-${i}`)
+    if (el && el.getBoundingClientRect().top <= line) idx = i
+  })
+  const upd = document.getElementById('sec-update')
+  const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4
+  if ((upd && upd.getBoundingClientRect().top <= line) || atBottom) {
+    activeSection.value = 'update'
+  } else {
+    activeSection.value = idx
+  }
+}
+
+/**
+ * 挂上滚动监听，算出「当前在第几段」
+ *
+ * 为什么不用 IntersectionObserver：
+ * 它的回调只带「这次状态变了」的元素，想靠它算出当前段，
+ * 就会在快速滚动/平滑滚动结束时留下过期的高亮。
+ * 直接按「离导航条最近的那张卡」算，结果永远是准的。
+ */
+function setupNavObserver() {
+  if (navScroller) {
+    navScroller.removeEventListener('scroll', onNavScroll)
+    navScroller = null
+  }
+  navScroller = document.querySelector('.main')
+  if (!navScroller) return
+  navScroller.addEventListener('scroll', onNavScroll, { passive: true })
+  onNavScroll()
 }
 
 // ---- 行内格式校验（与后端 settings_store 的规则保持一致）----
@@ -1181,6 +1332,9 @@ async function load() {
     } catch (e) {
       targets.value = null
     }
+    // 分组是数据算出来的，DOM 渲染完才能挂观察器
+    await nextTick()
+    setupNavObserver()
   } catch (e) {
     loadError.value = e?.response?.data?.detail || '配置加载失败，请检查登录状态与后端服务'
   } finally {
@@ -1270,181 +1424,347 @@ onMounted(load)
 </script>
 
 <style scoped>
-.page { padding: 0 0 76px; }
-.load-err { margin-bottom: 14px; }
+/* ==========================================================
+   系统设置页 · 排版
+   ----------------------------------------------------------
+   这一页原来自己定义了一份 .card / .card-title（1px 边框、10px 圆角、
+   没有阴影），跟全站设计系统脱节 —— 全站只有它和「回收站」这么写。
+   现在删掉本地覆盖，直接用全局那套（圆角 12、柔和阴影、悬停描边），
+   页面跟其它页看起来才是一套东西。
 
-.card {
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 10px;
-  padding: 16px 18px;
-  margin-bottom: 14px;
+   排版上做了三件事：
+   1. 每条设置改成「左说明 / 右控件」两栏，控件的左边缘对齐成一条竖线；
+   2. 候选目录表默认收起（原来常驻展开，单这一项就占 832px）；
+   3. 顶部加分组导航（页面两千多像素高，没有导航就只能一路滚）。
+   ========================================================== */
+.set-page { padding-bottom: 96px; }
+.load-err { margin-bottom: var(--space-4); }
+
+/* —— ① 来源优先级横条 —— */
+.src-strip {
+  display: flex; align-items: center; gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
 }
-.card-title {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 14px;
+.src-chain { display: inline-flex; align-items: center; gap: var(--space-2); }
+.src-arrow { color: var(--text-disabled); font-size: 12px; }
+.src-hint { font-size: var(--text-sm); color: var(--text-secondary); }
+.src-toggle { margin-left: auto; font-size: var(--text-sm); }
+
+.src-detail {
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
 }
-.card-title-text {
+.legend { display: flex; flex-direction: column; gap: var(--space-2); }
+.legend-row { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-sm); }
+.legend-note { color: var(--text-secondary); }
+
+/* —— ② 分组导航 —— */
+.group-nav {
+  /* sticky 是相对「最近的可滚动祖先」定位的 —— 这一页的滚动容器是布局里的
+     .main（顶栏在它外面），所以这里是 0，不是 58px。 */
+  position: sticky; top: 0; z-index: var(--z-raised);
+  display: flex; align-items: center; gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) 0 var(--space-3);
+  margin-bottom: var(--space-3);
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-light);
+}
+.group-nav-item {
   display: inline-flex; align-items: center; gap: 6px;
-  font-weight: 600; font-size: 15px; color: var(--el-text-color-primary);
+  padding: 5px 12px;
+  font-size: var(--text-sm); font-family: inherit;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: color var(--duration) var(--ease-out), background var(--duration) var(--ease-out),
+              border-color var(--duration) var(--ease-out);
 }
-.title-ico { color: var(--el-color-primary); }
-
-.legend { display: flex; flex-direction: column; gap: 8px; }
-.legend-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-.legend-note { color: var(--el-text-color-regular); }
-
-.note {
-  display: flex; gap: 8px; align-items: flex-start;
-  margin-top: 12px; padding: 10px 12px;
-  border-radius: 8px; font-size: 13px; line-height: 1.7;
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-regular);
+.group-nav-item:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.group-nav-item.active {
+  /* 文字取卡片底色：浅色主题下是白字配深紫，深色主题下是深字配浅紫，
+     两种主题都能过 4.5:1（写死白色的话，深色主题下只有 3.4:1）。 */
+  color: var(--bg-card);
+  background: var(--primary);
+  border-color: var(--primary);
 }
-.note.warn {
-  background: var(--el-color-warning-light-9);
-  color: var(--el-color-warning-dark-2);
-}
-.note code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.group-nav-item .el-icon { font-size: 14px; }
 
+/* —— ③ 设置分组 —— */
+.set-card { scroll-margin-top: 72px; }
+.card-sub {
+  font-size: var(--text-sm); font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+/* 一条设置 = 一行两栏 */
 .set-row {
-  padding: 14px 0;
-  border-top: 1px solid var(--el-border-color-lighter);
+  display: grid;
+  /* 左栏自适应、右栏固定 —— 所有控件的左边缘因此对齐成一条竖线 */
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: var(--space-4) var(--space-7);
+  align-items: start;
+  padding: var(--space-5) 0;
+  border-top: 1px solid var(--border-light);
+  /* 吸底的保存条有 58px 高：Tab 键走到某一行时，
+     别让这一行正好停在保存条底下（看不见自己在哪）。 */
+  scroll-margin-bottom: 72px;
 }
-.set-row:first-of-type { border-top: none; padding-top: 0; }
-.set-row.dirty { background: var(--el-color-primary-light-9); border-radius: 8px; padding-left: 10px; padding-right: 10px; }
-.set-head {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; flex-wrap: wrap;
+.set-card .set-row:first-of-type { border-top: none; padding-top: 0; }
+.set-row.dirty {
+  background: var(--primary-bg);
+  border-radius: var(--radius-md);
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
 }
+.set-main { min-width: 0; }
+.set-ctrl { min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+
 .set-name {
-  display: inline-flex; align-items: center; gap: 8px;
-  font-weight: 600; color: var(--el-text-color-primary);
+  display: flex; align-items: center; gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.set-label {
+  font-weight: 600; font-size: var(--text-md);
+  color: var(--text-primary);
+}
+.set-meta {
+  display: flex; align-items: baseline; gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
 }
 /* 环境变量名是内容，不是占位符。
    原来用的 placeholder 色（#b8bcc6）在白底上只有 2.23:1，
    读起来发飘 —— 用户要照着这个 key 去写 .env，看不清就容易写错。 */
-.set-key { font-size: 12px; color: var(--text-tertiary); }
+.set-key {
+  font-size: var(--text-xs); color: var(--text-tertiary);
+  background: var(--bg-subtle);
+  padding: 1px 6px; border-radius: var(--radius-xs);
+  white-space: nowrap;
+}
 .set-help {
-  margin: 6px 0 10px; font-size: 13px; line-height: 1.75;
-  color: var(--el-text-color-regular); max-width: 900px;
+  font-size: var(--text-sm); line-height: 1.7;
+  color: var(--text-secondary); max-width: 760px;
 }
-.set-body { display: flex; flex-direction: column; gap: 10px; }
+.set-body { display: flex; flex-direction: column; gap: var(--space-3); }
 .set-foot {
-  display: flex; align-items: center; gap: 10px;
-  margin-top: 10px; font-size: 12px;
+  display: flex; align-items: center; gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
 }
-.dirty-tip { display: inline-flex; align-items: center; gap: 4px; color: var(--el-color-primary); }
-.dim { color: var(--el-text-color-secondary); }
-.bad-text { color: var(--el-color-danger); }
+.dirty-tip { display: inline-flex; align-items: center; gap: 4px; color: var(--primary); font-weight: 500; }
+.dim { color: var(--text-secondary); }
+.bad-text { color: var(--danger-text); }
 
-.path-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.secret-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.text-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* 通栏块：候选目录与挂载指引要整行宽度才读得懂 */
+.set-wide { grid-column: 1 / -1; }
+
+.path-row { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; }
+.secret-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.text-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .field-err {
   display: inline-flex; align-items: center; gap: 4px;
-  font-size: 13px; color: var(--el-color-danger);
+  font-size: var(--text-sm); color: var(--danger-text);
 }
 
 .probe {
   display: flex; align-items: center; gap: 6px;
-  font-size: 13px; padding: 8px 10px; border-radius: 6px;
+  font-size: var(--text-sm); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm);
 }
-.probe.ok { background: var(--el-color-success-light-9); color: var(--el-color-success-dark-2); }
-.probe.bad { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
+.probe.ok { background: var(--success-bg); color: var(--success-text); }
+.probe.bad { background: var(--danger-bg); color: var(--danger-text); }
 
-.cand-box { margin-top: 4px; }
-.cand-title {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  font-size: 13px; color: var(--el-text-color-regular); margin-bottom: 8px;
+/* —— 候选目录：默认收成一行摘要 —— */
+.cand-box { margin-top: var(--space-1); }
+.cand-toggle {
+  display: flex; align-items: center; gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font-family: inherit; font-size: var(--text-sm);
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
 }
-.cand-warn { display: inline-flex; align-items: center; gap: 4px; color: var(--el-color-warning-dark-2); }
+.cand-toggle:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.cand-toggle .el-icon { color: var(--text-tertiary); }
+.cand-toggle-hint { margin-left: auto; font-size: var(--text-xs); color: var(--text-tertiary); }
+.cand-warn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--text-xs); color: var(--warning-text);
+}
+.cand-current {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm); color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+}
+.cand-current .el-icon { color: var(--primary); }
+.cand-content { margin-top: var(--space-3); }
 /* 备选存储路径是内容，不是占位符 —— 用户要照着它去挂盘。
    原来继承的 placeholder 色在白底上只有 2.23:1，几乎读不出来。 */
 .opt-path { margin-right: 10px; color: var(--text-tertiary); }
 .opt-tags { float: right; }
 .data-table { width: 100%; }
 
+.note {
+  display: flex; gap: var(--space-2); align-items: flex-start;
+  margin-top: var(--space-3); padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm); font-size: var(--text-sm); line-height: 1.7;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+.note.warn {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+.note code, .mono { font-family: var(--font-mono); }
+
 .guide { flex: 1; }
-.guide p { margin: 0 0 8px; }
-.guide-step { margin-top: 6px; }
+.guide p { margin: 0 0 var(--space-2); }
+.guide-step { margin-top: var(--space-2); }
 .guide-title { font-weight: 600; margin-bottom: 4px; }
 .guide-code {
-  margin: 0; padding: 8px 10px; border-radius: 6px; overflow-x: auto;
-  background: var(--el-fill-color-darker);
-  color: var(--el-text-color-primary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px; line-height: 1.6;
+  margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); overflow-x: auto;
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs); line-height: 1.6;
 }
 
-.save-bar {
-  position: sticky; bottom: 0; z-index: 5;
-  display: flex; align-items: center; justify-content: space-between; gap: 14px;
-  padding: 12px 18px; border-radius: 10px;
-  background: var(--el-bg-color-overlay);
-  border: 1px solid var(--el-border-color-light);
-  box-shadow: 0 -2px 12px rgba(0, 0, 0, .06);
+/* —— ④ 版本与更新 —— */
+.ver-bar {
+  display: flex; align-items: stretch; gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
 }
-.save-info {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 13px; color: var(--el-text-color-regular);
+.ver-cell { display: flex; flex-direction: column; gap: 4px; min-width: 120px; }
+.ver-cell.ver-meta { min-width: 200px; flex: 1; }
+.ver-label {
+  font-size: var(--text-xs); color: var(--text-tertiary); letter-spacing: .02em;
 }
-
-/* 关于系统 */
-.about-rows { display: flex; flex-direction: column; gap: 10px; }
-.about-row { display: flex; gap: 16px; align-items: baseline; }
-.about-label {
-  flex-shrink: 0;
-  width: 72px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--el-text-color-secondary);
+.ver-value {
+  font-size: var(--text-md); font-weight: 600; color: var(--text-primary);
+  display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
 }
-.about-value { font-size: 14px; color: var(--el-text-color-primary); }
-.about-value.mono { font-family: var(--font-mono); font-weight: 600; }
-.about-value.dim { color: var(--el-text-color-secondary); font-size: 13px; }
-
-/* 系统更新 */
-.update-alert { margin-bottom: 4px; }
-.update-hint { margin-top: 6px; font-size: 13px; line-height: 1.6; }
-.upd-tag { margin-left: 8px; font-weight: 600; }
+.ver-value.dim { font-weight: 400; font-size: var(--text-sm); }
+.ver-arrow { color: var(--text-disabled); align-self: center; }
+.update-idle {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm); color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+}
+.update-idle .el-icon { color: var(--text-tertiary); }
+.update-alert { margin-bottom: var(--space-3); }
+.update-hint { margin-top: 6px; font-size: var(--text-sm); line-height: 1.6; }
+.upd-tag { font-weight: 600; }
 .update-notes {
-  margin-top: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--radius);
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   background: var(--bg-subtle);
 }
 .update-notes-title {
-  font-size: 12px; font-weight: 600;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 6px;
+  display: flex; align-items: baseline; gap: var(--space-3);
+  font-size: var(--text-xs); font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-2);
 }
-.update-notes-body { font-size: 13px; line-height: 1.6; }
+.update-notes-body {
+  font-size: var(--text-sm); line-height: 1.6;
+  /* 更新说明常常很长（整个 CHANGELOG 都贴进来）。
+     不封顶的话，一段说明就能把这一页撑到三千像素 —— 封顶 + 自己滚，
+     页面长度才是稳定的。 */
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: var(--space-2);
+}
 .update-howto {
-  margin-top: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--el-color-success-light-7);
-  border-radius: var(--radius);
-  background: var(--el-color-success-light-9);
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--success) 26%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--success-bg);
 }
 .update-howto-title {
-  font-size: 13px; font-weight: 600;
-  display: flex; align-items: center; gap: 6px;
+  font-size: var(--text-sm); font-weight: 600;
+  display: flex; align-items: center; gap: var(--space-2);
 }
 .upd-cmd {
   display: block;
-  margin-top: 8px;
-  padding: 8px 12px;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-sm);
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow-x: auto;
 }
-.update-howto-tip { margin-top: 6px; font-size: 12px; line-height: 1.6; }
+.update-howto-tip { margin-top: var(--space-2); font-size: var(--text-xs); line-height: 1.6; }
 .upd-link { margin-left: 6px; }
+
+/* 「关于系统」收成页脚一行 */
+.about-foot {
+  display: flex; align-items: center; gap: var(--space-5);
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--border);
+  font-size: var(--text-xs); color: var(--text-secondary);
+}
+.about-foot-item { display: inline-flex; align-items: baseline; gap: 6px; }
+.about-foot-label { color: var(--text-tertiary); }
+
+/* —— ⑤ 保存条 —— */
+.save-bar {
+  position: sticky; bottom: 0; z-index: var(--z-raised);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+  padding: var(--space-3) var(--space-4); border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, .07);
+}
+.save-info {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  font-size: var(--text-sm); color: var(--text-secondary);
+  min-width: 0;
+}
+.save-keys {
+  color: var(--text-tertiary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.save-actions { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+
+:deep(.row-blocked) { opacity: .75; }
+:deep(.row-good) { background: var(--success-bg); }
+
+/* 窄屏：两栏退回一栏，否则 340px 的控件栏会把左栏挤到放不下字 */
+@media (max-width: 980px) {
+  .set-row { grid-template-columns: minmax(0, 1fr); }
+  .set-wide { grid-column: auto; }
+}
 
 :deep(.row-blocked) { opacity: .75; }
 :deep(.row-good) { background: var(--el-color-success-light-9); }

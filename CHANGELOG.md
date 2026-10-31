@@ -79,6 +79,24 @@ $ docker run --rm --entrypoint grep kb-workbench-backend:tools-arm64 \
 - `verify-upgrade-version-truth.py` 不再写死版本号
   （写死的话每发一次版就假报警一次 —— 0.6.9 → 0.7.0 时它就红过一次）。
 
+### 🩹 补修 v0.7.1 的资产
+
+v0.7.1 的 Release 资产是在发现这个漏洞**之前**发的，所以那一份镜像包里
+装的是 0.7.0 的后端 —— 谁下载它，谁就会得到一个「升级成功但版本没变」。
+
+已经用 **v0.7.1 这个 tag 的源码重新构建**了镜像、重新打包、重新上传
+（同名资产先删后传），现在 v0.7.1 的包里装的是货真价实的 0.7.1。
+
+从 GitHub 下载实测（不是看本地）：
+
+```
+$ curl -LO .../releases/download/v0.7.2/kb-workbench-images-arm64.tar.gz
+$ # 解出 app/app/config.py
+    app_version: str = "0.7.2"
+```
+
+「一键升级」下载的就是这个文件，所以现在升上去是真的会换版本。
+
 ### 🛡 验证
 
 - 打包守卫：拿残留的旧镜像试跑，`make-offline-package.sh` **退出码 1**、

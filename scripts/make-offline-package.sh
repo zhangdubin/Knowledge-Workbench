@@ -143,8 +143,29 @@ for tag in $PLATFORMS; do
     say "  后端用带工具的镜像（tools-${tag}）"
   else
     printf "\033[1;33m! 本地没有 kb-workbench-backend:tools-%s —— 这一版的后端**不带** docker/compose，\033[0m\n" "$tag"
-    printf "\033[1;33m! 装完的部署开不了「一键升级」。先跑 ./scripts/build-offline-images.sh --tools-only 再重新打包。\033[0m\n"
+    printf "\033[1;33m! 装完的部署开不了「一键升级」。先跑 ./scripts/build-offline-images.sh --tools-only 再重新打包。\033[0m\n" "$tag"
   fi
+
+  # ---- 版本对账：这个镜像里的版本必须等于代码里的版本 ----
+  #
+  # 为什么必须在这里挡一道：
+  # tools 镜像只有显式构建才会更新，本机上常常还留着**上一版**的。
+  # 之前这个脚本「本机有 tools 镜像就用」，不打版本对账 ——
+  # 于是发出去的镜像包里装着旧版本。用户升级：服务起来了，版本号没变，
+  # 而他为此付了升级的代价。发版流程必须在这里说「不行」。
+  IMG_VERSION="$(docker run --rm --entrypoint grep "$BACKEND_IMG" -h 'app_version: str' \
+                 /app/app/config.py 2>/dev/null \
+                 | sed -n 's/.*app_version: str = "\([^"]*\)".*/\1/p')"
+  if [ "$IMG_VERSION" != "$VERSION" ]; then
+    printf "\033[1;31m✘ %s 里声明的版本是 %s，跟代码里的 %s 对不上。\033[0m\n" \
+      "$BACKEND_IMG" "${IMG_VERSION:-（读不出来）}" "$VERSION"
+    printf "\033[1;31m✘ 镜像包不能产出了 —— 发出去只会让用户「升级成功但版本没变」。\033[0m\n"
+    printf "\033[1;31m✘ 重新构建：./scripts/build-offline-images.sh --tools-only\033[0m\n"
+    exit 1
+  fi
+  # 用 ${} 把变量名括起来：bash 3.2 在 UTF-8 locale 下会把紧跟在变量名
+  # 后面的全角括号当成变量名的一部分（$IMG_VERSION）→ 报「unbound variable」。
+  say "  版本对账通过（${BACKEND_IMG} → ${IMG_VERSION}）"
 
   docker save \
       "$BACKEND_IMG" \

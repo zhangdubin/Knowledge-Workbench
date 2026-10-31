@@ -71,6 +71,46 @@ arch_tag() {
 echo "▶️  构建离线镜像"
 echo "   平台: $PLATFORMS"
 echo "   构建器: $BUILDER"
+# ------------------------------------------------------------
+# 版本对账：镜像里声明的版本必须等于代码里的版本
+#
+# 为什么这道关卡是必须的：
+# 镜像和代码是两个东西，只要有一个没跟上，发出去的包就会
+# 让用户「升级成功但版本号不变」—— 用户付了升级的代价却什么都没拿到。
+# 这个检查让「发版前对一次账」成为流程的一部分，而不是靠记性。
+#
+# 只查后端镜像：前端镜像里没有 backend/app/config.py（它只装静态资源），
+# 前端显示的版本号来自后端接口。
+# ------------------------------------------------------------
+verify_image_versions() {
+  local expected
+  expected="$(sed -n 's/.*app_version: str = "\([^"]*\)".*/\1/p' backend/app/config.py | head -1)"
+  [ -n "$expected" ] || { echo "  ! 读不出 backend/app/config.py 里的版本号，跳过对账" >&2; return 0; }
+  echo ""
+  echo "版本对账（期望 ${expected}）"
+  local plat tag img got bad=0
+  for plat in $(echo "$PLATFORMS" | tr ',' ' '); do
+    tag="$(arch_tag "$plat")"
+    for img in "kb-workbench-backend:$tag" "kb-workbench-backend:tools-$tag"; do
+      docker image inspect "$img" >/dev/null 2>&1 || continue
+      got="$(docker run --rm --entrypoint grep "$img" -h 'app_version: str' /app/app/config.py 2>/dev/null \
+             | sed -n 's/.*app_version: str = "\([^"]*\)".*/\1/p')"
+      if [ "$got" = "$expected" ]; then
+        echo "  ✔ $img → $got"
+      else
+        echo "  ✘ $img → ${got:-（读不出版本）}，与期望的 $expected 不符" >&2
+        bad=1
+      fi
+    done
+  done
+  if [ "$bad" = "1" ]; then
+    echo "" >&2
+    echo "版本对账没通过：上面这些镜像不能进安装包。" >&2
+    echo "重新构建：./scripts/build-offline-images.sh --tools-only" >&2
+    exit 1
+  fi
+}
+
 if [ "$TOOLS_ONLY" = "1" ]; then
   echo "   变体: 仅「带工具」的后端镜像（--target tools）"
 fi
@@ -144,6 +184,7 @@ if [ "$TOOLS_ONLY" = "1" ]; then
       "./backend"
     echo ""
   done
+  verify_image_versions
   echo "✅ 带工具的后端镜像构建完成"
   echo "   用法：docker tag kb-workbench-backend:tools-<arch> kb-workbench-backend:latest"
   echo "   （或者在编排文件里把后端的 image: 直接写成 kb-workbench-backend:tools-<arch>）"
@@ -172,6 +213,40 @@ for platform in $(echo "$PLATFORMS" | tr ',' ' '); do
   done
 done
 
+# ---- 带工具的后端镜像（离线包里的那个）----
+#
+# 为什么默认路径也要构建它：
+# 离线包和「一键升级」用的都是 tools 镜像，而它**带 git/docker/compose**，
+# 是升级动作能跑起来的前提。
+#
+# 之前只有 --tools-only 才构建它，于是普通发版流程里它常常是**上一版残留的**：
+# 打包脚本看到本机有 tools 镜像就直接拿来用（不打版本对账），
+# 结果发出去的镜像包里装着旧版本 —— 升级「成功」但版本号不变。
+# 所以这里默认就重建它：发版流程跑到这一行，tools 镜像一定是当次的。
+#
+# 二进制（docker CLI / compose 插件）缓存在 backend/.docker-cache 里，
+# 重建只是重跑一遍 COPY 层，不重新下载。
+echo ""
+echo "────────  backend+tools（给离线包与一键升级用）  ────────"
+fetch_upgrade_tools
+for platform in $(echo "$PLATFORMS" | tr ',' ' '); do
+  tag="$(arch_tag "$platform")"
+  echo "────────  backend+tools  ($platform)  →  kb-workbench-backend:tools-$tag  ────────"
+  docker buildx build ${BUILDER_ARG[@]+"${BUILDER_ARG[@]}"} \
+    --build-context "dockercache=./backend/.docker-cache" \
+    --target tools \
+    --platform "$platform" \
+    --build-arg INSTALL_UPGRADE_TOOLS=1 \
+    --build-arg INSTALL_GIT="$WITH_GIT" \
+    -t "kb-workbench-backend:tools-$tag" \
+    --load \
+    "./backend"
+  echo ""
+done
+
+verify_image_versions
+
+echo ""
 echo "✅ 全部完成"
 docker images --format '{{.Repository}}:{{.Tag}}\t{{.Size}}' \
   | grep '^kb-workbench-' || true

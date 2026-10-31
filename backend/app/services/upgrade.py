@@ -1649,6 +1649,22 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
                 if new_id and old_id and new_id == old_id:
                     job.log(f"⚠️ {ref} 仍是升级前的镜像（{new_id[:19]}）"
                             f" —— 这个服务可能还是旧版")
+
+            # ---- 镜像里的版本对不对得上目标版本？----
+            #
+            # 为什么必须在重启之前查：
+            # 镜像包是构建产物，可能比代码旧（发布时拿了本机上残留的旧镜像）。
+            # 这种包 load 进来是「成功」的，compose 也能把服务拉起来 ——
+            # 但起来跑的是旧版本。用户看到的现象就是：
+            #   「服务已恢复，但版本号没变」
+            # 而且是在服务被中断重启之后才发现的。
+            #
+            # 在这里查是唯一能把损失降到零的时机：
+            # 还没重启、用户的服务一直在线，发现不对就直接回退标签并报错。
+            #
+            # 这条检查是 0.7.1 的教训：发布流程里镜像没跟代码对账，
+            # 结果升级包带着旧版本发出去，升级「成功」但版本没变。
+            await _verify_loaded_image_version(job, docker, target, source_by_repo)
         except Exception:
             await _rollback_tags()
             raise
@@ -1671,6 +1687,56 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
         job.log("  临时容器起不来，退回在本容器里执行 compose up")
         await _stage(job, "restart", [*compose, "up", "-d", "--no-build"],
                      root, timeout=900)
+
+
+async def _image_declared_version(docker: str, image_ref: str) -> str:
+    """读出镜像里 backend/app/config.py 声明的版本号
+
+    读不到就返回空字符串 —— 读不到不等于版本不对，
+    那是「查不了」，由调用方决定要不要当成失败。
+    """
+    rc, out = await _run([docker, "run", "--rm", "--entrypoint",
+                           "grep", "-h", "app_version: str", image_ref,
+                           "/app/app/config.py"], timeout=180)
+    if rc != 0:
+        return ""
+    m = re.search(r"app_version:\s*str\s*=\s*[\"']([^\"']+)[\"']", out)
+    return m.group(1).strip() if m else ""
+
+
+async def _verify_loaded_image_version(job: UpgradeJob, docker: str, target: str,
+                                       source_by_repo: dict[str, str]) -> None:
+    """核对导入的镜像里声明的版本与目标版本一致
+
+    不一致就**直接失败**（并由调用方回退标签）：
+    用一个装着旧版本的镜像去「升级」，服务是能起来的，
+    但版本号不会变 —— 用户付了升级的代价却什么都没拿到。
+    宁可现在报错（服务还没重启，一直在线），也不要重启完再宣布失败。
+
+    查不到版本时不判失败：镜像结构不一样、镜像里没有这个文件，
+    都属于「查不了」，不该被说成「升级失败」。
+    """
+    want = _norm_version(target)
+    if not want:
+        return
+    for repo_name, ref in source_by_repo.items():
+        if not repo_name.startswith("kb-workbench-backend"):
+            continue
+        got = await _image_declared_version(docker, ref)
+        if not got:
+            job.log(f"读不出 {ref} 里声明的版本，跳过这次核对"
+                    f"（查不了 ≠ 版本不对）")
+            continue
+        got = _norm_version(got)
+        job.log(f"镜像 {ref} 里声明的版本是 {got}，目标版本是 {want}")
+        if got != want:
+            raise RuntimeError(
+                f"镜像包里装的是 {got}，不是 {want} —— 这个镜像包不能用。"
+                f"多半是发布时打包进了本机残留的旧镜像。"
+                f"请重新下载该版本的镜像包，或在宿主机上执行："
+                f"bash scripts/build-offline-images.sh --tools-only && "
+                f"bash scripts/make-offline-package.sh"
+            )
 
 
 async def _check_checked_out_version(job: UpgradeJob, root: Path, target: str) -> None:

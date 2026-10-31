@@ -170,6 +170,27 @@ step "收集资产"
 # 离线包里的镜像保持普通版（不白涨 35MB），只有给自动升级用的这个资产用带工具版。
 for arch in $ARCHES; do
   if docker image inspect "kb-workbench-backend:tools-${arch}" >/dev/null 2>&1; then
+    # ---- 版本对账：发出去的镜像包必须是这次的版本 ----
+    #
+    # 为什么发布这一步也要查：
+    # 「自动升级」下载的就是这个资产。包里装着旧版本的话，
+    # 用户点一次升级：服务起来了，版本号却没变 —— 升级「成功」但没生效。
+    # 发布页面看上去一切正常（资产在、能下载），只有真升过一次的人知道。
+    #
+    # 实测踩过：tools 镜像只有显式构建才更新，本机留着上一版的；
+    # 打包脚本「有就用」，于是把旧版本发了出去。
+    # 现在这里直接拒绝发布 —— 发一个必定失败的包，比不发更糟。
+    IMG_VER="$(docker run --rm --entrypoint grep "kb-workbench-backend:tools-${arch}" \
+                -h 'app_version: str' /app/app/config.py 2>/dev/null \
+                | sed -n 's/.*app_version: str = "\([^"]*\)".*/\1/p')"
+    if [ "$IMG_VER" != "$VERSION" ]; then
+      die "kb-workbench-backend:tools-${arch} 里声明的版本是 ${IMG_VER:-（读不出来）}，
+    跟要发布的 $VERSION 对不上 —— 这个镜像包发出去就是「升级成功但版本没变」。
+    先重建：./scripts/build-offline-images.sh --tools-only
+    （发布前的版本对账没过，这里硬失败，不发。）"
+    fi
+    printf "  ✔ 版本对账通过（tools-${arch} → %s）\n" "$IMG_VER"
+
     UPGRADE_OUT="dist-offline/kb-workbench-images-${arch}.tar.gz"
     # 记的是**镜像 ID**，不是时间戳。
     #

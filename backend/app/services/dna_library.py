@@ -782,10 +782,16 @@ async def mark_gene_used(db: AsyncSession, gene_ids: list[int]) -> None:
         # text() 不会把元组展开成 IN 子句（那是 bindparam(expanding=True) 才有的事），
         # 写出来是 `id in :ids` 绑一个元组 —— SQLite 不认，
         # 报错被吞掉之后，表达度就永远是 0（一个很安静的坏掉的功能）。
+        # synchronize_session=False 是必须的：
+        # ORM 的批量 update 默认会「同步会话」，同步不了表达式值时就退化成
+        # 把命中对象的属性标成过期 —— 之后访问那些属性会触发懒加载，
+        # 而异步会话里懒加载会抛 MissingGreenlet（greenlet_spawn has not been called）。
+        # 这个错很隐蔽：报错点在「序列化基因」那一行，跟 update 隔了好几层。
         await db.execute(
             update(DnaGene).where(DnaGene.id.in_(gene_ids)).values(
                 usage_count=DnaGene.usage_count + 1,
-                last_used_at=_now()))
+                last_used_at=_now()),
+            execution_options(synchronize_session=False))
         await db.commit()
     except Exception as e:
         log.warning("基因表达度更新失败：%s", e)
@@ -813,13 +819,16 @@ async def answer_offline(db: AsyncSession, query: str, limit: int = 5) -> dict:
             "text": (c.get("text") or "")[:600],
             "heading": c.get("heading") or "",
         })
+    # 先序列化再标记表达度：标记会写库，
+    # 而写库之后对象属性可能变成「过期」，那时候再读属性会炸。
+    payload = [{"gene": serialize_gene(g["gene"]), "score": g["score"]}
+               for g in genes]
     if genes:
         await mark_gene_used(db, [g["gene"].id for g in genes])
     return {
         "query": q,
         "offline": True,
-        "genes": [{"gene": serialize_gene(g["gene"]), "score": g["score"]}
-                  for g in genes],
+        "genes": payload,
         "citations": cites,
         "text": _render_offline_answer(q, genes, cites),
     }

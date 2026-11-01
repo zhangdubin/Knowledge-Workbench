@@ -365,24 +365,32 @@
             <div class="skel-head">
               <span class="skel-rail" />
               <span class="skel-title">{{ t.title }}</span>
-              <span class="skel-meta">{{ t.words }} 字</span>
+              <span v-if="t.ext" class="skel-ext">{{ t.ext }}</span>
+              <span class="skel-meta">
+                <span class="skel-badge">{{ t.structure || '整篇' }}</span>
+                {{ t.words }} 字
+              </span>
             </div>
             <ul v-if="t.outline && t.outline.length" class="tree">
               <li v-for="(n, i) in t.outline" :key="i">
                 <span class="tree-title">{{ n.title }}</span>
+                <span v-if="n.snippet" class="tree-snip">{{ n.snippet }}</span>
                 <ul v-if="n.children && n.children.length">
                   <li v-for="(c, j) in n.children" :key="j">
                     <span class="tree-title">{{ c.title }}</span>
+                    <span v-if="c.snippet" class="tree-snip">{{ c.snippet }}</span>
                     <ul v-if="c.children && c.children.length">
                       <li v-for="(g, k) in c.children" :key="k">
                         <span class="tree-title">{{ g.title }}</span>
+                        <span v-if="g.snippet" class="tree-snip">{{ g.snippet }}</span>
                       </li>
                     </ul>
                   </li>
                 </ul>
               </li>
             </ul>
-            <div v-else class="empty small">没有标题层级（正文型文件）</div>
+            <div v-else class="empty small">这篇没有结构（正文型文件）</div>
+            <div v-if="t.summary" class="skel-sum">{{ t.summary }}</div>
           </div>
         </div>
       </section>
@@ -1449,5 +1457,28 @@ onBeforeUnmount(() => {
   .chr-bar { order: 4; flex-basis: 100%; }
   .chr-detail { padding: 4px 14px 16px; }
   .detail-cols { grid-template-columns: 1fr; }
+}
+
+/* 骨架卡片：结构类型徽章 + 节点摘要 */
+.skel-ext {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 4px;
+  background: var(--bg-subtle); color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.skel-badge {
+  display: inline-block; margin-right: 6px;
+  padding: 1px 7px; border-radius: 999px;
+  background: var(--primary-bg); color: var(--primary);
+  font-size: 11px; font-weight: 600;
+}
+.tree-snip {
+  display: block; margin: 1px 0 3px;
+  font-size: 11.5px; line-height: 1.55; color: var(--text-secondary);
+  opacity: .82;
+}
+.skel-sum {
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--border-light);
+  font-size: 12px; line-height: 1.6; color: var(--text-secondary);
 }
 </style>

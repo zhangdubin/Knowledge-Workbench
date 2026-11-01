@@ -20,6 +20,21 @@
         placeholder="向 AI 提问... 例如：这份采购合同里的付款条件是什么？"
       />
 
+      <!-- 引用养料库：钉住的基因会进上下文，答案里会标出出处 -->
+      <div class="ask-pins">
+        <el-button size="small" @click="genePicker = true">
+          <el-icon><Plus /></el-icon>引用基因
+        </el-button>
+        <span v-if="!pinned.length" class="ask-pin-hint">
+          不钉也行 —— 服务端会自己从养料库里挑相关的基因
+        </span>
+        <span v-for="g in pinned" :key="g.id" class="ask-pin">
+          <span class="ask-pin-kind" :class="g.kind">{{ g.kind_label || g.kind }}</span>
+          {{ g.title }}
+          <el-icon class="ask-pin-x" @click="unpin(g.id)"><Close /></el-icon>
+        </span>
+      </div>
+
       <div class="ask-scope">
         <el-radio-group v-model="askScope" size="small">
           <el-radio-button value="auto">自动检索全部资料</el-radio-button>
@@ -74,6 +89,18 @@
       </div>
       <div v-else class="output-text"><MarkdownText :content="output" /></div>
 
+      <div v-if="task === 'ask' && genes.length" class="output-src gene-src">
+        <div class="src-title">引用了养料库基因（{{ genes.length }}）</div>
+        <div class="src-list">
+          <div v-for="g in genes" :id="'cite-gene-' + g.id" :key="g.id" class="src-item">
+            <el-tag size="small" effect="plain">{{ g.kind_label || g.kind }}</el-tag>
+            <span class="src-cite">【基因#{{ g.id }}】</span>
+            <span class="src-name">{{ g.title }}</span>
+            <span v-if="g.source_title" class="src-why">{{ g.source_title }}</span>
+          </div>
+        </div>
+      </div>
+
       <div v-if="task === 'ask' && sources.length" class="output-src">
         <div class="src-title">参考来源（{{ sources.length }}）</div>
         <div class="src-list">
@@ -99,6 +126,8 @@
       </div>
     </div>
 
+    <GenePicker v-model="genePicker" mode="pick" @pick="onPickGenes" />
+
     <template #footer>
       <el-button v-if="output" @click="copyOutput">
         <el-icon><CopyDocument /></el-icon>复制
@@ -119,6 +148,7 @@ import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Api } from '../api'
 import MarkdownText from './MarkdownText.vue'
+import GenePicker from './GenePicker.vue'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -134,6 +164,21 @@ const visible = computed({
   get: () => props.modelValue,
   set: v => emit('update:modelValue', v),
 })
+
+/* ---- 引用养料库基因 ---- */
+const genePicker = ref(false)
+const pinned = ref([])
+
+function onPickGenes(list) {
+  const have = new Set(pinned.value.map((g) => g.id))
+  for (const g of list || []) {
+    if (!have.has(g.id)) pinned.value = [...pinned.value, g]
+  }
+}
+
+function unpin(id) {
+  pinned.value = pinned.value.filter((g) => g.id !== id)
+}
 
 const title = computed(() => {
   const titles = {
@@ -165,6 +210,7 @@ const input = ref('')
 const output = ref('')
 const outputTags = ref([])
 const sources = ref([])
+const genes = ref([])
 const askScope = ref('auto')
 const isTagOutput = computed(() => props.task === 'tags')
 const loading = ref(false)
@@ -242,9 +288,11 @@ async function run() {
       const opts = askScope.value === 'docs'
         ? { document_ids: props.documentIds, auto_retrieve: false }
         : { auto_retrieve: true }
+      opts.gene_ids = pinned.value.map((g) => g.id)
       resp = await Api.aiAsk(input.value, ctx, opts)
       output.value = withCitationLinks(resp.answer)
       sources.value = resp.sources || []
+      genes.value = resp.genes || []
       if (!sources.value.length && resp.context_count) {
         sources.value = [{ type: 'context', title: `页面上下文 ${resp.context_count} 条`, matched_by: [] }]
       }
@@ -265,8 +313,11 @@ async function run() {
  * 直接塞 <a> 会被当成普通文本显示出来。
  */
 function withCitationLinks(text) {
+  let t = text || ''
+  // 基因引用先转：别让后面的【n】规则把它当普通编号切开
+  t = t.replace(/【基因#(\d+)】/g, (_m, g) => `[【基因#${g}】](#cite-gene-${g})`)
   // 模型可能写【1】也可能写【来源1】，两种都归一到【n】
-  return (text || '').replace(/【(?:来源)?(\d+)】/g, (_m, n) => `[【${n}】](#cite-${n})`)
+  return t.replace(/【(?:来源)?(\d+)】/g, (_m, n) => `[【${n}】](#cite-${n})`)
 }
 
 
@@ -384,4 +435,24 @@ function applyOutput() {
   background: var(--primary-bg);
   border-radius: 6px;
 }
+
+/* 引用养料库 */
+.ask-pins {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: 8px;
+}
+.ask-pin-hint { font-size: 11.5px; color: var(--text-secondary); }
+.ask-pin {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--primary-bg); color: var(--text-primary);
+  font-size: 12px; max-width: 260px;
+}
+.ask-pin-kind {
+  font-size: 10.5px; padding: 0 6px; border-radius: 999px;
+  background: rgba(255, 255, 255, .55); color: var(--text-secondary);
+}
+.ask-pin-x { cursor: pointer; font-size: 12px; color: var(--text-secondary); }
+.ask-pin-x:hover { color: var(--danger); }
+.gene-src { margin-top: 12px; }
 </style>

@@ -142,6 +142,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Notebook } from '@element-plus/icons-vue'
 import { Api } from '../api'
 import TagInput from './TagInput.vue'
+import GenePicker from './GenePicker.vue'
 import { extractHashtags, firstLineTitle, renderNoteHtml } from '../utils/notes'
 import { highlightEditorText } from '../utils/editorHighlight'
 
@@ -155,6 +156,28 @@ const emit = defineEmits(['update:modelValue', 'save', 'cancel', 'change', 'tag-
 
 const localTitle = ref(props.modelValue.title || '')
 const localContent = ref(props.modelValue.content || '')
+
+/* ---- 引用养料库基因：插到光标处 ---- */
+const genePicker = ref(false)
+
+function insertCitation(text) {
+  if (!text) return
+  const ta = bodyRef.value
+  const block = '\n\n' + text + '\n\n'
+  if (!ta) {
+    localContent.value = (localContent.value || '') + block
+    return
+  }
+  const start = ta.selectionStart ?? (localContent.value || '').length
+  const end = ta.selectionEnd ?? start
+  const cur = localContent.value || ''
+  localContent.value = cur.slice(0, start) + block + cur.slice(end)
+  requestAnimationFrame(() => {
+    ta.focus()
+    const pos = start + block.length
+    try { ta.setSelectionRange(pos, pos) } catch (e) { /* 某些浏览器不支持 */ }
+  })
+}
 const localTags = ref([...(props.modelValue.tags || [])])
 const preview = ref(false)
 
@@ -702,4 +725,17 @@ html.dark .composer-suggest-item:hover { color: var(--primary-light); }
   background: transparent;
 }
 .composer-full .composer-title { font-size: 26px; }
+
+.composer-tools {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0 6px;
+}
+.composer-tool {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid var(--border-light); background: var(--bg-card);
+  border-radius: 7px; padding: 3px 9px; cursor: pointer;
+  font-size: 12px; color: var(--text-secondary); font-family: inherit;
+}
+.composer-tool:hover { color: var(--primary); border-color: var(--primary-100); }
+.composer-tool-hint { font-size: 11.5px; color: var(--text-secondary); }
 </style>

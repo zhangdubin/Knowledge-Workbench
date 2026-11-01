@@ -114,6 +114,31 @@ TOOL_SPECS = [
         },
     },
 
+    {
+        "type": "function",
+        "function": {
+            "name": "search_genes",
+            "description": (
+                "检索养料库里的基因 —— 已经从资料里提炼好的结论（事实/方法/经验/接口/约定）。"
+                "用户问「规范是什么」「有哪些经验」「怎么处理」这类要结论的问题时用，"
+                "比在原始文件里翻要准。返回的每条都带基因编号，回答里标【基因#编号】可以回溯。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "检索词"},
+                    "kind": {
+                        "type": "string",
+                        "description": ("限定种类：fact 事实 / method 方法 / experience 经验 / "
+                                        "interface 接口 / policy 约定；不填则不限"),
+                    },
+                    "limit": {"type": "integer", "description": "最多返回几条，默认 6"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+
     # ---------- 写工具：调用后不会立即执行，会生成待确认操作交给用户 ----------
     {
         "type": "function",
@@ -663,6 +688,41 @@ async def exec_write(db: AsyncSession, principal, name: str, args: dict) -> dict
 TOOL_IMPLS = {}     # name -> impl(db, principal, **args)
 
 
+async def tool_search_genes(db: AsyncSession, query: str, kind: str = "",
+                            limit: int = 6) -> dict:
+    """检索养料库基因
+
+    放在工具层而不是只在问答层，是为了让 AI 助理（每个页面都能开）
+    也能用上养料库 —— 否则养料库只在两个页面里活着。
+    """
+    from . import dna_library as dna_lib
+    limit = max(1, min(int(limit or 6), MAX_TOOL_ITEMS))
+    kinds = [kind] if kind in ("fact", "method", "experience",
+                               "interface", "policy") else None
+    try:
+        hits = await dna_lib.search_genes(db, query, limit=limit, kinds=kinds)
+    except Exception as e:
+        log.warning("agent 基因检索失败：%s", e)
+        return {"items": [], "count": 0, "note": "养料库检索暂不可用"}
+    items = []
+    for h in hits:
+        g = h.get("gene")
+        if g is None:
+            continue
+        items.append({
+            "gene_id": g.id,
+            "citation": f"【基因#{g.id}】",
+            "kind": g.kind,
+            "kind_label": dna_lib.KIND_LABEL.get(g.kind, g.kind),
+            "title": g.title,
+            "content": (g.content or "")[:600],
+            "source": g.source_title or "",
+            "confidence": g.confidence,
+        })
+    return {"items": items, "count": len(items),
+            "note": "回答里请用【基因#编号】标明引用了哪条基因"}
+
+
 def _register(impl):
     TOOL_IMPLS[impl.__name__.replace("tool_", "")] = impl
     return impl
@@ -673,16 +733,18 @@ _register(tool_get_model_schema)
 _register(tool_search_records)
 _register(tool_stats_records)
 _register(tool_search_documents)
+_register(tool_search_genes)
 
 
 SYSTEM_PROMPT = """你是知识工作台里的 AI 助理，可以调用一组工具查询系统数据、并按用户要求改写数据。
 
-查询类工具（list_models / get_model_schema / search_records / stats_records / search_documents）
-会立即执行，规则：
+查询类工具（list_models / get_model_schema / search_records / stats_records /
+search_documents / search_genes）会立即执行，规则：
 1. 回答数据相关问题前，优先调用工具获取真实数据，不要凭空编造数字。
 2. 不知道模型或字段名时，先 list_models / get_model_schema 再操作。
 3. 工具返回不了的信息（比如用户问的数据不存在），如实告知，不要脑补。
 4. 回答用简体中文，简洁自然；数字给出时注明单位和统计口径。
+4.1 用了 search_genes 的结论时，在对应句子后面标【基因#编号】，让人能回溯出处。
 
 写入类工具（create_record / update_record / delete_record）不会立即生效：
 调用后系统会把操作整理成清单，交给用户在界面上确认，用户点确认才真正落库。
@@ -701,13 +763,20 @@ SYSTEM_PROMPT = """你是知识工作台里的 AI 助理，可以调用一组工
 12. 表格最多 5 列，单元格里只放短值（数字、状态、姓名）。
     像「主要字段」这种偏长的列，宁可挪出来改成「每个模型一行」的列表，也不要塞进表格挤成一团。
 13. 表格第一行必须是表头，第二行是 |---|---| 分隔行；列数在每一行保持一致。
+13.1 同一个工具不要用同样的参数连着调多次：查过一次就拿结果作答，
+    需要换个角度查就换参数（换词、换种类、换条数）。
 14. 不要输出 HTML 标签；不要用 # 一级标题（气泡里没有那么大地方）；
     不要用连续空行或大段分隔线凑高度。
 """
 
 
-async def _chat_once(messages: list[dict]) -> dict:
-    """单次对话：返回 {content, tool_calls}。真实 API 不可用时返回错误标记。"""
+async def _chat_once(messages: list[dict], *, with_tools: bool = True) -> dict:
+    """单次对话：返回 {content, tool_calls}。真实 API 不可用时返回错误标记。
+
+    with_tools=False 时不给工具 —— 模型只能回一句话。
+    用来做「最后一轮强制作答」：模型调工具调个没完的时候，
+    摘掉工具它就没得选了。
+    """
     cfg = cfg_svc.get_full_config()
     if not (cfg.get("enabled") and cfg.get("api_key") and cfg.get("base_url")):
         return {"error": "not_configured"}
@@ -716,8 +785,9 @@ async def _chat_once(messages: list[dict]) -> dict:
         "messages": messages,
         "temperature": cfg.get("temperature", 0.3),
         "max_tokens": cfg.get("max_tokens", 1024),
-        "tools": TOOL_SPECS,
     }
+    if with_tools:
+        payload["tools"] = TOOL_SPECS
     try:
         async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
             r = await client.post(
@@ -839,6 +909,7 @@ async def run_agent(
 
     trace: list[dict] = []
     done_keys: set[str] = set()
+    read_cache: dict[tuple, dict] = {}
 
     # ---------- 用户已确认：先执行，再让模型收尾 ----------
     if confirmed:
@@ -875,6 +946,15 @@ async def run_agent(
         })
 
     for round_no in range(1, MAX_ROUNDS + 1):
+        if round_no >= 3:
+            # 提醒模型轮次预算：不然它会一直查下去，
+            # 轮次耗光、最后一句总结都没机会说。
+            messages.append({
+                "role": "user",
+                "content": (f"【系统提醒】查询轮次还剩 {MAX_ROUNDS - round_no + 1} 轮。"
+                            "手上已有的结果通常足够回答了；"
+                            "除非确实缺少关键信息，否则请直接作答，不要再调用工具。"),
+            })
         resp = await _chat_once(messages)
         if resp.get("error"):
             if resp["error"] == "not_configured":
@@ -949,11 +1029,24 @@ async def run_agent(
             try:
                 if not impl:
                     result = {"error": f"没有工具「{c['name']}」"}
-                elif c["name"] == "search_documents":
-                    # 文档检索不涉及模型级权限（文件可见性由文档接口自身控制）
-                    result = await impl(db, **c["args"])
                 else:
-                    result = await impl(db, principal, **c["args"])
+                    # 同样的只读查询已经做过 → 直接回上次的结果，
+                    # 并提醒模型「别再查了，用手上的结果作答」。
+                    # 模型有时会拿着同一个检索词反复调工具，
+                    # 轮次被耗光，最后一句有用的话都没说上。
+                    ckey = (c["name"], json.dumps(c["args"], ensure_ascii=False,
+                                                 sort_keys=True))
+                    cached = read_cache.get(ckey)
+                    if cached is not None:
+                        result = dict(cached)
+                        result["note"] = "同样的查询刚做过，这是同一个结果，请直接用它作答"
+                    else:
+                        if c["name"] in ("search_documents", "search_genes"):
+                            # 检索类不涉及模型级权限（可见性由各自接口控制）
+                            result = await impl(db, **c["args"])
+                        else:
+                            result = await impl(db, principal, **c["args"])
+                        read_cache[ckey] = result
             except Exception as e:
                 log.warning("agent 工具 %s 执行失败：%s", c["name"], e)
                 result = {"error": f"工具执行出错：{e}"}
@@ -973,6 +1066,26 @@ async def run_agent(
                 "tool_calls": trace,
                 "rounds": round_no,
             }
+
+    # ---- 轮次用完：摘掉工具，强制它把已有材料说成答案 ----
+    # 以前这里直接回一句「步骤太多」，用户什么都拿不到 ——
+    # 明明查到了东西（工具调用都在 trace 里），却因为模型一直想再查一轮而全丢掉。
+    try:
+        final = await _chat_once(
+            messages + [{
+                "role": "user",
+                "content": ("【系统通知】查询轮次已经用完，现在不要再调用任何工具，"
+                            "直接用你已经查到的内容给出最终答案。"
+                            "如果确实没查到，就说没查到。"),
+            }],
+            with_tools=False,
+        )
+        text = (final.get("content") or "").strip()
+        if text and not final.get("error"):
+            return {"status": "done", "answer": text,
+                    "tool_calls": trace, "rounds": MAX_ROUNDS}
+    except Exception as e:
+        log.warning("agent 收尾作答失败：%s", e)
 
     return {
         "status": "done",

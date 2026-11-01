@@ -181,14 +181,30 @@ async def remove_gene_index(db: AsyncSession, gene_ids: list[int]) -> None:
 
 async def _gene_fts_rows(db: AsyncSession, query: str, limit: int,
                          kinds: list[str] | None = None) -> list[tuple[int, float]]:
+    """查基因全文索引
+
+    种类过滤要下推到 SQL 里，不能查完再过滤：
+    宽泛的 OR 查询（问句里带「时间」「什么」这类常见词）
+    会把事实类基因顶到前几十名，先取前 N 条再按种类过滤，
+    结果就是「一条都不剩」—— 明明有匹配的经验基因，却答成事实。
+    下推之后，排名是在目标种类内部算的。
+    """
     expr = docindex.chunk_fts_query(query)
     if not expr:
         return []
+    sql = (f"select f.rowid, bm25({GENE_FTS_TABLE}) as r "
+           f"from {GENE_FTS_TABLE} f join dna_gene g on g.id = f.rowid "
+           f"where {GENE_FTS_TABLE} match :q")
+    params: dict = {"q": expr, "lim": limit}
+    if kinds:
+        names = [k for k in kinds if k]
+        if not names:
+            return []
+        sql += " and g.kind in (" + ",".join(f":k{i}" for i in range(len(names))) + ")"
+        params.update({f"k{i}": n for i, n in enumerate(names)})
+    sql += " and g.status = 'active' order by rank limit :lim"
     try:
-        rows = (await db.execute(
-            text(f"select rowid, bm25({GENE_FTS_TABLE}) as r from {GENE_FTS_TABLE} "
-                 f"where {GENE_FTS_TABLE} match :q order by rank limit :lim"),
-            {"q": expr, "lim": limit * 3 if kinds else limit})).all()
+        rows = (await db.execute(text(sql), params)).all()
     except Exception as e:
         log.warning("基因 FTS 检索失败：%s", e)
         return []
@@ -313,10 +329,53 @@ async def upsert_gene(db: AsyncSession, *, kind: str, title: str, content: str,
     return gene, True
 
 
+async def get_gene(db: AsyncSession, gene_id: int) -> DnaGene | None:
+    """取一条基因（引用时用）"""
+    g = (await db.execute(
+        select(DnaGene).where(DnaGene.id == gene_id))).scalar_one_or_none()
+    return g
+
+
+# 基因种类的人话名字
+KIND_LABEL = {"fact": "事实", "method": "方法", "experience": "经验",
+              "interface": "接口", "policy": "约定"}
+
+
+_MARK_NOISE_RE = re.compile(r"^\[(?:第\s*\d+\s*页|标题)\]\s*", re.M)
+
+
+def short_summary(text: str, limit: int = 90) -> str:
+    """把一段正文压成一句摘要
+
+    基因的「摘要」栏要是拿来扫的，不是拿来读的。
+    早先这里直接存正文前 120 字，结果清单里每行都糊着一段原文，
+    行高撑到 80 像素，一屏只能看三行。
+    """
+    t = _MARK_NOISE_RE.sub("", text or "").strip()
+    t = re.sub(r"\s+", " ", t)
+    if not t:
+        return ""
+    # 先按句号断，再按长度断
+    for sep in ("。", "！", "？", ". ", "! ", "? "):
+        if sep in t:
+            head = t.split(sep, 1)[0]
+            if len(head) >= 12:
+                t = head + sep.strip()[:1]
+                break
+    if len(t) > limit:
+        t = t[:limit].rstrip() + "…"
+    return t
+
+
 def serialize_gene(g: DnaGene) -> dict:
     return {
-        "id": g.id, "uid": g.uid, "kind": g.kind, "title": g.title,
-        "content": g.content, "summary": g.summary, "tags": g.tags or [],
+        "id": g.id, "uid": g.uid, "kind": g.kind,
+        "kind_label": KIND_LABEL.get(g.kind, g.kind), "title": g.title,
+        "content": g.content,
+        # 存的摘要不是「一句话」时（老数据直接存了正文），现算一句
+        "summary": (g.summary if g.summary and len(g.summary) <= 100
+                    and "\n" not in g.summary else short_summary(g.content)),
+        "tags": g.tags or [],
         "source_kind": g.source_kind, "source_ref": g.source_ref,
         "source_title": g.source_title, "confidence": g.confidence,
         "status": g.status, "usage_count": g.usage_count,
@@ -772,6 +831,29 @@ def _query_kind_bias(query: str) -> str:
     return best
 
 
+async def search_gene_ids(db: AsyncSession, query: str,
+                         limit: int = 800) -> list[int]:
+    """按检索词找出匹配的基因 id（清单搜索用）
+
+    走的是同一套全文索引（标题 + 正文），
+    所以「清单里搜什么」和「检索里搜什么」口径一致 ——
+    清单只搜标题、检索搜全文，两边对不上，用户会以为库里没有。
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    rows = await _gene_fts_rows(db, q, limit)
+    if rows:
+        return [r[0] for r in rows]
+    # 索引里没有（索引不可用或词太短）→ 退回标题匹配
+    like = f"%{q}%"
+    genes = (await db.execute(
+        select(DnaGene).where(DnaGene.title.like(like),
+                               DnaGene.status == "active")
+        .limit(limit))).scalars().all()
+    return [g.id for g in genes]
+
+
 async def search_genes(db: AsyncSession, query: str, limit: int = 12,
                        kinds: list[str] | None = None) -> list[dict]:
     """基因检索：先查 FTS 表，查不动再退回 Python 扫描"""
@@ -803,6 +885,8 @@ async def search_genes(db: AsyncSession, query: str, limit: int = 12,
         out = _python_scan_genes(genes, q, limit)
     # 问句点名了类别就把那一类顶上来（加分，不是过滤）
     bias = _query_kind_bias(q)
+    if kinds and bias and bias not in kinds:
+        bias = ""
     if bias:
         for item in out:
             if item["gene"].kind == bias:
@@ -815,7 +899,7 @@ async def search_genes(db: AsyncSession, query: str, limit: int = 12,
         # 「有哪些经验」这种问法，词面命中的是「正文里恰好提到经验的段落」，
         # 而不是「经验类的知识」—— 不补的话，问经验却答出一堆事实，
         # 答非所问比答不出来更糟。
-        if not any(item["gene"].kind == bias for item in out):
+        if bias and not any(item["gene"].kind == bias for item in out):
             extra = (await db.execute(
                 select(DnaGene).where(DnaGene.status == "active",
                                        DnaGene.kind == bias)
@@ -857,7 +941,8 @@ async def mark_gene_used(db: AsyncSession, gene_ids: list[int]) -> None:
         log.warning("基因表达度更新失败：%s", e)
 
 
-async def answer_offline(db: AsyncSession, query: str, limit: int = 5) -> dict:
+async def answer_offline(db: AsyncSession, query: str, limit: int = 5,
+                         kinds: list[str] | None = None) -> dict:
     """离线直答：不调模型，把命中的基因与证据原样端出来
 
     断网时这就是问答能力的下限：给不出「生成」的答案，
@@ -865,7 +950,7 @@ async def answer_offline(db: AsyncSession, query: str, limit: int = 5) -> dict:
     人能直接读，模型（如果本地有）也能直接吃。
     """
     q = (query or "").strip()
-    genes = await search_genes(db, q, limit=limit)
+    genes = await search_genes(db, q, limit=limit, kinds=kinds)
     chunks = await docindex.chunk_fts_search(db, q, limit=limit) if q else []
     # 回表取章节标题，答案里要指得出「在哪」
     cites = []

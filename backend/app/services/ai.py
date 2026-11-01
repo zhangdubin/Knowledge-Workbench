@@ -405,10 +405,11 @@ async def suggest_title(content: str) -> str:
     ])
 
 
-async def ask(question: str, context: list[str] | None = None) -> str:
-    """AI 问答（带上下文）
+async def ask(question: str, context: list[str] | None = None,
+              genes: list[dict] | None = None) -> str:
+    """AI 问答（带上下文 + 养料库基因）
 
-    三条提示词规矩，每条都对应一个真实踩过的坑：
+    四条提示词规矩，每条都对应一个真实踩过的坑：
 
     1. **要标出处**：上下文块带【n】编号，答案里对应的句子后面写【n】。
        以前出处只在响应体的 sources[] 里，答案正文一个标记都没有 ——
@@ -419,6 +420,8 @@ async def ask(question: str, context: list[str] | None = None) -> str:
     3. **上下文不能截断到只剩前 5 条**：以前是 context[:5]，
        检索准备了十几块证据，最后只喂了 5 块就扔了剩下的。
        现在按字符预算截，块数不再硬砍。
+    4. **基因可以引用**：养料库里的基因是已经提炼过的结论，
+       用它回答时标【基因#编号】，让人能点回去看原文。
     """
     sys_msg = (
         "你是知识工作台 AI 助手。基于上下文回答用户问题，简洁准确。\n"
@@ -427,6 +430,9 @@ async def ask(question: str, context: list[str] | None = None) -> str:
         "2. 上下文里没有的信息，直接说「资料里没有」，不要用常识或推测补齐。\n"
         "3. 不确定的地方明确说不确定，不要含糊带过。"
     )
+    if genes:
+        sys_msg += ("\n4. 用了养料库基因作答时，在对应句子后面标【基因#编号】"
+                    "（基因块以【基因#编号】开头）。")
     if context:
         # 按字符预算截，而不是按块数硬砍 —— 块数砍掉的是「排在后面的证据」，
         # 而排在后面不等于不重要（跨文档问题的第二份材料常在后面）。
@@ -445,6 +451,28 @@ async def ask(question: str, context: list[str] | None = None) -> str:
         {"role": "system", "content": sys_msg},
         {"role": "user", "content": question},
     ])
+
+
+def normalize_gene_citations(text: str, aliases: dict[int, int] | None = None) -> str:
+    """把模型写出来的各种基因引用写法归一成【基因#基因编号】
+
+    模型可能写【基因12】【基因 #12】[基因12]【G12】——
+    归一之后前端只需要认一种写法。
+
+    aliases 把「上下文块号」映射回「基因编号」：
+    模型看到的是上下文里的第 5 块，但它不知道那块的基因编号是 25。
+    答案里写【基因#5】时，要还原成【基因#25】，
+    否则前端拿着 5 去查基因库，查出来的是另一条。
+    """
+    t = (text or "")
+    t = re.sub(r"[【\[]\s*基因\s*#?\s*(\d+)\s*[】\]]", r"【基因#\1】", t)
+    t = re.sub(r"[【\[]\s*G\s*(\d+)\s*[】\]]", r"【基因#\1】", t)
+    if aliases:
+        def _fix(m):
+            n = int(m.group(1))
+            return f"【基因#{aliases.get(n, n)}】"
+        t = re.sub(r"【基因#(\d+)】", _fix, t)
+    return t
 
 
 async def test_connection() -> dict:

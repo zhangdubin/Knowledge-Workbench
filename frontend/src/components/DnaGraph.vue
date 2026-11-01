@@ -461,7 +461,10 @@ const detailKindStyle = computed(() => {
 const PAD_TOP = 50        // 顶部留白：给「知识链 / 证据链」两个链头
 const PAD_BOTTOM = 26
 const TARGET_H = 940      // 图区目标高度；行多的时候自动收窄行距
-const MIN_PITCH = 20
+// 行距下限 24px：标签行高约 17px（12px 字号 × 1.35 + 2px 内边距），
+// 行距 20px 时相邻标签会压字 4~5px —— 62 个标签里 36 对压在一起，
+// 双螺旋看起来像两串挤在一起的字。宁可让画布高一点。
+const MIN_PITCH = 24
 const MAX_PITCH = 28
 
 const layout = ref({ pos: {}, W: 900, H: 460, leftLen: 1, rightLen: 1, xLeft: 0, xRight: 0 })
@@ -1327,15 +1330,22 @@ const H = computed(() => layout.value.H)
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 1px 0;
+  padding: 0;
   border: 0;
   background: none;
   font: inherit;
+  line-height: 1.25;
   color: var(--text-secondary);
   cursor: pointer;
   pointer-events: auto;
   white-space: nowrap;
   overflow: hidden;
+  /* 全局 button { min-height: 28px }（触控目标下限）会把每个标签撑到 28px，
+     行距 24px → 相邻标签压字 4px。
+     图里的标签是密集排布的文字行，不是触控按钮 ——
+     真正的点击目标是画布上的节点圆点，所以这里解除高度下限。 */
+  min-height: 0;
+  min-width: 0;
   transition: opacity 0.16s var(--ease-out), color 0.16s var(--ease-out);
 }
 .dg-lbl.l {
@@ -1356,7 +1366,7 @@ const H = computed(() => layout.value.H)
 }
 .dg-lbl-text {
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -1,4 +1,6 @@
 """AI 路由"""
+import re
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,6 +83,9 @@ class AskIn(BaseModel):
     # 指定要参考的文件；留空时自动检索最相关的文件与笔记
     document_ids: list[int] | None = None
     auto_retrieve: bool = True
+    # 钉住的养料库基因：不钉的话也会自动挑相关的基因，
+    # 钉住的是「明确要用这一条」
+    gene_ids: list[int] | None = None
 
 
 class AgentIn(BaseModel):
@@ -284,5 +289,84 @@ async def ask(payload: AskIn, db: AsyncSession = Depends(get_db),
         except Exception:
             pass
 
-    answer = await ai_svc.ask(payload.question, context)
-    return {"answer": answer, "context_count": len(context), "sources": sources}
+    # 养料库基因：钉住的优先，没钉的自动挑相关的
+    genes = await _collect_genes(db, principal, payload.question,
+                                 payload.gene_ids or [])
+    # 基因块也要有编号：上下文块统一按【n】编号，
+    # 模型引用时才能同时标「第 n 条」和「哪条基因」。
+    # 编号接着已有的往后排，不跟文件块撞号。
+    base_no = 0
+    for c in context:
+        m = re.match(r"^【(\d+)】", c or "")
+        if m:
+            base_no = max(base_no, int(m.group(1)))
+    for i, g in enumerate(genes, start=1):
+        no = base_no + i
+        context.append(
+            f"【{no} · 基因#{g['id']}】{g['title']}（{g['kind_label']}）\n{g['content']}")
+        g["citation"] = no
+
+    answer = await ai_svc.ask(payload.question, context, genes=genes)
+    answer = ai_svc.normalize_gene_citations(answer)
+    return {"answer": answer, "context_count": len(context),
+            "sources": sources, "genes": genes}
+
+
+async def _collect_genes(db, principal, question: str,
+                          gene_ids: list[int]) -> list[dict]:
+    """凑出这次问答要用的养料库基因
+
+    钉住的基因一定用上（用户明确指定了）；
+    没钉的时候自动挑几条相关的 ——
+    「在系统任何地方直接可以引用」的意思是：
+    不需要用户先知道库里有什么，问答自己会去用。
+    """
+    from ..services import dna_library as dna_lib
+    out: list[dict] = []
+    seen: set[int] = set()
+    if gene_ids:
+        for gid in gene_ids[:12]:
+            try:
+                g = await dna_lib.get_gene(db, gid)
+            except Exception:
+                continue
+            if g is None or g.id in seen:
+                continue
+            seen.add(g.id)
+            out.append(_gene_ref(g))
+    if not out:
+        try:
+            hits = await dna_lib.search_genes(db, question, limit=4,
+                                              kinds=["method", "experience",
+                                                     "policy", "interface"])
+        except Exception:
+            hits = []
+        for h in hits:
+            g = h.get("gene")
+            if g is None or g.id in seen:
+                continue
+            if (g.confidence or 0) < 0.7:
+                continue
+            seen.add(g.id)
+            out.append(_gene_ref(g))
+    return out
+
+
+def _gene_ref(g) -> dict:
+    return {
+        "id": g.id,
+        "kind": g.kind,
+        "kind_label": dna_kind_label(g.kind),
+        "title": g.title,
+        "content": (g.content or "")[:1500],
+        "source_title": g.source_title or "",
+        "source_ref": g.source_ref or "",
+        "usage_count": g.usage_count or 0,
+        "confidence": g.confidence or 0,
+        "citation": 0,
+    }
+
+
+def dna_kind_label(kind: str) -> str:
+    return {"fact": "事实", "method": "方法", "experience": "经验",
+            "interface": "接口", "policy": "约定"}.get(kind, kind or "基因")

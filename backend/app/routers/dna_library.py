@@ -123,7 +123,15 @@ async def genes(kind: str = Query("", description="按种类过滤"),
     if status and status != "all":
         stmt = stmt.where(DnaGene.status == status)
     if q:
-        stmt = stmt.where(DnaGene.title.like(f"%{q}%"))
+        # 搜索要覆盖正文，不只是标题：
+        # 很多基因的标题是「军队采购网」这种泛名，
+        # 真正有信息量的是正文（「投标截止时间是多少」）。
+        # 只搜标题 → 搜「投标截止」一条都搜不到。
+        ids = await svc.search_gene_ids(db, q, limit=800)
+        if ids:
+            stmt = stmt.where(DnaGene.id.in_(ids))
+        else:
+            stmt = stmt.where(DnaGene.title.like(f"%{q}%"))
     # 体检筛选：让「冷基因 55」这种结论能点开看是哪 55 条，
     # 而不是只给一个数字让人猜
     if flag == "cold":
@@ -159,6 +167,47 @@ async def gene_detail(gene_id: int, db: AsyncSession = Depends(get_db),
     return svc.serialize_gene(g)
 
 
+class CiteBody(BaseModel):
+    gene_ids: list[int] = Field(default_factory=list)
+    format: str = Field("markdown", description="markdown / plain")
+
+
+@router.post("/cite")
+async def cite(payload: CiteBody, db: AsyncSession = Depends(get_db),
+               principal: Principal = Depends(current_principal)):
+    """把基因变成一段可以贴到任何地方的引用
+
+    「在系统任何地方直接可以引用」：
+    这里给出的是**成品**（一段带出处的文字），
+    不是「基因 id 12」这种需要自己再拼的东西。
+    """
+    genes = []
+    for gid in payload.gene_ids[:20]:
+        g = await svc.get_gene(db, gid)
+        if g is None:
+            continue
+        # 已被取代的旧版本不拿去引用 ——
+        # 引用出来的东西应该是当前有效的知识
+        if g.status != "active":
+            continue
+        genes.append(svc.serialize_gene(g))
+    if not genes:
+        return {"text": "", "genes": []}
+    if payload.format == "plain":
+        text = "\n\n".join(
+            f"【基因#{g['id']} · {g.get('kind_label') or g['kind']}】{g['title']}\n{g['content']}"
+            for g in genes)
+    else:
+        blocks = []
+        for g in genes:
+            src = f"（出处：{g['source_title']}）" if g.get("source_title") else ""
+            blocks.append(
+                f"> **【基因#{g['id']} · {g.get('kind_label') or g['kind']}】{g['title']}**{src}\n"
+                f">\n> " + (g.get("content") or "").replace("\n", "\n> "))
+        text = "\n\n".join(blocks)
+    return {"text": text, "genes": genes}
+
+
 @router.get("/search")
 async def search(q: str = Query("", description="检索词"),
                  kind: str = Query(""),
@@ -175,6 +224,7 @@ async def search(q: str = Query("", description="检索词"),
 
 @router.get("/answer")
 async def answer(q: str = Query("", description="问题"),
+                 kind: str = Query("", description="限定种类"),
                  limit: int = Query(5, le=20),
                  db: AsyncSession = Depends(get_db),
                  principal: Principal = Depends(current_principal)):
@@ -183,7 +233,8 @@ async def answer(q: str = Query("", description="问题"),
     断网时这条接口就是问答能力的下限 —— 给不出生成式答案，
     但给得出有出处的原文。
     """
-    return await svc.answer_offline(db, q, limit=limit)
+    return await svc.answer_offline(db, q, limit=limit,
+                                    kinds=[kind] if kind else None)
 
 
 @router.get("/offline")

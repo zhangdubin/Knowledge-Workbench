@@ -398,6 +398,8 @@ export const Api = {
     api.post('/api/ai/ask', {      question, context,
       document_ids: opts.document_ids || null,
       auto_retrieve: opts.auto_retrieve !== false,
+      // 钉住的养料库基因；不钉的话服务端会自己挑相关的
+      gene_ids: opts.gene_ids || null,
     }, { timeout: 120000 }),
 
   // AI 操作中枢：自然语言 → 工具调用（查询当场执行，写入先出待确认清单）
@@ -435,6 +437,7 @@ export const Api = {
   dnaLibraryGenes: (params = {}) => api.get('/api/dna/library/genes', { params }),
   dnaLibraryGene: (id) => api.get(`/api/dna/library/genes/${id}`),
   dnaLibrarySearch: (params) => api.get('/api/dna/library/search', { params }),
+  dnaLibraryCite: (data) => api.post('/api/dna/library/cite', data),
   dnaLibraryAnswer: (params) => api.get('/api/dna/library/answer', { params }),
   dnaLibraryDrill: () => api.get('/api/dna/library/drill'),
   dnaLibraryAbsorb: (payload) => api.post('/api/dna/library/absorb', payload),

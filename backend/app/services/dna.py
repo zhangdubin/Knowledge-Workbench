@@ -294,23 +294,184 @@ def _outline_from(text: str, headings: list[tuple[int, str, int]]) -> list[dict]
     return tree
 
 
-def extract_outline(text: str) -> list[dict]:
+# 抽取器在正文里留的格式标记：
+#   PDF   "[标题] xxx" + 每页一个 "[第 N 页]"
+#   PPTX  每页一个 "[第 N 页] ..."
+#   XLSX  每个工作表一个 "[表名]"
+# 这些标记就是非 Markdown 文档的天然结构 ——
+# PDF 本来就没有标题语义，硬给它一个「正文」节点等于什么都没说。
+_PAGE_MARK_RE = re.compile(r"^\[第\s*(\d+)\s*页\]\s*(.*)$")
+_SHEET_MARK_RE = re.compile(r"^\[(?!第)([^\]]{1,40})\]\s*$")
+_DOC_TITLE_MARK_RE = re.compile(r"^\[标题\]\s*(.+)$")
+
+
+def _node(title: str, *, level: int = 1, snippet: str = "") -> dict:
+    return {"level": level, "title": title, "path": title,
+            "children": [], "snippet": snippet[:160]}
+
+
+def _outline_from_pages(body: str) -> list[dict]:
+    """PDF / PPTX：按页建结构
+
+    每页的标题取这一页里第一行像标题的话（短、不是纯数字、
+    不是日期），取不到就叫「第 N 页」。
+    """
+    lines = body.split("\n")
+    doc_title = ""
+    pages: list[tuple[str, list[str]]] = []
+    cur_title = ""
+    cur: list[str] = []
+    saw_page = False
+    for ln in lines:
+        m = _DOC_TITLE_MARK_RE.match(ln.strip())
+        if m and not pages:
+            doc_title = m.group(1).strip()
+            continue
+        pm = _PAGE_MARK_RE.match(ln.strip())
+        if pm:
+            saw_page = True
+            if cur or cur_title:
+                pages.append((cur_title, cur))
+            cur_title = pm.group(1)
+            rest = pm.group(2).strip()
+            cur = [rest] if rest else []
+            continue
+        cur.append(ln)
+    if cur or cur_title:
+        pages.append((cur_title, cur))
+
+    # 一个页标记都没见过 → 这不是分页文档，别硬凑出「一页」
+    if not saw_page:
+        return []
+    out: list[dict] = []
+    for num, body_lines in pages:
+        text_lines = [x.strip() for x in body_lines if x.strip()]
+        title = ""
+        for t in text_lines[:3]:
+            if len(t) <= 40 and not re.match(r"^[\d\W]+$", t) and "：" not in t[:4]:
+                title = t
+                break
+        snippet = " ".join(text_lines[:2])
+        out.append(_node(title or f"第 {num} 页", level=2, snippet=snippet))
+    if not out:
+        return []
+    root = _node(doc_title or "正文", level=1)
+    root["children"] = out
+    return [root]
+
+
+def _outline_from_sheets(body: str) -> list[dict]:
+    """表格文件：每个工作表一个节点"""
+    out: list[dict] = []
+    cur_name = ""
+    cur: list[str] = []
+    saw_sheet = False
+    for ln in body.split("\n"):
+        m = _SHEET_MARK_RE.match(ln.strip())
+        if m:
+            saw_sheet = True
+            if cur_name:
+                rows = [x for x in cur if x.strip()]
+                out.append(_node(cur_name, level=2,
+                                 snippet=f"{len(rows)} 行"))
+            cur_name = m.group(1).strip()
+            cur = []
+            continue
+        cur.append(ln)
+    if cur_name:
+        rows = [x for x in cur if x.strip()]
+        out.append(_node(cur_name, level=2, snippet=f"{len(rows)} 行"))
+    # 没有工作表标记 → 这不是表格文件（别把第一行当成表名）
+    return out if saw_sheet else []
+
+
+def _outline_from_paragraphs(body: str, limit: int = 40) -> list[dict]:
+    """没有格式标记的正文：按空行分段
+
+    DOCX / CSV / 纯文本都是这一类。
+    每一段用它的第一行当标题 —— 这比一个叫「正文」的大节点有用得多：
+    至少能看出这篇东西在讲哪几件事。
+    """
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", body) if b.strip()]
+    if len(blocks) <= 1:
+        return []
+    out: list[dict] = []
+    for b in blocks[:limit]:
+        first = next((x.strip() for x in b.split("\n") if x.strip()), "")
+        title = re.sub(r"^#+\s*", "", first).strip()
+        if len(title) > 34:
+            title = title[:34] + "…"
+        if not title:
+            continue
+        out.append(_node(title, level=2, snippet=b.replace("\n", " ")[:160]))
+    return out
+
+
+def extract_outline(text: str, *, ext: str = "") -> list[dict]:
     """从正文抽出结构树（OpenKB PageIndex 的等价物）
 
-    PDF 抽不出标题是常态（PDF 里根本没有标题语义），
-    这时候退化成单节点「正文」——
-    总比给前端一个空数组强：空数组没法区分
-    「这篇没有结构」和「解析出错了」。
+    不同格式有各自的天然结构，抽不出来的时候才退化成「正文」：
+      Markdown → 标题层级
+      PDF/PPTX → 按页（每页取第一行像标题的话当页标题）
+      XLSX     → 按工作表
+      DOCX/CSV/文本 → 按段落
+      图片等无文字层 → 单节点，说明「没有文字层」
+
+    为什么值得多写这几百行：
+    「结构树里只有一个『正文』」和「这篇没有结构」看起来一样，
+    但前者其实是解析器偷懒 —— PDF 是有页的，文档是有段的。
     """
     body = _strip_front_matter(text or "")
-    return _outline_from(body, _parse_headings(body))
+    if not body.strip():
+        return [_node("（无文字层）", level=1)]
+    headings = _parse_headings(body)
+    if headings:
+        return _outline_from(body, headings)
+    pages = _outline_from_pages(body)
+    if pages:
+        return pages
+    sheets = _outline_from_sheets(body)
+    if sheets:
+        return sheets
+    paras = _outline_from_paragraphs(body)
+    if paras:
+        return paras
+    return [_node("正文", level=1)]
 
 
-def _outline_stats(text: str) -> tuple[list[dict], int]:
-    """结构树 + 标题数（不含退化的「正文」节点）"""
+def _structure_kind(text: str, ext: str = "") -> str:
+    """这篇文档的结构是按什么来的
+
+    前端要标出来 —— 一棵按页展开的 PDF 树和一棵按标题展开的 Markdown 树，
+    长得一样但含义不同。看不出区别就等于没给信息。
+    """
+    body = _strip_front_matter(text or "")
+    if not body.strip():
+        return "无文字层"
+    if _parse_headings(body):
+        return "按标题"
+    if _PAGE_MARK_RE.search(body) or "[第 " in body:
+        return "按页"
+    if _SHEET_MARK_RE.search(body):
+        return "按表"
+    if len([b for b in re.split(r"\n\s*\n", body) if b.strip()]) > 1:
+        return "按段"
+    return "整篇"
+
+
+def _outline_stats(text: str, ext: str = "") -> tuple[list[dict], int]:
+    """结构树 + 结构节点数
+
+    第二个数字以前是「标题数」，现在改成「结构节点数」——
+    PDF 的页也是结构，说「这篇有 0 个标题」会让人以为它是空的。
+    """
     body = _strip_front_matter(text or "")
     headings = _parse_headings(body)
-    return _outline_from(body, headings), len(headings)
+    if headings:
+        outline = _outline_from(body, headings)
+        return outline, len(headings)
+    outline = extract_outline(body, ext=ext)
+    return outline, max(0, len(outline) - 1)
 
 
 # ---------- 记录标题 ----------
@@ -949,7 +1110,7 @@ def _analyze(snap: dict) -> dict:
     heading_count: dict[int, int] = {}
     items: list[dict] = []
     for d, tstats in zip(docs, term_stats):
-        outline, hcount = _outline_stats(d.extracted_text or "")
+        outline, hcount = _outline_stats(d.extracted_text or "", d.ext or "")
         outlines[d.id] = outline
         heading_count[d.id] = hcount
         text_len = len(d.extracted_text or "")
@@ -974,6 +1135,7 @@ def _analyze(snap: dict) -> dict:
             "created_at": _iso(d.created_at),
             "updated_at": _iso(d.updated_at),
             "headings": hcount,
+            "structure": _structure_kind(d.extracted_text or "", d.ext or ""),
             "links": len(snap["links_by_doc"].get(d.id, [])),
         })
 
@@ -1053,6 +1215,9 @@ async def build_tree(db: AsyncSession, principal: Principal) -> dict:
     ana = _analyze(snap)
     return {"items": [
         {"id": it["id"], "title": it["title"], "words": it["words"],
+         "ext": it.get("ext", ""), "kind": it.get("kind", ""),
+         "structure": it.get("structure", ""),
+         "summary": it.get("summary", ""),
          "outline": ana["outlines"].get(it["id"], [])}
         for it in ana["items"]
     ]}

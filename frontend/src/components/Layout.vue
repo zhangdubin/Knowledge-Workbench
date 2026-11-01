@@ -109,6 +109,15 @@
             </template>
           </el-input>
           <el-button
+            circle
+            plain
+            @click="genePickerOpen = true"
+            title="引用养料库里的知识（任何页面都能用）"
+            class="gene-btn"
+          >
+            <el-icon><DataBoard /></el-icon>
+          </el-button>
+          <el-button
             v-if="auth.can('ai')"
             circle
             plain
@@ -166,6 +175,8 @@
     </el-container>
 
     <!-- 移动端抽屉导航 -->
+    <GenePicker v-model="genePickerOpen" mode="copy" />
+
     <el-drawer
       v-model="drawerOpen"
       direction="ltr"
@@ -233,8 +244,9 @@
 import { computed, reactive, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AgentChat from './AgentChat.vue'
+import GenePicker from './GenePicker.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Collection, Menu, Plus } from '@element-plus/icons-vue'
+import { Collection, Menu, Plus, DataBoard } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { isDark, toggleTheme } from '../utils/theme'
 import { sameVersion, normVersion } from '../utils/update'
@@ -377,6 +389,8 @@ const searchKw = ref('')
 const searchFocused = ref(false)
 const drawerOpen = ref(false)
 const agentOpen = ref(false)
+/* 顶栏「引用养料库」：任何页面都能把库里的一条知识拿去用 */
+const genePickerOpen = ref(false)
 const isMobile = ref(false)
 
 const mq = ref(null)

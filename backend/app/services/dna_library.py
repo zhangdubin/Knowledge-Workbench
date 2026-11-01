@@ -343,6 +343,10 @@ def extract_genes_from_markdown(text: str, *, title: str = "") -> list[dict]:
     """
     if not text:
         return []
+    # YAML front matter 不是知识：它只有标签和创建时间，
+    # 抽成基因等于在库里塞了一条「这个文档叫 XX、标签是 YY」的废话 ——
+    # 而它恰好容易在检索里命中（标题字段里全是文档名）。
+    text = re.sub(r"\A---\s*\n.*?\n---\s*\n", "", text, count=1, flags=re.S)
     lines = (text or "").splitlines()
     # 按标题切段
     sections: list[dict] = []
@@ -788,10 +792,10 @@ async def mark_gene_used(db: AsyncSession, gene_ids: list[int]) -> None:
         # 而异步会话里懒加载会抛 MissingGreenlet（greenlet_spawn has not been called）。
         # 这个错很隐蔽：报错点在「序列化基因」那一行，跟 update 隔了好几层。
         await db.execute(
-            update(DnaGene).where(DnaGene.id.in_(gene_ids)).values(
-                usage_count=DnaGene.usage_count + 1,
-                last_used_at=_now()),
-            execution_options(synchronize_session=False))
+            update(DnaGene)
+            .where(DnaGene.id.in_(gene_ids))
+            .values(usage_count=DnaGene.usage_count + 1, last_used_at=_now())
+            .execution_options(synchronize_session=False))
         await db.commit()
     except Exception as e:
         log.warning("基因表达度更新失败：%s", e)
@@ -834,6 +838,77 @@ async def answer_offline(db: AsyncSession, query: str, limit: int = 5) -> dict:
     }
 
 
+def _fragment(text: str, query: str, width: int = 420) -> str:
+    """截取命中位置附近的片段（离线直答用）
+
+    为什么不能直接给前 600 字：一条基因可能是一整页 PDF 的正文，
+    答案在第 900 字的位置，直接截前 600 字等于没答。
+    """
+    src = (text or "").strip()
+    if not src:
+        return ""
+    if len(src) <= width:
+        return src
+    pos = -1
+    q = (query or "").strip()
+    if q:
+        # 问句里有一半是废话（「……是什么时候」），整句去 find 必然找不到。
+        # 先把问法词去掉，剩下的是要找的东西：
+        #   「投标截止时间是什么时候」→「投标截止时间」
+        # 再退一步用检索侧的分词（bigram），保证总有位置可截。
+        core = _strip_question_words(q)
+        for term in [core] + _windows(core, 4) + _windows(core, 3):
+            if not term:
+                continue
+            i = src.find(term)
+            if i < 0 and len(term) > 1:
+                # 抽取出来的正文里，换行劈开一个词是常事
+                m = re.search(r"\s*".join(re.escape(ch) for ch in term), src)
+                i = m.start() if m else -1
+            if i >= 0:
+                pos = i
+                break
+        if pos < 0:
+            from . import docindex
+            for term in sorted(docindex.keyword_terms(q), key=len, reverse=True)[:12]:
+                i = src.find(term)
+                if i >= 0:
+                    pos = i
+                    break
+    if pos < 0:
+        return src[:width] + "…"
+    start = max(0, pos - width // 3)
+    out = src[start:start + width]
+    return ("…" if start > 0 else "") + out + "…"
+
+
+_QUESTION_WORDS = ("是什么", "什么时候", "什么时候开始", "是哪里", "在哪里", "哪个",
+                   "哪些", "多少", "怎么样", "怎么", "如何", "为什么", "是否", "可以吗",
+                   "有没有", "有无", "请问", "请告诉", "介绍一下", "是什么", "是什么？")
+
+
+def _strip_question_words(q: str) -> str:
+    """把问句里的问法词去掉，剩下要找的东西"""
+    out = q or ""
+    for w in sorted(_QUESTION_WORDS, key=len, reverse=True):
+        out = out.replace(w, "")
+    # 去掉问法留下的语气词（"投标截止时间是" → "投标截止时间"）
+    return out.strip(" 　:：?？!！。.,，").rstrip("是的了呢啊吗")
+
+
+def _windows(text: str, n: int) -> list[str]:
+    """滑窗取长度为 n 的子串（长的优先，找不到再退化）"""
+    if not text or len(text) < n:
+        return []
+    return [text[i:i + n] for i in range(len(text) - n + 1)]
+
+
+def _query_terms(q: str) -> list[str]:
+    """把问句拆成可查找的词（去掉问号这类噪声）"""
+    parts = re.split(r"[\s，。？?、：:；;！!,.（）()「」『』\"\']+", q or "")
+    return [p for p in parts if len(p) >= 2]
+
+
 def _render_offline_answer(query: str, genes: list[dict], cites: list[dict]) -> str:
     """离线直答的正文：基因优先（它们是可复用的结论），证据跟在后面"""
     lines: list[str] = []
@@ -843,7 +918,7 @@ def _render_offline_answer(query: str, genes: list[dict], cites: list[dict]) -> 
             gene = g["gene"]
             src = gene.source_title or gene.source_kind or "养料库"
             lines.append(f"\n{i}. **{gene.title}**（{gene.kind}｜来源：{src}）")
-            lines.append(f"   {gene.content[:600]}")
+            lines.append(f"   {_fragment(gene.content or '', query, 420)}")
     if cites:
         lines.append("\n相关原文：")
         for i, c in enumerate(cites, 1):

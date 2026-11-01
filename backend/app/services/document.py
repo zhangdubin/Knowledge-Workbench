@@ -1211,7 +1211,16 @@ async def search_documents(
         # 这条通道让「同一个问题第二次问」更快、更准。
         try:
             from . import dna_library
-            gene_hits = await dna_library.search_genes(db, q, limit=limit)
+            # 只让「可复用的结论」投票：方法/经验/约定/接口。
+            # 事实类基因不在这里投票 ——
+            # 事实本来就在原文里，文本通道已经覆盖了它；
+            # 让事实基因再投一次，等于把跟问题无关的资料拉进上下文
+            # （实测：一句跨文档的问题被三份 QA 测试资料的基因拉了进来，
+            #  模型给出的答案反而变短变糙）。
+            gene_hits = await dna_library.search_genes(
+                db, q, limit=limit,
+                kinds=["method", "experience", "policy", "interface"])
+            gene_hits = [g for g in gene_hits if (g["gene"].confidence or 0) >= 0.7]
             for g in gene_hits:
                 src = (g["gene"].source_ref or "")
                 if src.startswith("doc-"):

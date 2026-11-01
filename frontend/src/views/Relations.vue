@@ -504,7 +504,7 @@ onMounted(load)
 }
 .rel-end-tag {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1;
   padding: 3px 5px;

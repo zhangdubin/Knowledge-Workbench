@@ -730,11 +730,20 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
   gap: var(--space-5);
-  align-items: start;
+  /* 两张卡等高：原来「我的应用」比「最近动态」矮 88px，
+     并排看一头高一头低，像没对齐。拉齐后应用列表仍从顶部往下排，
+     多出来的高度留成卡内留白，不会把两行卡片拉开。 */
+  align-items: stretch;
 }
 .dashboard-row > .card {
   margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
 }
+.dashboard-row > .card > :last-child { flex: 1; min-height: 0; }
+/* 应用卡片保持原高度，多出来的空间留在列表下方 ——
+   让网格拉伸会把每张应用卡撑胖，看着空。 */
+.dash-apps .app-grid { align-content: start; }
 
 /* 我的应用：改成横向紧凑卡，一屏能看完 4 个应用 */
 .dash-apps .app-grid {

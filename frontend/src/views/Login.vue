@@ -394,7 +394,7 @@ async function submitPassword() {
 .mark-text b { font-size: 15px; font-weight: 700; letter-spacing: 0.2px; }
 .mark-text i {
   font-style: normal;
-  font-size: 10.5px;
+  font-size: 11px;
   letter-spacing: 0.9px;
   text-transform: uppercase;
   opacity: 0.52;

@@ -527,6 +527,46 @@ async def absorb_code(body: AbsorbCodeBody, db: AsyncSession = Depends(get_db),
         raise HTTPException(500, f"源码蒸馏失败：{e}")
 
 
+@router.post("/absorb/code/preview")
+async def preview_code(body: AbsorbCodeBody,
+                       db: AsyncSession = Depends(get_db),
+                       principal: Principal = Depends(current_principal)):
+    """预览：这段源码**会**抽出哪些基因
+
+    纯计算，不写任何表 —— 蒸馏器是纯函数，
+    预览跟真吸收抽出来的东西一模一样，只是没落库。
+
+    为什么要有这个：源码一贴进去就是「吸收 + 销毁」，
+    用户看不见会抽出什么，心里没底；
+    有了预览就能先看清单再决定要不要销毁原文。
+    """
+    from ..services import dna_distill
+    text = body.code or ""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="源码为空")
+    try:
+        res = dna_distill.distill_code(text, body.filename or "untitled")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"解析失败：{e}")
+    genes = []
+    for g in (res.genes or [])[:40]:
+        genes.append({
+            "kind": g.get("kind"),
+            "kind_label": svc.KIND_LABEL.get(g.get("kind"), g.get("kind")),
+            "title": (g.get("title") or "")[:120],
+            "preview": (g.get("content") or "")[:180],
+        })
+    return {
+        "language": res.language,
+        "lines": res.lines,
+        "stats": res.stats,
+        "gene_count": len(res.genes or []),
+        "genes": genes,
+        "skeleton_preview": (res.skeleton or "")[:2000],
+        "warnings": res.warnings or [],
+    }
+
+
 @router.post("/absorb/source")
 async def absorb_source(body: AbsorbSourceBody, db: AsyncSession = Depends(get_db),
                         principal: Principal = Depends(current_principal)):

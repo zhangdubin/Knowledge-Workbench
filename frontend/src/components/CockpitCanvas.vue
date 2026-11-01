@@ -698,6 +698,10 @@ html.dark .cv-clip-hint b { color: var(--primary-light); }
   z-index: 5;
 }
 .cv-card:hover .cv-h, .cv-card.sel .cv-h { opacity: 1; }
+/* 触屏没有 hover：编辑态的缩放手柄否则永远点不到，卡片就改不了大小。 */
+@media (hover: none) {
+  .cv.is-edit .cv-h { opacity: 1; }
+}
 .cv-h::after {
   content: ''; position: absolute; inset: 3px;
   background: var(--bg-card); border: 1.5px solid var(--primary); border-radius: 2px;

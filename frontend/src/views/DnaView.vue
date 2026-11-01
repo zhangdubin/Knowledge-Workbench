@@ -241,7 +241,7 @@
           <span class="sec-rule" />
         </div>
         <div class="panel panel-flush">
-          <DnaGraph :graph="graph" :focus-id="focusNodeId" />
+          <DnaGraph :graph="graph" :focus-id="focusNodeId" @select="onGraphSelect" />
         </div>
       </section>
 
@@ -254,7 +254,12 @@
           <span class="sec-rule" />
         </div>
         <div class="chr-list">
-          <div v-for="doc in documents" :key="doc.id" class="chr">
+          <div
+            v-for="doc in documents"
+            :key="doc.id"
+            class="chr"
+            :class="{ 'is-sel': selDocId === doc.id }"
+          >
             <button class="chr-head" type="button" @click="toggleDoc(doc)">
               <span class="chr-code">chr-{{ pad2(doc.id) }}</span>
               <span class="chr-title">{{ doc.title }}</span>
@@ -360,19 +365,88 @@
           <span class="sec-note">每篇文档的标题层级 —— 人和模型都能当目录用</span>
           <span class="sec-rule" />
         </div>
-        <div class="skel-grid">
-          <div v-for="t in tree" :key="t.id" class="skel-card">
-            <div class="skel-head">
+        <!--
+          骨架默认是**收起的**：
+          以前一上来就把每篇文档的完整目录铺开，页面拉到几千像素高，
+          真正想看的东西被埋在下面。
+          现在默认是一张列表（每篇一行），点开一行才展开那一篇的层级；
+          想大窗看，点「弹窗」。
+        -->
+        <div class="skel-list">
+          <div
+            v-for="t in tree"
+            :key="t.id"
+            class="skel-row"
+            :class="{ 'is-open': isSkelOpen(t.id) }"
+          >
+            <button
+              type="button"
+              class="skel-row-main"
+              :aria-expanded="isSkelOpen(t.id)"
+              @click="toggleSkel(t.id)"
+            >
+              <el-icon class="skel-caret" :class="{ 'is-open': isSkelOpen(t.id) }">
+                <ArrowRight />
+              </el-icon>
               <span class="skel-rail" />
               <span class="skel-title">{{ t.title }}</span>
               <span v-if="t.ext" class="skel-ext">{{ t.ext }}</span>
+              <span class="skel-badge">{{ t.structure || '整篇' }}</span>
+              <span class="skel-meta">{{ outlineCount(t) }} 个节点 · {{ t.words }} 字</span>
+            </button>
+            <button
+              type="button"
+              class="skel-row-open"
+              title="在弹窗里看完整层级"
+              @click.stop="openSkelDialog(t)"
+            >
+              <el-icon><FullScreen /></el-icon>
+            </button>
+
+            <div v-if="isSkelOpen(t.id)" class="skel-detail">
+              <ul v-if="t.outline && t.outline.length" class="tree">
+                <li v-for="(n, i) in t.outline" :key="i">
+                  <span class="tree-title">{{ n.title }}</span>
+                  <span v-if="n.snippet" class="tree-snip">{{ n.snippet }}</span>
+                  <ul v-if="n.children && n.children.length">
+                    <li v-for="(c, j) in n.children" :key="j">
+                      <span class="tree-title">{{ c.title }}</span>
+                      <span v-if="c.snippet" class="tree-snip">{{ c.snippet }}</span>
+                      <ul v-if="c.children && c.children.length">
+                        <li v-for="(g, k) in c.children" :key="k">
+                          <span class="tree-title">{{ g.title }}</span>
+                          <span v-if="g.snippet" class="tree-snip">{{ g.snippet }}</span>
+                        </li>
+                      </ul>
+                    </li>
+                  </ul>
+                </li>
+              </ul>
+              <div v-else class="empty small">这篇没有结构（正文型文件）</div>
+              <div v-if="t.summary" class="skel-sum">{{ t.summary }}</div>
+            </div>
+          </div>
+          <div v-if="!tree.length" class="empty">还没有资料</div>
+        </div>
+
+        <!-- 弹窗看完整层级：大屏比页内展开好读 -->
+        <el-dialog
+          v-model="skelDialog.visible"
+          :title="skelDialog.doc?.title || '基因骨架'"
+          width="760px"
+          top="8vh"
+          class="skel-dialog"
+        >
+          <div v-if="skelDialog.doc">
+            <div class="skel-dlg-meta">
+              <span v-if="skelDialog.doc.ext" class="skel-ext">{{ skelDialog.doc.ext }}</span>
+              <span class="skel-badge">{{ skelDialog.doc.structure || '整篇' }}</span>
               <span class="skel-meta">
-                <span class="skel-badge">{{ t.structure || '整篇' }}</span>
-                {{ t.words }} 字
+                {{ outlineCount(skelDialog.doc) }} 个节点 · {{ skelDialog.doc.words }} 字
               </span>
             </div>
-            <ul v-if="t.outline && t.outline.length" class="tree">
-              <li v-for="(n, i) in t.outline" :key="i">
+            <ul v-if="skelDialog.doc.outline && skelDialog.doc.outline.length" class="tree tree-lg">
+              <li v-for="(n, i) in skelDialog.doc.outline" :key="i">
                 <span class="tree-title">{{ n.title }}</span>
                 <span v-if="n.snippet" class="tree-snip">{{ n.snippet }}</span>
                 <ul v-if="n.children && n.children.length">
@@ -390,9 +464,9 @@
               </li>
             </ul>
             <div v-else class="empty small">这篇没有结构（正文型文件）</div>
-            <div v-if="t.summary" class="skel-sum">{{ t.summary }}</div>
+            <div v-if="skelDialog.doc.summary" class="skel-sum">{{ skelDialog.doc.summary }}</div>
           </div>
-        </div>
+        </el-dialog>
       </section>
     </div>
   </div>
@@ -437,6 +511,24 @@ const activeSection = ref('sec-overview')
 /** 双螺旋里要高亮的节点（染色体清单点「定位」时用） */
 const focusNodeId = ref('')
 
+/**
+ * 在双螺旋里点了一个节点 → 染色体清单里对应的那一行也点亮
+ *
+ * 反向定位：以前只有「清单 → 图」这一条路，
+ * 在图里点一个文件，清单那边一点反应都没有 ——
+ * 两边明明指的是同一份东西。
+ */
+const selDocId = ref(0)
+
+function onGraphSelect(n) {
+  const id = n?.id || ''
+  if (n?.kind !== 'document' || !id.startsWith('doc-')) {
+    selDocId.value = 0
+    return
+  }
+  selDocId.value = Number(id.slice(4)) || 0
+}
+
 /** 把某个文件在双螺旋里点亮并滚过去 */
 async function locateInHelix(doc) {
   focusNodeId.value = ''
@@ -448,6 +540,42 @@ async function locateInHelix(doc) {
 /** 去数据中心看这份文件 */
 function openInLibrary(doc) {
   window.location.hash = `/library?doc=${doc.id}`
+}
+
+// ---- 基因骨架：默认收起的列表 ----
+
+/** 展开着的文档 id（可多开） */
+const skelOpen = ref(new Set())
+
+function isSkelOpen(id) {
+  return skelOpen.value.has(id)
+}
+
+function toggleSkel(id) {
+  const s = new Set(skelOpen.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  skelOpen.value = s
+}
+
+/** 骨架里一共几个节点（列表上显示「N 个节点」） */
+function outlineCount(t) {
+  let n = 0
+  const walk = (list) => {
+    for (const x of list || []) {
+      n += 1
+      walk(x.children)
+    }
+  }
+  walk(t?.outline)
+  return n
+}
+
+/** 弹窗看完整层级 */
+const skelDialog = ref({ visible: false, doc: null })
+
+function openSkelDialog(t) {
+  skelDialog.value = { visible: true, doc: t }
 }
 
 function jumpTo(id) {
@@ -849,7 +977,8 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 .sec-nav-no {
-  font-size: 10.5px;
+  /* 全站 11px 下限：10.5px 的节号在高分屏上发虚 */
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   opacity: .65;
 }
@@ -1003,7 +1132,7 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.5px;
 }
-.ring-max { font-size: 10px; color: var(--text-tertiary); margin-top: 1px; }
+.ring-max { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
 
 .ov-side { min-width: 0; }
 .ov-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
@@ -1124,7 +1253,7 @@ onBeforeUnmount(() => {
 .read { display: flex; align-items: center; gap: 10px; }
 .read-no {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-tertiary);
   width: 20px;
   flex-shrink: 0;
@@ -1192,7 +1321,7 @@ onBeforeUnmount(() => {
 }
 .comp-total {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-disabled);
   background: var(--bg-subtle);
   border-radius: 4px;
@@ -1225,6 +1354,13 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 .chr + .chr { border-top: 1px solid var(--border-light); }
+/* 在双螺旋里点中的那一行：左侧一条主色轨 + 淡底 */
+.chr.is-sel {
+  background: var(--primary-bg);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+.chr.is-sel .chr-title { color: var(--primary); }
+.chr.is-sel .chr-head { background: transparent; }
 .chr-head {
   display: flex;
   align-items: center;
@@ -1349,26 +1485,93 @@ onBeforeUnmount(() => {
 .issue { font-size: 12px; color: var(--warning); margin-bottom: 4px; }
 
 /* ============ 07 基因骨架 ============ */
-.skel-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
+/* 骨架默认收起：列表一行一篇，点开才展开层级 */
+.skel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.skel-card {
+.skel-row {
   background: var(--bg-card);
   border: 1px solid var(--border-light);
-  border-radius: 12px;
+  border-radius: 10px;
   box-shadow: var(--shadow-card);
-  padding: 15px 17px 16px;
-  position: relative;
+  overflow: hidden;
+  transition: border-color 0.16s var(--ease-out), box-shadow 0.16s var(--ease-out);
 }
-.skel-head {
+.skel-row:hover {
+  border-color: var(--border-strong);
+}
+.skel-row.is-open {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary-bg), var(--shadow-card);
+}
+.skel-row-main {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin-bottom: 9px;
-  padding-bottom: 9px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  min-height: 0;
+}
+.skel-row-main:hover {
+  background: var(--bg-subtle);
+}
+.skel-caret {
+  color: var(--text-tertiary);
+  transition: transform 0.18s var(--ease-out);
+  flex-shrink: 0;
+}
+.skel-caret.is-open {
+  transform: rotate(90deg);
+  color: var(--primary);
+}
+.skel-row-open {
+  position: absolute;
+  right: 30px;
+  top: 8px;
+  border: 0;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity 0.16s var(--ease-out);
+}
+.skel-row {
+  position: relative;
+}
+.skel-row:hover .skel-row-open {
+  opacity: 1;
+}
+.skel-row-open:hover {
+  color: var(--primary);
+  background: var(--bg-subtle);
+}
+.skel-detail {
+  padding: 4px 16px 14px 44px;
+  border-top: 1px dashed var(--border-light);
+  margin-top: 2px;
+}
+.skel-dlg-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border-light);
+}
+.tree-lg {
+  font-size: 13px;
+  max-height: 56vh;
+  overflow: auto;
 }
 .skel-rail {
   width: 3px;
@@ -1461,7 +1664,7 @@ onBeforeUnmount(() => {
 
 /* 骨架卡片：结构类型徽章 + 节点摘要 */
 .skel-ext {
-  font-size: 10.5px; padding: 1px 6px; border-radius: 4px;
+  font-size: 11px; padding: 1px 6px; border-radius: 4px;
   background: var(--bg-subtle); color: var(--text-secondary);
   font-family: var(--font-mono, ui-monospace, monospace);
 }

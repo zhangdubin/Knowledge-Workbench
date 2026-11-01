@@ -464,6 +464,8 @@ export const Api = {
   dnaLibraryAbsorbCode: (payload) =>
     api.post('/api/dna/library/absorb/code', payload, { timeout: 120000 }),
   // 吸收文件库里的一份源码（可连源文件一起销毁）
+  dnaLibraryPreviewCode: (payload) =>
+    api.post('/api/dna/library/absorb/code/preview', payload, { timeout: 120000 }),
   dnaLibraryAbsorbSource: (payload) =>
     api.post('/api/dna/library/absorb/source', payload, { timeout: 120000 }),
   dnaLibraryAbsorbAll: () => api.post('/api/dna/library/absorb/all', null, { timeout: 300000 }),

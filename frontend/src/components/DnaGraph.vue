@@ -75,12 +75,16 @@
 
       <!-- 标题层：文字用 DOM 画，不跟节点挤在同一张 canvas 上 -->
       <div class="dg-overlay">
+        <!-- 选中节点的光标环：canvas 上的节点只有几十像素，
+             光靠底色变化在双链密集处还是认不出来，
+             这里再叠一个会呼吸的环，位置跟着节点走 -->
+        <span v-if="selMark" class="dg-sel-ring" :style="selMark.style" />
         <button
           v-for="lb in labels"
           :key="lb.id"
           :ref="el => setLbl(lb.id, el)"
           class="dg-lbl"
-          :class="[lb.side, 'dg-lbl-' + lb.kind, { 'is-dim': lb.dim }]"
+          :class="[lb.side, 'dg-lbl-' + lb.kind, { 'is-dim': lb.dim, 'is-sel': lb.sel }]"
           type="button"
           :title="lb.title"
           @click.stop="selectById(lb.id)"
@@ -764,15 +768,22 @@ function buildNodes() {
   const hi = hiSet.value
   const dim = hoverId.value && hi.size > 0
   const pos = layout.value.pos
+  // 选中的节点要**在图上看得见**。
+  // 以前选中只让右侧弹详情框，图上的节点一点变化都没有 ——
+  // 「双螺旋定位」跳过去之后，用户根本不知道自己在看哪一个。
+  const selId = selected.value?.id || ''
+  const isSelId = (id) => !!selId && id === selId
 
   return nodes.value.map((n) => {
     const p = pos[n.id] || { x: 0, y: 0 }
+    const isSel = !!selId && n.id === selId
     const isGene = n.kind === 'gene'
     const isDoc = n.kind === 'document'
     const isSec = n.kind === 'section'
     const isRec = n.kind === 'record'
     const isLib = n.kind === 'library'
-    const faded = dim && !hi.has(n.id)
+    // 选中一个节点时，其它的退到背景里 —— 只把选中项点亮就够了
+    const faded = (dim && !hi.has(n.id)) || (isSelId(n.id) === false && !!selId)
 
     const m = metaOf(n.id)
     const base = isGene ? P[m.base || 'A']
@@ -859,7 +870,20 @@ function buildNodes() {
       }
     }
 
-    if (faded) {
+    if (isSel) {
+      // 选中态：底色换成实心、边框加粗、描一圈高亮色 ——
+      // 双链图上节点挨得很近，光换底色不够，得有「被点名」的重量差
+      const accent = cssVar('--primary', '#5b5fc7')
+      const text = base.text
+      color = {
+        background: accent,
+        border: accent,
+        highlight: { background: accent, border: text },
+        hover: { background: accent, border: text },
+      }
+      if (font) font = { ...font, color: '#ffffff', bold: true }
+      borderWidth = 3
+    } else if (faded) {
       color = {
         background: dimmed(color.background),
         border: dimmed(color.border),
@@ -990,6 +1014,7 @@ const labels = computed(() => {
   const P = palette.value
   const hi = hiSet.value
   const dim = hoverId.value && hi.size > 0
+  const selId = selected.value?.id || ''
   const list = []
   for (const n of nodes.value) {
     const side = chainOf(n) === 'r' ? 'r' : 'l'
@@ -1005,11 +1030,30 @@ const labels = computed(() => {
       color,
       text: n.label || '',
       title: `${n.label}\n${metaText(n)}`,
-      dim: dim && !hi.has(n.id),
+      dim: (dim && !hi.has(n.id)) || (!!selId && n.id !== selId),
+      sel: n.id === selId,
     })
   }
   return list
 })
+
+/** 选中节点在画布上的位置（给脉冲环用） */
+const selMark = ref(null)
+
+function updateSelMark() {
+  const id = selected.value?.id
+  if (!id || !net) { selMark.value = null; return }
+  const nd = net.body?.nodes?.[id]
+  if (!nd) { selMark.value = null; return }
+  const p = net.canvasToDOM({ x: nd.x, y: nd.y })
+  selMark.value = {
+    id,
+    style: {
+      '--x': `${p.x.toFixed(1)}px`,
+      '--y': `${p.y.toFixed(1)}px`,
+    },
+  }
+}
 
 function syncLabels() {
   if (!net) return
@@ -1021,6 +1065,7 @@ function syncLabels() {
     el.style.setProperty('--x', `${p.x.toFixed(1)}px`)
     el.style.setProperty('--y', `${p.y.toFixed(1)}px`)
   }
+  updateSelMark()
 }
 
 function scheduleSync() {
@@ -1035,23 +1080,24 @@ function scheduleSync() {
  * 绘制
  * ------------------------------------------------------------------ */
 
+/**
+ * 重画图（节点样式 / 连线）
+ *
+ * 注意：这里**不碰视口**。
+ * 以前 draw() 顺手把视图拉回中心，于是「鼠标扫过一个节点」、
+ * 「点一下选中」都会把用户已经平移好的视角弹回原处 ——
+ * 一张能拖能缩放的图，老是自动跳回去等于不能拖。
+ * 需要复位视角的地方显式调 resetView()。
+ */
 function draw() {
   if (!net) return
-  const lay = computeLayout()
   const ns = buildNodes()
   const es = buildEdges()
   nodesDS.clear()
   edgesDS.clear()
   nodesDS.add(ns)
   edgesDS.add(es)
-  // 视图复位：把画布坐标 1:1 对上 DOM 坐标（平移量归零），
-  // 这样标题层可以直接用节点坐标定位，永远对得齐。
-  requestAnimationFrame(() => {
-    try {
-      net.moveTo({ position: { x: lay.W / 2, y: lay.H / 2 }, scale: 1 })
-    } catch (e) { /* 还没有节点时 moveTo 会抛 */ }
-    scheduleSync()
-  })
+  scheduleSync()
 }
 
 function resetView() {
@@ -1066,6 +1112,8 @@ function resetView() {
 function reshuffle() {
   seed.value += 1
   draw()
+  // 位置全变了，视角要跟着重新对中
+  nextTick(() => { resetView(); scheduleSync() })
 }
 
 function selectById(id) {
@@ -1073,6 +1121,9 @@ function selectById(id) {
   if (!n) return
   selected.value = n
   emit('select', n)
+  // 重画：选中态是画在节点上的，不重画图上就看不到变化
+  draw()
+  nextTick(scheduleSync)
 }
 
 onMounted(() => {
@@ -1112,7 +1163,12 @@ onMounted(() => {
     // vis 的 click 事件给的是 nodes 数组，node 字段只有
     // selectNode / hoverNode 才有 —— 只看 p.node 会永远点不中。
     const id = p.node ?? p.nodes?.[0]
-    if (!id) { selected.value = null; return }
+    if (!id) {
+      selected.value = null
+      draw()
+      nextTick(scheduleSync)
+      return
+    }
     selectById(id)
   })
   net.on('doubleClick', (p) => {
@@ -1144,11 +1200,18 @@ onMounted(() => {
   // 才能点得准（坐标是算出来的，不是猜的）。
   if (import.meta.env.DEV) window.__dnaNet = net
   draw()
-  nextTick(scheduleSync)
+  nextTick(() => { resetView(); scheduleSync() })
 })
 
-watch([nodes, visibleEdges, isDark], draw, { deep: true })
-watch(seed, draw)
+watch([nodes, visibleEdges, isDark], () => {
+  draw()
+  // 数据换了（初次加载、筛选、暗色切换）——视角要重新对中一次
+  nextTick(() => { resetView(); scheduleSync() })
+}, { deep: true })
+watch(seed, () => {
+  draw()
+  nextTick(() => { resetView(); scheduleSync() })
+})
 
 // 外部定位（比如染色体清单里点「在双螺旋里看」）：
 // 选中它并把它移到视野中央。
@@ -1173,6 +1236,9 @@ watch(() => props.focusId, async (id) => {
                    y: p.y * scale - (host.value?.clientHeight || 0) / 2 })
     }
   } catch (e) { /* 视口挪不动也不该报错 */ }
+  // 视口挪过之后要再同步一次：标题层和高亮环都靠 DOM 坐标定位，
+  // 位置是按「画布坐标 → 屏幕坐标」换算的，视口一变就得重算。
+  scheduleSync()
 }, { immediate: false })
 
 onBeforeUnmount(() => {
@@ -1255,7 +1321,7 @@ const H = computed(() => layout.value.H)
   border: 1px solid transparent;
   background: var(--bc, var(--primary));
   color: #fff;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
@@ -1357,9 +1423,48 @@ const H = computed(() => layout.value.H)
   transform: translate3d(var(--x), var(--y), 0) translate(22px, -50%);
   max-width: var(--lbl-max-r, 260px);
 }
+/* 选中的标签：加粗 + 一条主色底线，跟图上的实心节点对上 */
+.dg-lbl.is-sel {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.dg-lbl.is-sel .dg-lbl-text {
+  text-decoration: underline;
+  text-decoration-color: var(--primary);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+.dg-lbl.is-sel .dg-lbl-code {
+  color: var(--primary) !important;
+}
+
+/* 选中节点的光标环：会呼吸的一圈，位置跟着节点走 */
+.dg-sel-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  border: 2px solid var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+  transform: translate3d(var(--x), var(--y), 0);
+  pointer-events: none;
+  animation: dg-sel-pulse 1.6s var(--ease-out) infinite;
+}
+@keyframes dg-sel-pulse {
+  0%   { transform: translate3d(var(--x), var(--y), 0) scale(0.72); opacity: 0.95; }
+  70%  { transform: translate3d(var(--x), var(--y), 0) scale(1.18); opacity: 0; }
+  100% { transform: translate3d(var(--x), var(--y), 0) scale(1.18); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dg-sel-ring { animation: none; opacity: 0.85; }
+}
+
 .dg-lbl-code {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.4px;
   flex-shrink: 0;

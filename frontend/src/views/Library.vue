@@ -194,7 +194,7 @@
                 <span class="cell-number">{{ formatSize(row.size) }}</span>
               </template>
             </el-table-column>
-            <el-table-column v-if="!narrow" label="关联记录" width="260">
+            <el-table-column v-if="!narrow" label="关联记录" width="260" class-name="col-refs">
               <template #default="{ row }">
                 <template v-if="(row.links || []).length || (row.relations || []).length">
                   <a
@@ -1627,6 +1627,14 @@ onMounted(async () => {
 .table-card { padding: var(--space-2) var(--space-4) var(--space-4); }
 .table-pager { margin-top: var(--space-4); justify-content: flex-end; }
 
+/* 关联记录只留一行：关联多了会把表格行撑高（实测 51~73px 参差），
+   挤在一起的表格很难扫。放不下就收成省略号，悬停仍能看全。
+   el-table 内部渲染的 td 不带 scoped 属性，必须用 :deep 穿透。 */
+.table-card :deep(.col-refs .cell) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .file-cell { display: flex; align-items: center; gap: var(--space-3); }
 .file-icon {
   width: 32px;
@@ -1702,7 +1710,7 @@ onMounted(async () => {
 }
 .ft-ext {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.6px;
   text-transform: uppercase;
@@ -1740,6 +1748,11 @@ onMounted(async () => {
 }
 html.dark .ft-actions { background: rgba(21, 23, 29, 0.94); border-color: var(--border); }
 .file-tile:hover .ft-actions { opacity: 1; }
+/* 触屏没有 hover —— 文件卡上的「JSON / 复制链接 / 删除」在手机上
+   会一直是透明的，等于这三个操作没了。触屏下常驻显示。 */
+@media (hover: none) {
+  .ft-actions { opacity: 1; }
+}
 
 /* ============ JSON 元数据列表 ============ */
 .json-list { display: flex; flex-direction: column; gap: var(--space-2); }

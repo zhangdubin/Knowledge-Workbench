@@ -714,7 +714,7 @@ html.dark .composer-suggest-item:hover { color: var(--primary-light); }
 }
 .composer-hint kbd {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 16px;
   min-width: 16px;
   text-align: center;

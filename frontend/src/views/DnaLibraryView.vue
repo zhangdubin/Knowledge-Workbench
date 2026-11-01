@@ -322,42 +322,148 @@
               </el-tab-pane>
 
               <el-tab-pane label="源码（吸收后销毁）" name="code">
-                <el-alert type="warning" :closable="false" show-icon class="code-alert">
-                  源码会被静态分析，抽出方法与经验；<b>原文不入库</b>，只留一份销毁证明（指纹 + 时间 + 文件名）。
-                </el-alert>
-                <el-input v-model="codeFilename" placeholder="文件名，如 utils.py" style="margin-bottom:8px" />
-                <el-input
-                  v-model="absorbCode"
-                  type="textarea"
-                  :rows="5"
-                  placeholder="粘源码…"
-                />
-                <div class="absorb-row">
-                  <el-switch v-model="destroySource" active-text="蒸馏后销毁原文" />
-                  <el-button type="primary" :loading="absorbing" @click="absorbCodeNow">蒸馏吸收</el-button>
+                <div class="code-intro">
+                  <div class="code-intro-lead">
+                    源码会被静态分析，抽出方法与经验；<b>原文不入库</b>，
+                    只留一份销毁证明（指纹 + 时间 + 文件名）。
+                  </div>
+                  <div class="code-intro-order">
+                    <span class="co-step"><i>1</i>蒸馏成基因</span>
+                    <span class="co-arrow">→</span>
+                    <span class="co-step"><i>2</i>写销毁证明</span>
+                    <span class="co-arrow">→</span>
+                    <span class="co-step"><i>3</i>删掉原文</span>
+                    <span class="co-note">顺序固定：证明没落库就不删</span>
+                  </div>
                 </div>
 
-                <el-divider>或：从文件库里选一份已上传的源码</el-divider>
-                <div class="src-pick">
-                  <el-select
-                    v-model="sourceDocId"
-                    placeholder="选择文件库里的源码文件"
-                    filterable
-                    clearable
-                    style="flex:1"
-                  >
-                    <el-option
-                      v-for="d in sourceDocs"
-                      :key="d.id"
-                      :label="`${d.title}（${d.ext || '无扩展名'}）`"
-                      :value="d.id"
-                    />
-                  </el-select>
-                  <el-switch v-model="destroySourceFile" active-text="销毁源文件" />
-                  <el-button type="danger" plain :loading="absorbing" @click="absorbSourceNow">
-                    吸收并销毁
-                  </el-button>
+                <!-- 两种喂法，各自成一块，别挤在一张表单里 -->
+                <div class="code-ways">
+                  <!-- ① 粘一段 -->
+                  <section class="code-way">
+                    <header class="cw-head">
+                      <span class="cw-no">①</span>
+                      <span class="cw-title">粘一段源码</span>
+                      <span class="cw-sub">贴代码，蒸馏成基因</span>
+                    </header>
+                    <div class="cw-body">
+                      <el-input
+                        v-model="codeFilename"
+                        placeholder="文件名，如 utils.py"
+                        class="cw-name"
+                      />
+                      <el-input
+                        v-model="absorbCode"
+                        type="textarea"
+                        :rows="9"
+                        resize="vertical"
+                        class="cw-code"
+                        placeholder="粘源码…&#10;&#10;（Python / JS / TS / Java / Go / Shell / SQL / YAML / JSON / Markdown 都认）"
+                      />
+                      <div class="cw-foot">
+                        <span class="cw-count">{{ absorbCode.length }} 字符</span>
+                        <div class="cw-btns">
+                          <el-button
+                            size="small"
+                            :disabled="!absorbCode.trim()"
+                            :loading="previewing"
+                            @click="previewCodeNow"
+                          >
+                            <el-icon><View /></el-icon>先看会抽出什么
+                          </el-button>
+                          <el-switch v-model="destroySource" size="small" active-text="蒸馏后销毁原文" />
+                          <el-button
+                            type="primary"
+                            size="small"
+                            :loading="absorbing"
+                            :disabled="!absorbCode.trim()"
+                            @click="absorbCodeNow"
+                          >
+                            蒸馏吸收
+                          </el-button>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <!-- ② 从文件库选 -->
+                  <section class="code-way">
+                    <header class="cw-head">
+                      <span class="cw-no">②</span>
+                      <span class="cw-title">从文件库里选</span>
+                      <span class="cw-sub">已经传上来过的源码</span>
+                    </header>
+                    <div class="cw-body">
+                      <el-select
+                        v-model="sourceDocId"
+                        placeholder="选择文件库里的源码文件"
+                        filterable
+                        clearable
+                        class="cw-select"
+                      >
+                        <el-option
+                          v-for="d in sourceDocs"
+                          :key="d.id"
+                          :label="`${d.title}（${d.ext || '无扩展名'}）`"
+                          :value="d.id"
+                        />
+                      </el-select>
+                      <ul v-if="sourceDocs.length" class="cw-list">
+                        <li
+                          v-for="d in sourceDocs.slice(0, 6)"
+                          :key="d.id"
+                          class="cw-item"
+                          :class="{ 'is-on': sourceDocId === d.id }"
+                          @click="sourceDocId = d.id"
+                        >
+                          <span class="cw-item-t">{{ d.title }}</span>
+                          <span class="cw-item-e">{{ d.ext || '—' }}</span>
+                        </li>
+                      </ul>
+                      <div v-else class="cw-empty">文件库里还没有源码文件</div>
+                      <div class="cw-foot">
+                        <el-switch v-model="destroySourceFile" size="small" active-text="销毁源文件" />
+                        <el-button
+                          type="danger"
+                          plain
+                          size="small"
+                          :loading="absorbing"
+                          :disabled="!sourceDocId"
+                          @click="absorbSourceNow"
+                        >
+                          吸收并销毁
+                        </el-button>
+                      </div>
+                    </div>
+                  </section>
                 </div>
+
+                <!-- 预览结果：会抽出哪些基因 -->
+                <section v-if="codePreview" class="code-preview">
+                  <header class="cp-head">
+                    <span class="cp-title">预览：会抽出 {{ codePreview.gene_count }} 条基因</span>
+                    <span class="cp-meta">
+                      {{ codePreview.language }} · {{ codePreview.lines }} 行
+                      <template v-if="codePreview.stats?.functions">
+                        · {{ codePreview.stats.functions }} 个函数
+                      </template>
+                      <template v-if="codePreview.stats?.classes">
+                        · {{ codePreview.stats.classes }} 个类
+                      </template>
+                    </span>
+                  </header>
+                  <ul class="cp-list">
+                    <li v-for="(g, i) in codePreview.genes" :key="i" class="cp-item">
+                      <span class="cp-kind" :class="'cp-kind-' + g.kind">{{ g.kind_label }}</span>
+                      <span class="cp-g-title">{{ g.title }}</span>
+                      <span class="cp-g-prev">{{ g.preview }}</span>
+                    </li>
+                  </ul>
+                  <div v-if="!codePreview.gene_count" class="cp-empty">
+                    这段源码没能抽出基因 —— 可能没有可复用的方法经验
+                  </div>
+                </section>
+
                 <div class="src-hint">
                   销毁顺序是固定的：先蒸馏成基因、先写销毁证明，然后才删磁盘上的源文件、清掉库里的抽取正文。
                   证明没落库就不删 —— 文件没了证据也没了，等于什么都没留下。
@@ -1356,6 +1462,27 @@ async function absorbTextNow() {
   }
 }
 
+// ---- 源码预览：先看会抽出什么，再决定要不要销毁原文 ----
+const codePreview = ref(null)
+const previewing = ref(false)
+
+async function previewCodeNow() {
+  if (!absorbCode.value.trim()) return
+  previewing.value = true
+  try {
+    const r = await Api.dnaLibraryPreviewCode({
+      code: absorbCode.value,
+      filename: codeFilename.value || 'untitled',
+    })
+    codePreview.value = r
+  } catch (e) {
+    codePreview.value = null
+    ElMessage.error('预览失败：' + (e?.message || e))
+  } finally {
+    previewing.value = false
+  }
+}
+
 async function absorbCodeNow() {
   if (!absorbCode.value.trim()) {
     ElMessage.warning('先粘点源码')
@@ -1703,7 +1830,8 @@ onUnmounted(() => {
   line-height: 1.2;
 }
 .base-label { font-size: 12px; color: var(--text-secondary); }
-.base-desc { font-size: 10.5px; color: var(--text-disabled); }
+/* 全站 11px 下限；--text-disabled 对比度太低，换 --text-tertiary */
+.base-desc { font-size: 11px; color: var(--text-tertiary); }
 
 /* ============ 02 质检报告条 ============ */
 .health-strip {
@@ -2044,6 +2172,184 @@ onUnmounted(() => {
 }
 .code-alert { margin-bottom: 10px; }
 
+/* ============ 源码吸收：两种喂法 + 预览 ============ */
+.code-intro {
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--primary);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  padding: 12px 16px;
+  margin-bottom: 14px;
+}
+.code-intro-lead {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+.code-intro-lead b { color: var(--text-primary); }
+.code-intro-order {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.co-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.co-step i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--primary-bg);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+  font-style: normal;
+}
+.co-arrow { color: var(--text-tertiary); font-size: 12px; }
+.co-note {
+  margin-left: 4px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.code-ways {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 14px;
+}
+.code-way {
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cw-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-subtle);
+}
+.cw-no {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--primary);
+  font-weight: 700;
+}
+.cw-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.cw-sub { font-size: 11.5px; color: var(--text-tertiary); margin-left: auto; }
+.cw-body { padding: 12px 14px 13px; display: flex; flex-direction: column; gap: 9px; flex: 1; }
+.cw-name :deep(.el-input__inner) { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; }
+.cw-code :deep(textarea) {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+.cw-select { width: 100%; }
+.cw-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 9px;
+  border-top: 1px dashed var(--border-light);
+}
+.cw-count { font-size: 11.5px; color: var(--text-tertiary); font-family: var(--font-mono, ui-monospace, monospace); }
+.cw-btns { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+.cw-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.cw-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.cw-item:hover { background: var(--bg-subtle); }
+.cw-item.is-on {
+  border-color: var(--primary);
+  background: var(--primary-bg);
+  color: var(--text-primary);
+}
+.cw-item-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-item-e {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.cw-empty { font-size: 12px; color: var(--text-tertiary); padding: 10px 0; }
+
+.code-preview {
+  margin-top: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.cp-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-subtle);
+}
+.cp-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.cp-meta { font-size: 11.5px; color: var(--text-tertiary); font-family: var(--font-mono, ui-monospace, monospace); }
+.cp-list { list-style: none; margin: 0; padding: 6px 0; max-height: 320px; overflow: auto; }
+.cp-item {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border-light);
+}
+.cp-item:last-child { border-bottom: 0; }
+.cp-kind {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.cp-kind-method { background: rgba(91, 95, 199, .12); color: #5b5fc7; }
+.cp-kind-experience { background: rgba(16, 145, 116, .12); color: #109174; }
+.cp-kind-policy { background: rgba(191, 106, 0, .12); color: #bf6a00; }
+.cp-kind-interface { background: rgba(14, 116, 144, .12); color: #0e7490; }
+.cp-g-title { font-weight: 600; color: var(--text-primary); flex-shrink: 0; }
+.cp-g-prev {
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.cp-empty { padding: 14px; font-size: 12.5px; color: var(--text-tertiary); }
+
 .absorb-result {
   margin-top: 14px;
   padding: 11px 13px;
@@ -2199,7 +2505,7 @@ onUnmounted(() => {
   border-left: 1px solid var(--border-light);
 }
 .tp-zip {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--primary);
   background: var(--primary-bg);
   border-radius: 4px;
@@ -2436,8 +2742,8 @@ onUnmounted(() => {
 .evo-day {
   position: absolute;
   bottom: -18px;
-  font-size: 10px;
-  color: var(--text-disabled);
+  font-size: 11px;
+  color: var(--text-tertiary);
   font-family: var(--font-mono);
   white-space: nowrap;
 }

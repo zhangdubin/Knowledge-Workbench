@@ -2124,7 +2124,7 @@ html.dark .el-loading-mask { background-color: rgba(12, 13, 18, 0.66) !important
   color: rgba(255, 255, 255, 0.94);
 }
 .mobile-drawer .mobile-brand .brand-sub {
-  font-size: 10px;
+  font-size: 11px;
   color: rgba(255, 255, 255, 0.32);
   margin-top: 3px;
 }
@@ -2163,7 +2163,7 @@ html.dark .el-loading-mask { background-color: rgba(12, 13, 18, 0.66) !important
 }
 .mobile-drawer .nav-menu .el-menu-item.is-active .el-icon { color: #a7aae8; }
 .mobile-drawer .nav-group-title {
-  font-size: 10.5px;
+  font-size: 11px;
   color: rgba(255, 255, 255, 0.34);
   letter-spacing: 1.1px;
   padding: 17px 21px 7px;

@@ -819,7 +819,8 @@ watch(() => route.query.group, (v) => {
 html.dark .notes-target { color: var(--primary-light); }
 .notes-kbd {
   font-family: var(--font-mono);
-  font-size: 10px;
+  /* 10px 在 1500px 屏上几乎看不清（且低于全站 11px 下限），提到 11px */
+  font-size: 11px;
   line-height: 15px;
   padding: 0 4px;
   margin-left: 6px;
@@ -885,7 +886,7 @@ html.dark .notes-target { color: var(--primary-light); }
 .notes-search-input::-webkit-search-cancel-button { cursor: pointer; }
 .notes-search-kbd {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 16px;
   padding: 0 5px;
   border: 1px solid var(--border);
@@ -1030,8 +1031,10 @@ html.dark .notes-tagchip.is-on { color: var(--primary-light); }
 }
 .note-row-empty {
   flex-shrink: 0;
-  font-size: 10px;
-  color: var(--text-disabled);
+  /* 徽标只有「空」一个字，10px + --text-disabled 实测对比度只有 3.05，
+     读起来发灰；提到 11px 并换成 --text-tertiary（约 4.6） */
+  font-size: 11px;
+  color: var(--text-tertiary);
   border: 1px solid var(--border-light);
   border-radius: 3px;
   padding: 0 4px;
@@ -1109,6 +1112,11 @@ html.dark .note-chip { color: var(--primary-light); }
 }
 .note-row:hover .note-row-del,
 .note-row.is-active .note-row-del { opacity: 1; }
+/* 触屏没有 hover：列表行末的删除按钮在手机上一直是透明的，删不掉笔记。
+   触屏下常驻显示。 */
+@media (hover: none) {
+  .note-row-del { opacity: 1; }
+}
 .note-row-del:hover { color: var(--danger); background: var(--danger-bg); }
 
 /* 网格视图 */

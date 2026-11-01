@@ -449,7 +449,7 @@ function applyOutput() {
   font-size: 12px; max-width: 260px;
 }
 .ask-pin-kind {
-  font-size: 10.5px; padding: 0 6px; border-radius: 999px;
+  font-size: 11px; padding: 0 6px; border-radius: 999px;
   background: rgba(255, 255, 255, .55); color: var(--text-secondary);
 }
 .ask-pin-x { cursor: pointer; font-size: 12px; color: var(--text-secondary); }

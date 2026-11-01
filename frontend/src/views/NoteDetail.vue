@@ -668,7 +668,7 @@ watch(noteId, async () => {
 }
 .nd-hint kbd {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 15px;
   padding: 0 4px;
   border: 1px solid var(--border);
@@ -918,8 +918,15 @@ html.dark .nd-tag { color: var(--primary-light); }
   background: var(--bg-card);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
-  padding: 13px 14px;
+  /* 横向内边距跟主栏的 .nd-panel（16px）对齐 ——
+     原来侧栏是 14px，两栏的文字起始线差了 2px，看着没对齐 */
+  padding: 14px 16px;
   margin-bottom: var(--space-3);
+}
+/* 侧栏吸顶：正文很长时，滚下去还能看见元信息，不用再翻回顶部 */
+.nd-side {
+  position: sticky;
+  top: var(--space-4);
 }
 .nd-meta-list { display: flex; flex-direction: column; }
 .nd-meta-row {

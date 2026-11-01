@@ -1517,7 +1517,7 @@ watch(() => route.query.app, async (key) => {
 }
 .tpl-tags { display: flex; flex-wrap: wrap; gap: 3px; }
 .tpl-tag {
-  font-size: 10px;
+  font-size: 11px;
   height: 18px;
   line-height: 16px;
   padding: 0 5px;

@@ -826,7 +826,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   width: 18px;
   height: 18px;
   border-radius: var(--radius-xs);
-  font-size: 10px;
+  /* 全站最小字号下限是 11px；这个字母徽标一屏能出 48 个，10px 太糊 */
+  font-size: 11px;
   font-weight: 700;
   /* 类型图标按语义上色（数字=青、日期=绿、枚举=琥珀、开关=紫…），
      整个标签仍然保持中性底 —— 一张卡里十几种颜色会吵 */

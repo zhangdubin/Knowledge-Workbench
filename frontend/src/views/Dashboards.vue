@@ -366,6 +366,10 @@ onMounted(load)
   opacity: 0; transition: opacity var(--duration) var(--ease-out);
 }
 .dash-card:hover .dc-actions { opacity: 1; }
+/* 触屏没有 hover：卡片上的「重命名 / 删除」在手机上点不到，常驻显示。 */
+@media (hover: none) {
+  .dash-card .dc-actions { opacity: 1; }
+}
 
 .dash-add {
   min-height: 168px; display: flex; flex-direction: column;

@@ -562,6 +562,12 @@ onUnmounted(() => {
   letter-spacing: 0.6px;
   text-transform: uppercase;
   white-space: nowrap;
+  /* 「Knowledge Workbench」这行比侧栏宽，
+     不截断的话会把侧栏撑宽、或者压到右边去 ——
+     侧栏宽度是定死的，溢出就是布局破了 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .nav-menu {

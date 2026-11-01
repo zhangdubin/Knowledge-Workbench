@@ -908,6 +908,13 @@ async def import_bundle(db, path: str, *, mode: str = "merge") -> dict:
         await _clear_knowledge_layer(db)
 
     # ---- 基因 ----
+    # 目标库没有 dna_gene 表就整层跳过：基因层是可选增强，
+    # 目标机还没上这个功能，不该让整次导入失败 ——
+    # 证据层照样能导进去，那才是知识库的主体。
+    has_gene_table = await _table_exists(db, "dna_gene")
+    if genes and not has_gene_table:
+        errors.append("目标库没有 dna_gene 表，基因层本次未导入")
+        genes = []
     gene_by_uid: dict[str, int] = {}
     gene_by_fp: dict[str, int] = {}
     for g in genes:
@@ -1482,12 +1489,14 @@ def bundle_readiness(db) -> dict:
         _add("db", False, "打不开数据库")
         return {"ok": False, "checks": checks, "capabilities": capabilities}
 
+    doc_rows = chunk_rows = gene_rows = vec_rows = 0
     try:
         # ---- 表在不在 ----
         tables = set()
         try:
             tables = {r[0] for r in conn.execute(
                 "select name from sqlite_master where type='table'")}
+            _add("db", True, f"数据库可读，{len(tables)} 张表")
         except sqlite3.Error as e:
             _add("db", False, f"读表清单失败：{e}")
 
@@ -1522,9 +1531,14 @@ def bundle_readiness(db) -> dict:
         if fts5_ok:
             _add("fts5", True, "FTS5 可用")
             _add("fts_document", doc_rows > 0,
-                 f"document_fts {doc_rows} 行")
-            _add("fts_chunk", chunk_rows > 0, f"chunk_fts {chunk_rows} 行")
-            _add("fts_gene", gene_rows > 0, f"{gene_table} {gene_rows} 行")
+                 f"document_fts {doc_rows} 行"
+                 if "document_fts" in tables else "没有 document_fts 表")
+            _add("fts_chunk", chunk_rows > 0,
+                 f"chunk_fts {chunk_rows} 行"
+                 if "chunk_fts" in tables else "没有 chunk_fts 表")
+            _add("fts_gene", gene_rows > 0,
+                 f"{gene_table} {gene_rows} 行"
+                 if gene_table in tables else f"没有 {gene_table} 表")
             capabilities["fts"] = bool(doc_rows or chunk_rows or gene_rows)
 
         # ---- 向量 ----
@@ -1606,8 +1620,20 @@ def bundle_readiness(db) -> dict:
             except Exception:
                 pass
 
-    ok = all(c["ok"] for c in checks if c["key"] in
-             ("db", "fts5", "vector_index", "genes", "bundle"))
+    # 「能不能离线跑」不是「每个通道都得满」：
+    # 没有向量索引但有全文索引，照样答得出来；
+    # 没有基因层（dna_gene 表还没上线）也不影响当普通知识库用。
+    # 所以硬门槛只有三条：库能打开、FTS5 在、能打出包；
+    # 再加一条「至少有一个检索通道里有东西」，否则答什么都答不出来。
+    # 其余的通道状态由 capabilities 单独汇报，不用一个 ok 盖棺定论。
+    by_key = {c["key"]: c["ok"] for c in checks}
+    has_content = bool(doc_rows or chunk_rows or gene_rows or vec_rows)
+    ok = bool(by_key.get("db", False)
+              and by_key.get("fts5", False)
+              and by_key.get("bundle", False)
+              and has_content)
+    if not has_content:
+        _add("content", False, "库里没有任何可检索的内容")
     return {"ok": ok, "checks": checks, "capabilities": capabilities}
 
 
@@ -1617,6 +1643,9 @@ def _open_sync_conn(db):
     返回 (连接, 是否由本次调用创建)。由调用方创建的直接用、关不掉；
     自己开的那种用完要关。
 
+    支持三种入参：会话（AsyncSession/Session）、sqlite3 连接、库文件路径。
+    路径这种最省事 —— 健康检查里多半只有一个路径在手。
+
     优先只读打开：自检不该有写权限，更不该在只读模式下
     因为 WAL 的共享内存文件缺失而失败 —— 那种情况下退回普通连接。
     """
@@ -1624,14 +1653,17 @@ def _open_sync_conn(db):
         return db, False
 
     path = None
-    ss = getattr(db, "sync_session", None)
-    try:
-        if ss is not None:
-            path = ss.get_bind().url.database
-        else:
-            path = db.get_bind().url.database
-    except Exception:
-        path = None
+    if isinstance(db, (str, os.PathLike)):
+        path = str(db)
+    else:
+        ss = getattr(db, "sync_session", None)
+        try:
+            if ss is not None:
+                path = ss.get_bind().url.database
+            else:
+                path = db.get_bind().url.database
+        except Exception:
+            path = None
     if not path:
         return None, False
     path = os.path.abspath(path)

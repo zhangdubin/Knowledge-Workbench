@@ -258,6 +258,19 @@ async def ask(payload: AskIn, db: AsyncSession = Depends(get_db),
     if not payload.question.strip():
         raise HTTPException(400, "问题为空")
 
+    # 离线模式：模型调用要网络，断网时改成「直答」——
+    # 把养料库里的基因与原文原样端出来，不做生成。
+    # 宁可给不出漂亮答案，也不要给一个编出来的答案。
+    try:
+        from ..services import dna_library
+        if await dna_library.is_offline(db):
+            off = await dna_library.answer_offline(db, payload.question, limit=5)
+            return {"answer": off["text"], "context_count": len(off["citations"]),
+                    "sources": off["citations"], "offline": True,
+                    "genes": off["genes"]}
+    except Exception:
+        pass
+
     context = list(payload.context or [])
     sources: list[dict] = []
 
@@ -273,4 +286,3 @@ async def ask(payload: AskIn, db: AsyncSession = Depends(get_db),
 
     answer = await ai_svc.ask(payload.question, context)
     return {"answer": answer, "context_count": len(context), "sources": sources}
-

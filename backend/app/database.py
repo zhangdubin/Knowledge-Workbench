@@ -273,6 +273,11 @@ async def init_db():
     from .services import docindex
     async with engine.begin() as conn:
         await docindex.ensure_index_tables(conn)
+        # 基因级索引：养料库自己的全文索引。
+        # 与块级索引分开的理由：基因的粒度、生命周期、检索口径都不同
+        # （块随文档重切，基因跨文档长期存在）。
+        from .services import dna_library
+        await dna_library.ensure_gene_fts(conn)
 
     # 存量迁移 + 启动期修补（均为幂等，只在需要时动手）
     try:

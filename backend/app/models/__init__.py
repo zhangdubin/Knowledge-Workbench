@@ -5,6 +5,7 @@ from sqlalchemy import (
     Text,
     DateTime,
     Boolean,
+    Float,
     ForeignKey,
     JSON,
     LargeBinary,
@@ -356,6 +357,55 @@ class DocumentChunk(Base):
     )
 
 
+# ============ DNA 养料库：基因 ============
+class DnaGene(Base):
+    """一条基因 —— 养料库里最小的可复用知识单元
+
+    「养料」（喂给模型的资料）到了 DNA 模块这一层会被拆成两类东西：
+      结构层：文档、章节、块 —— 东西**长什么样**
+      基因层：事实、方法、经验、接口、约定 —— 东西**能做什么**
+
+    为什么要多这一层：文档是给机器读的原料，人和模型真正需要复用的是
+    「怎么做」「踩过什么坑」「这个接口长什么样」。把这些抽成独立的基因，
+    才能跨文档复用、能单独检索、能在离线时直答、能统计哪些知识真被用过。
+
+    源码的吸收走的是同一条路：蒸馏出的方法与经验进这里，
+    **原文不留**（meta.destroyed 里留销毁证明：指纹、时间、文件名）。
+    留证据不留原文，是「吸收后销毁」这个要求能落地的唯一办法。
+
+    uid 是跨库稳定的身份（内容指纹派生），打包到别的机器再导回来，
+    靠它认出「这条基因那边已经有了」，不会变成两条。
+    """
+    __tablename__ = "dna_gene"
+
+    id = Column(Integer, primary_key=True)
+    uid = Column(String(64), nullable=False, unique=True, index=True)
+    kind = Column(String(16), nullable=False, index=True)     # fact/method/experience/interface/policy
+    title = Column(String(256), default="")
+    content = Column(Text, default="")
+    summary = Column(String(512), default="")
+    tags = Column(JSON, default=list)
+    # 来源：基因是从哪来的。code 表示来自源码（原文已销毁）
+    source_kind = Column(String(24), default="", index=True)  # document/record/note/code/manual/derived
+    source_ref = Column(String(64), default="", index=True)   # doc-3 / record-14 / code:<sha256>
+    source_title = Column(String(256), default="")
+    fingerprint = Column(String(64), default="", index=True)   # 内容指纹，去重与变更检测用
+    confidence = Column(Float, default=0.7)
+    # active 在用 / superseded 被更新的版本取代 / archived 归档 / destroyed 原文已销毁（基因本身还在）
+    status = Column(String(16), default="active", index=True)
+    superseded_by = Column(Integer, nullable=True)
+    # 表达度：这条基因被引用/直答过多少次。冷基因提示复核，热基因说明真在用
+    usage_count = Column(Integer, default=0)
+    last_used_at = Column(DateTime, nullable=True)
+    meta = Column(JSON, default=dict)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_gene_kind_status", "kind", "status"),
+    )
+
+
 # ============ 系统元信息（向量维度等运行时状态） ============
 class SysMeta(Base):
     __tablename__ = "sys_meta"
@@ -514,5 +564,5 @@ __all__ = [
     "RelationDef", "RelationRecord", "Attachment", "View", "App",
     "Document", "DocumentLink", "DocumentChunk", "SysMeta",
     "Dashboard", "Role", "User", "UserSession", "AuditLog",
-    "NoteGroup", "NavItem",
+    "NoteGroup", "NavItem", "DnaGene",
 ]

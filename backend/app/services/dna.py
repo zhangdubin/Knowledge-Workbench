@@ -37,6 +37,7 @@ from sqlalchemy.orm import defer
 
 from ..config import settings
 from ..models import (
+    DnaGene,
     Document,
     DocumentChunk,
     DocumentLink,
@@ -1156,6 +1157,9 @@ GRAPH_EDGE_LIMIT = 400
 # 每篇文件最多收多少小节。一篇长手册能有几十个标题，全收进来节点立刻爆炸，
 # 而一屏里人只会盯着十几个标题看。
 GRAPH_SECTIONS_PER_DOC = 12
+# 脉络图里最多放多少条基因。基因是「知识层」，
+# 放太多会盖住结构层 —— 图要一眼看出脉络，不是把基因清单铺开。
+GRAPH_GENE_LIMIT = 60
 
 # 节点 id 前缀：看一眼就知道点它会跳到哪儿
 DOC_PREFIX = "doc-"
@@ -1501,6 +1505,65 @@ async def build_graph(db: AsyncSession, principal: Principal) -> dict:
         uniq.append(e)
     edges = uniq
 
+    # ---------- 基因层：知识本身与它的出处 ----------
+    #
+    # 为什么脉络图要加这一层：结构层说的是「东西在哪儿」，
+    # 基因层说的是「这东西是什么、能怎么用」。
+    # 只画结构，读者看到的是一棵树；加上基因层，
+    # 才看得到「哪条经验是从哪份资料里抽出来的、现在被用过几次」。
+    #
+    # 边叫 encode（编码）：基因 ← 出处，方向是「基因指向它的来源」。
+    # 这个方向是刻意的：知识是主动的，资料是被读的。
+    gene_rows = (await db.execute(
+        select(DnaGene).where(DnaGene.status == "active")
+        .order_by(DnaGene.kind, DnaGene.id)
+        .limit(GRAPH_GENE_LIMIT))).scalars().all()
+    lib_node: dict | None = None
+    gene_nodes: list[dict] = []
+    gene_edges: list[dict] = []
+    for g in gene_rows:
+        gid = f"gene-{g.id}"
+        gene_nodes.append({
+            "id": gid,
+            "kind": "gene",
+            "ref_id": g.id,
+            "label": g.title or "（无标题基因）",
+            "meta": {
+                "gene_kind": g.kind,
+                "source_kind": g.source_kind or "",
+                "source_title": g.source_title or "",
+                "usage": int(g.usage_count or 0),
+                "confidence": round(float(g.confidence or 0), 2),
+                "destroyed": bool((g.meta or {}).get("destroyed")),
+            },
+        })
+        src_ref = (g.source_ref or "").strip()
+        target = ""
+        if src_ref.startswith("doc-"):
+            did = src_ref[4:]
+            if did.isdigit() and f"doc-{did}" in {n["id"] for n in nodes}:
+                target = f"doc-{did}"
+        elif src_ref.startswith("record-"):
+            rid = src_ref[7:]
+            if rid.isdigit() and f"rec-{rid}" in {n["id"] for n in nodes}:
+                target = f"rec-{rid}"
+        if not target:
+            # 源码吸收来的基因没有文件来源，挂到「养料库」这个根节点上 ——
+            # 否则它们就是一群孤立的点，图上既没有位置也没有来路。
+            if lib_node is None:
+                lib_node = {
+                    "id": "lib", "kind": "library", "label": "DNA 养料库",
+                    "meta": {"note": "源码吸收来的基因在这里汇聚"},
+                }
+            target = "lib"
+        gene_edges.append({"source": gid, "target": target,
+                           "kind": "encode",
+                           "label": "编码自" if target != "lib" else "蒸馏自源码"})
+    if lib_node is not None:
+        nodes.append(lib_node)
+    nodes.extend(gene_nodes)
+    edges.extend(gene_edges)
+
     # ---------- 规模控制与稳定排序 ----------
 
     nodes.sort(key=lambda n: (n["kind"], _id_sort_key(n["id"])))
@@ -1526,8 +1589,16 @@ async def build_graph(db: AsyncSession, principal: Principal) -> dict:
         "documents": sum(1 for n in nodes if n["kind"] == "document"),
         "sections": sum(1 for n in nodes if n["kind"] == "section"),
         "records": sum(1 for n in nodes if n["kind"] == "record"),
+        "genes": sum(1 for n in nodes if n["kind"] == "gene"),
         "edges": len(edges),
         "truncated": truncated,
+        # 分层给前端排双螺旋用：知识（基因）/ 结构（文件与章节）/ 证据（记录）
+        "layers": {
+            "knowledge": sum(1 for n in nodes if n["kind"] == "gene"),
+            "structure": sum(1 for n in nodes
+                             if n["kind"] in ("document", "section")),
+            "evidence": sum(1 for n in nodes if n["kind"] == "record"),
+        },
     }
     return {
         "nodes": nodes,

@@ -1167,6 +1167,15 @@ async def _collect_chunks(db: AsyncSession, doc_ids: list[int], query: str,
 
 
 
+async def _offline_mode(db: AsyncSession) -> bool:
+    """离线模式开着吗（断网时由 DNA 养料库接管检索）"""
+    try:
+        from .services import dna_library
+        return await dna_library.is_offline(db)
+    except Exception:
+        return False
+
+
 async def search_documents(
     db: AsyncSession,
     query: str,
@@ -1195,7 +1204,12 @@ async def search_documents(
     if mode in ("hybrid", "keyword"):
         fts_hits = await docindex.fts_search(db, q, limit * 3)
 
-    if mode in ("hybrid", "semantic"):
+    # 离线模式：语义通道要调 embedding 接口（要网络），断网时关掉它，
+    # 只留全文检索与结构定位 —— 检索质量会降，但系统还能用。
+    # 这就是「断网时依据 DNA 养料库支撑整体系统运行」的落点：
+    # 少一条通道，总比整个检索瘫掉强。
+    offline = await _offline_mode(db)
+    if mode in ("hybrid", "semantic") and not offline:
         qvec = await embed_svc.embed_query(q)
         if qvec:
             # 要的块数不能只按文档数给：向量通道是块级的，

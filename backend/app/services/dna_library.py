@@ -464,20 +464,56 @@ async def absorb_document(db: AsyncSession, doc: Document) -> dict:
     """
     genes = extract_genes_from_markdown(doc.extracted_text or "", title=doc.title or "")
     created = updated = 0
+    touched: list[int] = []
     for g in genes:
         try:
-            _, is_new = await upsert_gene(
+            gene, is_new = await upsert_gene(
                 db, kind=g["kind"], title=g["title"], content=g["content"],
                 tags=g.get("tags"), source_kind="document",
                 source_ref=f"doc-{doc.id}", source_title=doc.title or "",
                 confidence=g.get("confidence", 0.7), meta=g.get("meta") or {})
+            touched.append(gene.id)
             created += 1 if is_new else 0
             updated += 0 if is_new else 1
         except ValueError:
             continue
+    # 这次抽取没再产出的旧基因 → 说明原文改了、那一节没了。
+    # 留着它等于让过期知识继续参与检索。
+    stale = await _mark_stale_genes(db, source_ref=f"doc-{doc.id}",
+                                   touched_ids=touched)
     await db.commit()
     return {"document_id": doc.id, "genes": created + updated,
-            "created": created, "updated": updated}
+            "created": created, "updated": updated, "stale": stale}
+
+
+async def _mark_stale_genes(db: AsyncSession, *, source_ref: str,
+                            touched_ids: list[int]) -> int:
+    """把这次抽取没再产出的旧基因标成「已被取代」
+
+    场景：文档改了、抽取规则改了 —— 某些段落不再产生基因。
+    那些旧基因如果不处理，会一直留在库里参与检索，
+    答案里就会混着早就没有出处的旧知识。
+
+    只标取代、不删除：旧基因可能被人引用过。
+    """
+    if not source_ref:
+        return 0
+    try:
+        stmt = select(DnaGene).where(
+            DnaGene.source_ref == source_ref,
+            DnaGene.status == "active")
+        olds = (await db.execute(stmt)).scalars().all()
+        touched = set(touched_ids or [])
+        stale = [g for g in olds if g.id not in touched]
+        for g in stale:
+            g.status = "superseded"
+            g.updated_at = _now()
+        if stale:
+            await remove_gene_index(db, [g.id for g in stale])
+        return len(stale)
+    except Exception as e:
+        log.warning("清理过期基因失败：%s", e)
+        return 0
 
 
 async def absorb_text(db: AsyncSession, text_body: str, *, title: str = "",
@@ -1057,8 +1093,14 @@ async def gene_health(db: AsyncSession) -> dict:
     by_kind: dict[str, int] = {}
     for g in genes:
         by_kind[g.kind] = by_kind.get(g.kind, 0) + 1
+    # 被取代的基因不在这份列表里（上面只取 active），
+    # 历史版本的数量单独查 —— 它们不参与检索，但要看得见。
+    superseded_count = (await db.execute(
+        select(func.count()).select_from(DnaGene)
+        .where(DnaGene.status == "superseded"))).scalar_one()
     return {
         "total": len(genes),
+        "superseded": int(superseded_count or 0),
         "by_kind": by_kind,
         "used": sum(1 for g in genes if (g.usage_count or 0) > 0),
         "usage_total": sum((g.usage_count or 0) for g in genes),

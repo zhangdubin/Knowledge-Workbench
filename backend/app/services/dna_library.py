@@ -39,7 +39,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, update, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import DnaGene, Document, DocumentChunk, EntityRecord
@@ -216,6 +216,48 @@ def _python_scan_genes(genes: list[DnaGene], query: str, limit: int) -> list[dic
 
 # ============ 基因的读写 ============
 
+async def _supersede_old(db: AsyncSession, gene: DnaGene) -> None:
+    """同一处知识变了 → 旧基因标记为「已被取代」（突变）
+
+    判定「同一处」：
+      - 文档来源：同一篇文档 + 同一种类 + 同一个标题
+        （标题就是这一节的位置；同文档不同节是不同基因，不能互相取代）
+      - 源码来源：同一个文件名 + 同一种类
+        （源码每次蒸馏的指纹都不同，但「这个文件的那条方法」是同一处）
+
+    取代而不是删除：旧知识仍然可能被人引用过，
+    删掉它等于让引用它的地方变成悬空指针。
+    """
+    if not gene.source_ref and not gene.source_title:
+        return
+    try:
+        if gene.source_kind == "code":
+            stmt = select(DnaGene).where(
+                DnaGene.source_kind == "code",
+                DnaGene.source_title == gene.source_title,
+                DnaGene.kind == gene.kind,
+                DnaGene.status == "active",
+                DnaGene.id != gene.id)
+        else:
+            stmt = select(DnaGene).where(
+                DnaGene.source_ref == gene.source_ref,
+                DnaGene.kind == gene.kind,
+                DnaGene.title == gene.title,
+                DnaGene.status == "active",
+                DnaGene.id != gene.id)
+        olds = (await db.execute(stmt.limit(5))).scalars().all()
+        for old in olds:
+            old.status = "superseded"
+            old.superseded_by = gene.id   # 指向新基因的 id（列是 Integer）
+            old.updated_at = _now()
+            await db.flush()
+            # 旧的也要从检索索引里摘掉：它已经不是当前结论了，
+            # 留着就是在答案里混进过期知识。
+            await remove_gene_index(db, [old.id])
+    except Exception as e:
+        log.warning("标记基因取代关系失败：%s", e)
+
+
 async def upsert_gene(db: AsyncSession, *, kind: str, title: str, content: str,
                       summary: str = "", tags: list[str] | None = None,
                       source_kind: str = "", source_ref: str = "",
@@ -264,6 +306,9 @@ async def upsert_gene(db: AsyncSession, *, kind: str, title: str, content: str,
         status="active", meta=meta or {}, created_at=_now(), updated_at=_now())
     db.add(gene)
     await db.flush()
+    # 取代关系要等新基因拿到 id 之后才能写 ——
+    # superseded_by 指向的是新基因，id 还没有的时候写进去是空。
+    await _supersede_old(db, gene)
     await index_gene(db, gene)
     return gene, True
 
@@ -525,7 +570,8 @@ async def absorb_code(db: AsyncSession, code: str, filename: str, *,
 async def absorb_source_file(db: AsyncSession, rel_path: str, *,
                              destroy: bool = True,
                              destroy_file: bool = False,
-                             document_id: int | None = None) -> dict:
+                             document_id: int | None = None,
+                             display_name: str = "") -> dict:
     """从文件库里取一个源码文件，蒸馏成基因，并（可选）销毁源文件
 
     「吸收方法经验后销毁源码」落地在这里：蒸馏完、销毁证明写进库之后，
@@ -551,7 +597,11 @@ async def absorb_source_file(db: AsyncSession, rel_path: str, *,
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         raise OSError(f"读取失败：{e}") from e
-    result = await absorb_code(db, text, path.name, destroy=destroy)
+    # 文件库里存的是内容寻址的名字（一串 sha256），
+    # 销毁证明里要写**用户认识的那个名字**（demo_ingest.py）——
+    # 以后核验「这个文件确实没了」时，得能对上人认识的名字。
+    name = display_name or path.name
+    result = await absorb_code(db, text, name, destroy=destroy)
     result["source_path"] = rel_path
     result["file_deleted"] = False
     result["document_cleared"] = False
@@ -728,10 +778,14 @@ async def mark_gene_used(db: AsyncSession, gene_ids: list[int]) -> None:
     if not gene_ids:
         return
     try:
+        # 用 ORM 的 update 语句，不用裸 SQL：
+        # text() 不会把元组展开成 IN 子句（那是 bindparam(expanding=True) 才有的事），
+        # 写出来是 `id in :ids` 绑一个元组 —— SQLite 不认，
+        # 报错被吞掉之后，表达度就永远是 0（一个很安静的坏掉的功能）。
         await db.execute(
-            text("update dna_gene set usage_count = usage_count + 1, "
-                 "last_used_at = :now where id in :ids"),
-            {"now": _now(), "ids": tuple(gene_ids)})
+            update(DnaGene).where(DnaGene.id.in_(gene_ids)).values(
+                usage_count=DnaGene.usage_count + 1,
+                last_used_at=_now()))
         await db.commit()
     except Exception as e:
         log.warning("基因表达度更新失败：%s", e)

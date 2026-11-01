@@ -102,14 +102,22 @@ async def overview(db: AsyncSession = Depends(get_db),
 @router.get("/genes")
 async def genes(kind: str = Query("", description="按种类过滤"),
                 q: str = Query("", description="标题/正文模糊过滤"),
+                status: str = Query("active",
+                                    description="active 当前 / superseded 已被取代 / all 全部"),
                 limit: int = Query(50, le=500),
                 offset: int = Query(0),
                 db: AsyncSession = Depends(get_db),
                 principal: Principal = Depends(current_principal)):
-    """基因列表"""
+    """基因列表
+
+    默认只给「当前」基因 —— 被取代的旧版本是历史，不是知识。
+    要看历史就显式要 status=superseded 或 all。
+    """
     stmt = select(DnaGene)
     if kind:
         stmt = stmt.where(DnaGene.kind == kind)
+    if status and status != "all":
+        stmt = stmt.where(DnaGene.status == status)
     if q:
         stmt = stmt.where(DnaGene.title.like(f"%{q}%"))
     total = (await db.execute(
@@ -237,7 +245,8 @@ async def absorb_source(body: AbsorbSourceBody, db: AsyncSession = Depends(get_d
     try:
         return await svc.absorb_source_file(
             db, doc.path, destroy=body.destroy,
-            destroy_file=body.destroy_file, document_id=doc.id)
+            destroy_file=body.destroy_file, document_id=doc.id,
+            display_name=doc.filename or doc.title or "")
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:

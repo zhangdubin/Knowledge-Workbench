@@ -249,6 +249,11 @@
                 {{ k.label }} {{ k.count }}
               </el-radio-button>
             </el-radio-group>
+            <el-select v-model="statusFilter" size="small" class="status-filter" @change="loadGenes">
+              <el-option label="当前基因" value="active" />
+              <el-option label="已被取代" value="superseded" />
+              <el-option label="全部" value="all" />
+            </el-select>
           </div>
         </div>
         <el-table :data="genes" class="ptable" v-loading="loading && !genes.length" row-key="id">
@@ -264,6 +269,13 @@
             </template>
           </el-table-column>
           <el-table-column prop="source_title" label="来源" min-width="160" />
+          <el-table-column label="状态" width="94">
+            <template #default="{ row }">
+              <span v-if="row.status === 'superseded'" class="gene-superseded">已被取代</span>
+              <span v-else-if="row.meta && row.meta.destroyed" class="gene-destroyed">已销毁源</span>
+              <span v-else class="gene-live">当前</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="usage_count" label="表达度" width="90" sortable />
           <el-table-column label="置信" width="80">
             <template #default="{ row }">{{ row.confidence }}</template>
@@ -310,6 +322,7 @@ const searching = ref(false)
 const drilling = ref(false)
 const offlineLocal = ref(false)
 const kindFilter = ref('')
+const statusFilter = ref('active')
 const query = ref('')
 const absorbTab = ref('text')
 const absorbText = ref('')
@@ -365,7 +378,7 @@ async function loadAll() {
   try {
     const [ov, list] = await Promise.all([
       Api.dnaLibraryOverview(),
-      Api.dnaLibraryGenes({ kind: kindFilter.value, limit: 200 }),
+      Api.dnaLibraryGenes({ kind: kindFilter.value, status: statusFilter.value, limit: 200 }),
     ])
     overview.value = ov
     offlineLocal.value = !!ov.offline
@@ -394,7 +407,8 @@ async function loadSourceDocs() {
 
 async function loadGenes() {
   try {
-    const list = await Api.dnaLibraryGenes({ kind: kindFilter.value, limit: 200 })
+    const list = await Api.dnaLibraryGenes({
+      kind: kindFilter.value, status: statusFilter.value, limit: 200 })
     genes.value = list.items || []
   } catch (e) {
     ElMessage.error('读基因清单失败：' + (e?.message || e))
@@ -761,7 +775,14 @@ onMounted(loadAll)
   color: var(--text-secondary); margin: 0; padding: 12px 16px;
   background: var(--bg-subtle);
 }
-.kind-filter { margin-left: auto; }
+.kind-filter { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.status-filter { width: 116px; }
+.gene-superseded {
+  font-size: 11px; color: var(--text-tertiary);
+  background: var(--bg-subtle); border: 1px dashed var(--border-light);
+  border-radius: 5px; padding: 1px 6px;
+}
+.gene-live { font-size: 11px; color: var(--success-text); }
 
 @media (max-width: 768px) {
   .base-strip { border-left: none; padding-left: 0; }

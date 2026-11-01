@@ -1200,9 +1200,28 @@ async def search_documents(
     fts_hits: list[dict] = []
     vec_hits: list[dict] = []
     vec_chunk_hits: list[dict] = []
+    gene_hits: list[dict] = []
+    gene_doc_ids: list[int] = []
 
     if mode in ("hybrid", "keyword"):
         fts_hits = await docindex.fts_search(db, q, limit * 3)
+        # 基因通道：养料库里已经抽好的可复用知识。
+        # 它跟原文通道的区别是「结论」与「原文」的关系 ——
+        # 原文通道要现翻原文自己找答案，基因通道直接命中结论。
+        # 这条通道让「同一个问题第二次问」更快、更准。
+        try:
+            from . import dna_library
+            gene_hits = await dna_library.search_genes(db, q, limit=limit)
+            for g in gene_hits:
+                src = (g["gene"].source_ref or "")
+                if src.startswith("doc-"):
+                    did = src[4:]
+                    if did.isdigit():
+                        gene_doc_ids.append(int(did))
+        except Exception:
+            # 基因层是增强不是依赖：它坏了也不该让检索垮掉
+            gene_hits = []
+            gene_doc_ids = []
 
     # 离线模式：语义通道要调 embedding 接口（要网络），断网时关掉它，
     # 只留全文检索与结构定位 —— 检索质量会降，但系统还能用。
@@ -1225,6 +1244,11 @@ async def search_documents(
         ranked[hit["document_id"]] = ranked.get(hit["document_id"], 0.0) + 1.0 / (K + rank + 1)
     for rank, hit in enumerate(vec_hits):
         ranked[hit["document_id"]] = ranked.get(hit["document_id"], 0.0) + 1.0 / (K + rank + 1)
+    # 基因通道也投票，但一份文档只投一票：
+    # 同一个基因命中多次不代表这份文档更重要，
+    # 而投票数应该反映「有多少条独立证据指向它」。
+    for did in dict.fromkeys(gene_doc_ids):
+        ranked[did] = ranked.get(did, 0.0) + 1.0 / (K + 1)
 
     if not ranked:
         return {"items": [], "query": q, "mode": mode,
@@ -1241,6 +1265,16 @@ async def search_documents(
 
     fts_ids = {h["document_id"] for h in fts_hits}
     vec_ids = {h["document_id"] for h in vec_hits}
+    gene_ids = set(gene_doc_ids)
+    if gene_hits:
+        # 表达度：这条基因被检索命中了，就说明它有用。
+        # 冷基因（从没被命中过）提示复核 —— 库不是只进不出。
+        try:
+            from . import dna_library
+            await dna_library.mark_gene_used(
+                db, [g["gene"].id for g in gene_hits])
+        except Exception:
+            pass
 
     # 块级素材：向量命中的块（免费）+ 关键词在块级补扫（仅 with_chunks 时）
     chunk_map: dict[int, list[dict]] = {}
@@ -1282,7 +1316,8 @@ async def search_documents(
         item = serialize(d)
         item["score"] = round(score, 6)
         item["matched_by"] = [
-            m for m, s in (("keyword", fts_ids), ("semantic", vec_ids)) if did in s
+            m for m, s in (("keyword", fts_ids), ("semantic", vec_ids),
+                           ("gene", gene_ids)) if did in s
         ]
         # 结构命中：命中的是标题而不是正文，单独标出来，
         # 用户才能分清「正文里提到了」和「文件里真有这么一节」

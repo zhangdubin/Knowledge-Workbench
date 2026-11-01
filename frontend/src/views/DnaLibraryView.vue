@@ -363,6 +363,69 @@
                   证明没落库就不删 —— 文件没了证据也没了，等于什么都没留下。
                 </div>
               </el-tab-pane>
+              <!-- 第三个 tab：把一整棵源码树交进来 -->
+              <el-tab-pane label="源码树（整系统）" name="tree">
+                <div class="tree-pick">
+                  <button type="button" class="pick-btn" @click="pickDir">
+                    <el-icon><FolderOpened /></el-icon>选整个目录
+                  </button>
+                  <button type="button" class="pick-btn" @click="pickZip">
+                    <el-icon><Box /></el-icon>选一个 zip
+                  </button>
+                  <input
+                    ref="dirInput" type="file" webkitdirectory multiple hidden
+                    @change="onDirPicked"
+                  />
+                  <input
+                    ref="zipInput" type="file" accept=".zip" hidden
+                    @change="onZipPicked"
+                  />
+                  <span class="pick-hint">
+                    目录保留相对路径（后端按路径建目录结构）；zip 在服务端安全解压
+                  </span>
+                </div>
+
+                <div v-if="treeFiles.length" class="tree-pending">
+                  <div class="tp-count">
+                    <span class="tp-num">{{ treeFiles.length }}</span>
+                    <span class="tp-unit">个文件</span>
+                    <span class="tp-size">{{ treeSizeMb }} MB</span>
+                    <span v-if="isZipPick" class="tp-zip">zip</span>
+                  </div>
+                  <el-input
+                    v-model="treeTitle" size="small" class="tp-title"
+                    placeholder="这次学习的名字"
+                  />
+                  <el-button type="primary" :loading="uploading" @click="startLearn">
+                    <el-icon><VideoPlay /></el-icon>开始学习
+                  </el-button>
+                </div>
+
+                <div v-if="uploadPhase" class="tree-progress">
+                  <div class="tprog-head">
+                    <span class="tprog-stage" :class="treePhaseTone">{{ treePhaseText }}</span>
+                    <span class="tprog-hint">{{ treePhaseHint }}</span>
+                  </div>
+                  <el-progress
+                    :percentage="uploadPhase === 'upload' ? uploadPercent : lastJobPercent"
+                    :stroke-width="6"
+                    :status="uploadPhase === 'parse' && lastJobPercent >= 100 ? 'success' : undefined"
+                  />
+                </div>
+
+                <div class="tree-note" :class="{ 'is-open': treeNoteOpen }">
+                  <div class="tn-head" @click="treeNoteOpen = !treeNoteOpen">
+                    <el-icon><InfoFilled /></el-icon>
+                    <span class="tn-lead">源码会被静态分析成基因，<b>原文不入库</b></span>
+                    <el-icon class="tn-arrow"><ArrowRight /></el-icon>
+                  </div>
+                  <ul v-show="treeNoteOpen" class="tn-body">
+                    <li>每个文件解析完先写销毁证明（sha256 + 时间 + 文件名），<b>然后</b>才删源码 —— 顺序是固定的。</li>
+                    <li>证明没落库就不删：文件没了证据也没了，等于什么都没留下。</li>
+                    <li>进库的只有蒸馏出的方法与经验；资料原文永远不进养料库。</li>
+                  </ul>
+                </div>
+              </el-tab-pane>
             </el-tabs>
 
             <div v-if="lastAbsorb" class="absorb-result">
@@ -425,6 +488,167 @@
               </div>
             </div>
           </div>
+
+          <!-- 05 之二、学习任务：后台在读源码，前端只管报进度 -->
+          <div class="jobs-block">
+            <div class="jobs-head">
+              <h3>学习任务</h3>
+              <span class="jobs-note">后台逐个文件读源码、抽基因；进度每 1.5 秒自己刷一次</span>
+              <span class="sec-rule" />
+              <el-button size="small" :loading="jobsLoading" @click="loadJobs">
+                <el-icon><Refresh /></el-icon>刷新
+              </el-button>
+            </div>
+
+            <div v-if="!jobs.length" class="jobs-empty">
+              还没有学习任务 —— 把一整个系统的源码交进来，它会自己读、自己学
+            </div>
+
+            <ul v-else class="jobs-list">
+              <li v-for="j in jobs" :key="j.id" class="job-row" :class="j.status">
+                <div class="job-top">
+                  <span class="job-status" :class="j.status">{{ jobStatusLabel(j.status) }}</span>
+                  <span class="job-title">{{ j.title }}</span>
+                  <span class="job-ops">
+                    <el-button
+                      v-if="j.status === 'running' || j.status === 'pending'"
+                      size="small" text @click="cancelJob(j)"
+                    >取消</el-button>
+                    <el-button size="small" text @click="toggleJobDetail(j.id)">
+                      {{ expandedJobs.includes(j.id) ? '收起' : '明细' }}
+                    </el-button>
+                  </span>
+                </div>
+                <el-progress
+                  :percentage="Math.round(j.percent || 0)"
+                  :stroke-width="4"
+                  :show-text="false"
+                  :status="j.status === 'failed' ? 'exception' : (j.status === 'done' ? 'success' : undefined)"
+                />
+                <div class="job-meta">
+                  <span v-if="j.current" class="job-current">当前解析：{{ j.current }}</span>
+                  <span>生成 <b>{{ j.created || 0 }}</b> 条基因</span>
+                  <span>跳过 {{ j.skipped || 0 }}</span>
+                  <span>失败 {{ j.failed || 0 }}</span>
+                  <span>耗时 {{ jobElapsed(j) }}</span>
+                  <span v-if="j.error" class="job-err">{{ j.error }}</span>
+                </div>
+                <div v-show="expandedJobs.includes(j.id)" class="job-detail">
+                  <div v-for="(d, i) in j.detail || []" :key="i" class="jd-row">
+                    <span class="jd-file">{{ d.file }}</span>
+                    <span class="jd-lang">{{ d.language || '—' }}</span>
+                    <span class="jd-lines">{{ d.lines || 0 }} 行</span>
+                    <span class="jd-genes">{{ d.genes || 0 }} 基因</span>
+                    <span class="jd-destroy" :class="{ on: d.destroyed }">
+                      {{ d.destroyed ? '已销毁' : '未销毁' }}
+                    </span>
+                    <span class="jd-note">{{ d.note || d.status }}</span>
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 06 自进化账本 ============ -->
+      <section class="section">
+        <div class="sec-head">
+          <span class="sec-no">06</span>
+          <h3 class="sec-title">自进化账本</h3>
+          <span class="sec-note">不断喂养，知识自己会长：资料变基因，基因连成网，网上的知识被检索、被引用、被直答</span>
+          <span class="sec-rule" />
+        </div>
+
+        <div class="panel">
+          <div class="evo-gens">
+            <div v-for="g in evolution?.generations || []" :key="g.stage" class="gen-card">
+              <div class="gen-stage">{{ g.stage }}</div>
+              <div class="gen-value">{{ g.value }}</div>
+              <div class="gen-label">{{ g.label }}</div>
+              <div class="gen-note">{{ g.note }}</div>
+              <div v-if="g.stage === '二生三' && (gaps?.open_count ?? 0) > 0" class="gen-foot">
+                还差 {{ gaps.open_count }} 个问题没补上
+              </div>
+            </div>
+          </div>
+
+          <div class="evo-totals">
+            <span>基因 <b>{{ evolution?.totals?.genes_total ?? 0 }}</b></span>
+            <span>在用 <b>{{ evolution?.totals?.genes_active ?? 0 }}</b></span>
+            <span>被引用 <b>{{ evolution?.totals?.usage_total ?? 0 }}</b> 次</span>
+            <span>资料 <b>{{ evolution?.totals?.documents ?? 0 }}</b></span>
+            <span>记录 <b>{{ evolution?.totals?.records ?? 0 }}</b></span>
+            <span>吸收轮次 <b>{{ evolution?.totals?.absorb_rounds ?? 0 }}</b></span>
+          </div>
+
+          <div class="evo-chart-wrap">
+            <div class="evo-chart-title">
+              成长曲线 · 按天新增基因
+              <span v-if="evoTimeline.length" class="evo-latest">最近一天 {{ evoTimeline[evoTimeline.length - 1].day }}</span>
+            </div>
+            <div class="evo-chart">
+              <div
+                v-for="(d, i) in evoTimeline" :key="d.day" class="evo-col"
+                :class="{ 'is-latest': i === evoTimeline.length - 1 }"
+                :title="`${d.day}：新增 ${d.genes} 条基因`"
+              >
+                <span class="evo-bar" :style="{ height: evoBarH(d.genes) + '%' }" />
+                <span class="evo-day">{{ String(d.day).slice(5) }}</span>
+              </div>
+              <div v-if="!evoTimeline.length" class="evo-empty">还没有成长记录</div>
+            </div>
+          </div>
+
+          <div class="evo-gaps">
+            <div class="gaps-head">
+              <span class="gaps-title">还答不上来的问题</span>
+              <span class="gaps-note">缺口 = 该补还没补的知识 · 被问得越多，越该先喂</span>
+              <span class="sec-rule" />
+              <span class="gaps-count">还差 {{ gaps?.open_count ?? 0 }} 个</span>
+            </div>
+
+            <div v-if="!gapList.length" class="gaps-empty">
+              还没有缺口 —— 问它答不上来的问题，它会记在这里
+            </div>
+
+            <ul v-else class="gaps-list">
+              <li v-for="g in gapList" :key="g.id" class="gap-row">
+                <span class="gap-q">{{ g.question }}</span>
+                <span v-if="(g.asked || 0) > 1" class="gap-asked">问了 {{ g.asked }} 次</span>
+                <span class="gap-last">{{ g.last_asked_at ? fmtTime(g.last_asked_at) : '' }}</span>
+                <el-button size="small" text @click="closeGap(g)">已补上</el-button>
+              </li>
+            </ul>
+          </div>
+
+          <div class="evo-feed">
+            <div class="feed-head">
+              <span class="feed-title">自动喂养</span>
+              <span class="feed-note">每隔一段时间自动吸收新资料 —— 人不用管，知识自己会长</span>
+            </div>
+            <div class="feed-row">
+              <el-switch v-model="feedEnabled" @change="saveAutoFeed" />
+              <span class="feed-label">{{ feedEnabled ? '已开启' : '已关闭' }}</span>
+              <el-input-number
+                v-model="feedInterval" :min="5" :max="1440" :step="5" size="small"
+                :disabled="!feedEnabled" @change="saveAutoFeed"
+              />
+              <span class="feed-unit">分钟一轮</span>
+              <el-button size="small" :loading="feedRunning" @click="runAutoFeed">
+                <el-icon><VideoPlay /></el-icon>立刻喂一轮
+              </el-button>
+            </div>
+            <div class="feed-last">
+              最近一次自动吸收：
+              {{ evolution?.auto_feed?.last_run_at
+                ? fmtTime(evolution.auto_feed.last_run_at)
+                : (localFeedAt ? fmtTime(localFeedAt) + '（本机触发）' : '还没有') }}
+              <span v-if="evolution?.auto_feed?.last_result" class="feed-result">
+                · {{ evolution.auto_feed.last_result }}
+              </span>
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -482,7 +706,7 @@
  *   体检 = 质检报告条；清单 = 读带结果；吸收/断网 = 工作台。
  *   泳道可以点：点一下就把清单筛到那一类（filterByKind）。
  */
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageTitle from '../components/PageTitle.vue'
 import { Api } from '../api'
@@ -642,6 +866,307 @@ async function loadAll() {
     loading.value = false
   }
   await loadSourceDocs()
+  // 账本与任务跟着页面一起刷新；它们读不到也不影响主流程
+  await Promise.all([loadEvolution(), loadJobs(), loadGaps()])
+}
+
+// ============ 源码树（整系统） ============
+const dirInput = ref(null)
+const zipInput = ref(null)
+const treeFiles = ref([])
+const treeTitle = ref('')
+const treeNoteOpen = ref(false)
+const uploading = ref(false)
+/** '' | 'upload'（上传中）| 'parse'（后台解析中）—— 上传完 ≠ 解析完 */
+const uploadPhase = ref('')
+const uploadPercent = ref(0)
+const uploadBytes = ref(0)
+
+function todayStr() {
+  const d = new Date()
+  const p2 = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`
+}
+
+function defaultTreeTitle() {
+  return `源码树 ${todayStr()}`
+}
+
+/** 上传阶段的三种说法：上传中 / 后台解析中 / 已入库 */
+const treePhaseText = computed(() => {
+  if (uploadPhase.value === 'upload') return '上传中'
+  if (uploadPhase.value === 'parse') {
+    const active = jobs.value.find((x) => x.status === 'running' || x.status === 'pending')
+    if (!active && lastJobPercent.value >= 100) return '已入库'
+    return '后台解析中'
+  }
+  return ''
+})
+
+/** 阶段的说明文字：上传完 ≠ 解析完，这两件事得分开说清楚 */
+const treePhaseHint = computed(() => {
+  if (uploadPhase.value === 'upload') {
+    return `文件正在送到服务器${uploadBytes ? `（已传 ${(uploadBytes / 1048576).toFixed(1)} MB）` : ''}`
+  }
+  if (uploadPhase.value === 'parse') {
+    if (treePhaseText.value === '已入库') {
+      return '后台解析完成 —— 基因已入库，源码按「先写证明、再删文件」的顺序处理掉了'
+    }
+    return '上传完成 ≠ 解析完成 —— 后台正在逐个文件读源码、抽基因、写销毁证明'
+  }
+  return ''
+})
+
+const treePhaseTone = computed(() => {
+  if (uploadPhase.value === 'upload') return 'upload'
+  return treePhaseText.value === '已入库' ? 'done' : 'parse'
+})
+
+const treeSizeMb = computed(() =>
+  (treeFiles.value.reduce((s2, f) => s2 + (f.size || 0), 0) / 1048576).toFixed(2))
+
+const isZipPick = computed(() =>
+  treeFiles.value.length === 1 && /\.zip$/i.test(treeFiles.value[0]?.name || ''))
+
+function pickDir() {
+  dirInput.value?.click()
+}
+
+function pickZip() {
+  zipInput.value?.click()
+}
+
+function onDirPicked(e) {
+  const list = Array.from(e.target.files || [])
+  e.target.value = ''          // 允许重复选同一个目录
+  treeFiles.value = list
+  if (!treeTitle.value.trim()) treeTitle.value = defaultTreeTitle()
+}
+
+function onZipPicked(e) {
+  const f = (e.target.files || [])[0]
+  e.target.value = ''
+  treeFiles.value = f ? [f] : []
+  if (f && !treeTitle.value.trim()) treeTitle.value = defaultTreeTitle()
+}
+
+/** 把一整棵源码树交给后台学 */
+async function startLearn() {
+  if (!treeFiles.value.length) {
+    ElMessage.warning('先选一份源码')
+    return
+  }
+  const fd = new FormData()
+  if (isZipPick.value) {
+    fd.append('zip', treeFiles.value[0])
+  } else {
+    // 目录方式必须带相对路径 —— 后端靠它建目录结构
+    for (const f of treeFiles.value) fd.append('files', f, f.webkitRelativePath || f.name)
+  }
+  fd.append('title', (treeTitle.value || '').trim() || defaultTreeTitle())
+  fd.append('destroy', 'true')
+
+  uploading.value = true
+  uploadPhase.value = 'upload'
+  uploadPercent.value = 0
+  uploadBytes.value = 0
+  try {
+    const r = await Api.dnaLibraryUploadSourceTree(fd, (e) => {
+      uploadBytes.value = e?.loaded || 0
+      // 浏览器不一定给 total（FormData 没有 content-length）——有 total 才报百分比
+      if (e?.total) uploadPercent.value = Math.min(99, Math.round((e.loaded / e.total) * 100))
+    })
+    uploadPhase.value = 'parse'
+    uploadPercent.value = 100
+    if (r?.job) {
+      jobs.value = [r.job, ...jobs.value.filter((j) => j.id !== r.job.id)]
+    }
+    await loadJobs()
+    ElMessage.success('源码已上传，后台开始解析 —— 上传完不等于解析完')
+  } catch (e) {
+    uploadPhase.value = ''
+    ElMessage.error('上传失败：' + (e?.message || e))
+  } finally {
+    uploading.value = false
+  }
+}
+
+// ============ 学习任务（后台进度） ============
+const jobs = ref([])
+const jobsLoading = ref(false)
+const expandedJobs = ref([])
+let jobTimer = null
+
+const JOB_STATUS_LABEL = {
+  pending: '排队中', running: '解析中', done: '已完成',
+  failed: '失败', canceled: '已取消',
+}
+
+function jobStatusLabel(s) {
+  return JOB_STATUS_LABEL[s] || s
+}
+
+const hasActiveJobs = computed(() =>
+  jobs.value.some((j) => j.status === 'pending' || j.status === 'running'))
+
+/** 正在跑的那个任务的百分比（上传阶段结束后显示它） */
+const activeJobPercent = computed(() => {
+  const j = jobs.value.find((x) => x.status === 'running' || x.status === 'pending')
+  return Math.round(j?.percent || 0)
+})
+
+/** 最新一个任务的百分比 —— 刚上传的那个就是它 */
+const lastJobPercent = computed(() => Math.round(jobs.value[0]?.percent || 0))
+
+async function loadJobs() {
+  try {
+    jobsLoading.value = true
+    const r = await Api.dnaLibraryJobs({ limit: 20 })
+    jobs.value = r?.items || []
+    if (hasActiveJobs.value) startJobPolling()
+    else stopJobPolling()
+  } catch (e) {
+    // 任务列表读不到不影响页面其它部分
+  } finally {
+    jobsLoading.value = false
+  }
+}
+
+/** 只在有任务在跑的时候轮询 —— 全结束了就停 */
+function startJobPolling() {
+  if (jobTimer) return
+  jobTimer = setInterval(() => { loadJobs() }, 1500)
+}
+
+function stopJobPolling() {
+  if (jobTimer) {
+    clearInterval(jobTimer)
+    jobTimer = null
+  }
+}
+
+async function cancelJob(j) {
+  try {
+    await Api.dnaLibraryCancelJob(j.id)
+    await loadJobs()
+    ElMessage.success('已取消')
+  } catch (e) {
+    ElMessage.error('取消失败：' + (e?.message || e))
+  }
+}
+
+function toggleJobDetail(id) {
+  const i = expandedJobs.value.indexOf(id)
+  if (i >= 0) expandedJobs.value.splice(i, 1)
+  else expandedJobs.value.push(id)
+}
+
+function jobElapsed(j) {
+  if (!j.started_at) return '—'
+  const s2 = new Date(j.started_at).getTime()
+  const e2 = j.finished_at ? new Date(j.finished_at).getTime() : Date.now()
+  const ms = Math.max(0, e2 - s2)
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
+}
+
+// ============ 知识缺口：系统还答不上来的问题 ============
+const gaps = ref(null)
+
+/** 被问得最多的排前面 —— 那是下一轮最该喂的 */
+const gapList = computed(() => {
+  const list = gaps.value?.open || []
+  return list.slice().sort((a, b) => (b.asked || 0) - (a.asked || 0))
+})
+
+async function loadGaps() {
+  try {
+    gaps.value = await Api.dnaLibraryGaps()
+  } catch (e) {
+    gaps.value = null
+  }
+}
+
+/** 手动关掉一条缺口：知识补上了，这条就不用再提醒了 */
+async function closeGap(g) {
+  try {
+    await Api.dnaLibraryCloseGap(g.id)
+    const open = (gaps.value?.open || []).filter((x) => x.id !== g.id)
+    gaps.value = {
+      ...(gaps.value || {}),
+      open,
+      open_count: open.length,
+      filled_count: (gaps.value?.filled_count || 0) + 1,
+    }
+    ElMessage.success('这条缺口已补上')
+  } catch (e) {
+    ElMessage.error('关闭缺口失败：' + (e?.message || e))
+  }
+}
+
+// ============ 自进化账本 ============
+const evolution = ref(null)
+const feedEnabled = ref(false)
+const feedInterval = ref(60)
+const feedRunning = ref(false)
+/** 后端目前没把 last_run_at 落库（set_auto_feed 会把内存里的改动冲掉），
+ *  本机刚触发过就先记在这儿，别让界面说「还没有」 */
+const localFeedAt = ref('')
+
+async function loadEvolution() {
+  try {
+    evolution.value = await Api.dnaLibraryEvolution()
+  } catch (e) {
+    evolution.value = null
+  }
+}
+
+watch(evolution, (v) => {
+  if (!v?.auto_feed) return
+  feedEnabled.value = !!v.auto_feed.enabled
+  feedInterval.value = v.auto_feed.interval_minutes || 60
+}, { immediate: true })
+
+/** 开关或间隔一改就落库 */
+async function saveAutoFeed() {
+  try {
+    const r = await Api.dnaLibraryAutoFeed({
+      enabled: feedEnabled.value,
+      interval_minutes: feedInterval.value,
+    })
+    if (r?.auto_feed) {
+      evolution.value = { ...(evolution.value || {}), auto_feed: r.auto_feed }
+    }
+  } catch (e) {
+    ElMessage.error('自动喂养设置保存失败：' + (e?.message || e))
+  }
+}
+
+async function runAutoFeed() {
+  feedRunning.value = true
+  try {
+    const r = await Api.dnaLibraryAutoFeedRun()
+    const n = r?.result?.genes ?? r?.result?.created ?? 0
+    localFeedAt.value = new Date().toISOString()
+    ElMessage.success(n ? `这一轮喂出 ${n} 条基因` : '这一轮喂完了')
+    await loadEvolution()
+  } catch (e) {
+    ElMessage.error('自动喂养失败：' + (e?.message || e))
+  } finally {
+    feedRunning.value = false
+  }
+}
+
+/** 成长曲线的柱高：按最大的一天归一 */
+/** 成长曲线只画最近 30 天 —— 再多也看不清 */
+const evoTimeline = computed(() => {
+  const t = evolution.value?.timeline || []
+  return t.slice(-30)
+})
+
+function evoBarH(v) {
+  const t = evolution.value?.timeline || []
+  const max = Math.max(1, ...t.map((d) => d.genes || 0))
+  return Math.max(4, Math.round(((v || 0) / max) * 100))
 }
 
 /** 可吸收的源码候选：文件库里看起来像代码的文件 */
@@ -956,6 +1481,11 @@ async function exportBundle() {
 }
 
 onMounted(loadAll)
+
+// 离开页面就把轮询停掉，别留下野定时器
+onUnmounted(() => {
+  stopJobPolling()
+})
 </script>
 
 <style scoped>
@@ -1622,6 +2152,384 @@ onMounted(loadAll)
 .gd-foot { display: flex; gap: 16px; flex-wrap: wrap; }
 .gd-time { font-size: 11.5px; color: var(--text-tertiary); font-family: var(--font-mono); }
 
+/* ============ 源码树（整系统） ============ */
+.tree-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pick-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 9px;
+  padding: 7px 13px;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease-out), color 0.15s var(--ease-out);
+}
+.pick-btn:hover { border-color: var(--primary-200); color: var(--primary); }
+.pick-hint { font-size: 11.5px; color: var(--text-tertiary); line-height: 1.5; }
+
+.tree-pending {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-light);
+}
+.tp-count { display: flex; align-items: baseline; gap: 6px; }
+.tp-num {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+  line-height: 1;
+}
+.tp-unit { font-size: 12px; color: var(--text-tertiary); }
+.tp-size {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding-left: 10px;
+  margin-left: 4px;
+  border-left: 1px solid var(--border-light);
+}
+.tp-zip {
+  font-size: 10.5px;
+  color: var(--primary);
+  background: var(--primary-bg);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.tp-title { flex: 1; min-width: 180px; }
+
+.tree-progress { margin-top: 14px; }
+.tprog-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 7px; }
+.tprog-stage {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 5px;
+  padding: 2px 8px;
+}
+.tprog-stage.upload { color: var(--primary); background: var(--primary-bg); }
+.tprog-stage.parse { color: var(--warning-text); background: var(--warning-bg); }
+.tprog-stage.done { color: var(--success-text); background: var(--success-bg); }
+.tprog-hint { font-size: 11.5px; color: var(--text-secondary); line-height: 1.5; }
+
+.tree-note {
+  margin-top: 14px;
+  padding: 10px 13px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--accent-slate);
+}
+.tn-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.tn-head > .el-icon:first-child { color: var(--accent-slate); }
+.tn-lead { flex: 1; }
+.tn-lead b { color: var(--text-primary); }
+.tn-arrow {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  transition: transform 0.18s var(--ease-out);
+}
+.tree-note.is-open .tn-arrow { transform: rotate(90deg); }
+.tn-body {
+  margin: 9px 0 2px;
+  padding-left: 18px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  line-height: 1.75;
+}
+.tn-body b { color: var(--text-secondary); }
+
+/* ============ 学习任务 ============ */
+.jobs-block {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-light);
+}
+.jobs-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.jobs-head h3 { font-size: 15px; font-weight: 600; color: var(--text-primary); margin: 0; }
+.jobs-note { font-size: 11.5px; color: var(--text-tertiary); }
+.jobs-empty {
+  padding: 22px 4px;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+.jobs-list { list-style: none; margin: 0; padding: 0; }
+.job-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.job-row:last-child { border-bottom: none; }
+.job-top { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 8px; }
+.job-status {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 5px;
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+.job-status.pending { color: var(--text-secondary); background: var(--bg-subtle); }
+.job-status.running { color: var(--primary); background: var(--primary-bg); }
+.job-status.done { color: var(--success-text); background: var(--success-bg); }
+.job-status.failed { color: var(--danger-text); background: var(--danger-bg); }
+.job-status.canceled { color: var(--text-tertiary); background: var(--bg-subtle); }
+.job-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.job-ops { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.job-meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  margin-top: 7px;
+}
+.job-meta b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.job-current { color: var(--primary); }
+.job-err { color: var(--danger-text); }
+.job-detail { margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--border-light); }
+.jd-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  padding: 3px 0;
+}
+.jd-file {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  min-width: 180px;
+  word-break: break-all;
+}
+.jd-lang { color: var(--accent-slate); min-width: 56px; }
+.jd-lines, .jd-genes { font-variant-numeric: tabular-nums; min-width: 56px; }
+.jd-destroy { min-width: 62px; }
+.jd-destroy.on { color: var(--success-text); }
+.jd-note { color: var(--text-disabled); }
+
+/* ============ 06 自进化账本 ============ */
+.evo-gens {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0;
+}
+.gen-card {
+  padding: 4px 20px 4px 0;
+  margin-right: 20px;
+  border-right: 1px solid var(--border-light);
+}
+.gen-card:last-child { border-right: none; margin-right: 0; padding-right: 0; }
+.gen-stage {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+  letter-spacing: 1px;
+}
+.gen-value {
+  font-size: 38px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  line-height: 1.15;
+  letter-spacing: -1.5px;
+  margin-top: 4px;
+}
+.gen-label { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-top: 2px; }
+.gen-note { font-size: 11.5px; color: var(--text-tertiary); margin-top: 4px; line-height: 1.6; }
+
+.evo-totals {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-light);
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.evo-totals b {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  margin-left: 3px;
+}
+
+.evo-chart-wrap { margin-top: 18px; }
+.evo-chart-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+.evo-latest { font-size: 11px; font-weight: 400; color: var(--text-tertiary); }
+.evo-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 132px;
+  padding: 0 2px 20px;
+  border-bottom: 1px solid var(--border-light);
+  position: relative;
+}
+.evo-col {
+  flex: 1;
+  min-width: 8px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  position: relative;
+}
+.evo-bar {
+  width: 100%;
+  max-width: 34px;
+  border-radius: 4px 4px 0 0;
+  background: var(--primary);
+  opacity: 0.55;
+  min-height: 3px;
+  transition: opacity 0.15s var(--ease-out);
+}
+.evo-col:hover .evo-bar { opacity: 1; }
+.evo-col.is-latest .evo-bar {
+  background: var(--accent-green);
+  opacity: 1;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent-green) 45%, transparent);
+}
+.evo-day {
+  position: absolute;
+  bottom: -18px;
+  font-size: 10px;
+  color: var(--text-disabled);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.evo-col.is-latest .evo-day { color: var(--accent-green); }
+.evo-empty {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 40px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-disabled);
+}
+
+.evo-feed {
+  margin-top: 26px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+.feed-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 11px; }
+.feed-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.feed-note { font-size: 11.5px; color: var(--text-tertiary); }
+.feed-row { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; }
+.feed-label { font-size: 12.5px; color: var(--text-secondary); }
+.feed-unit { font-size: 11.5px; color: var(--text-tertiary); }
+.feed-last { font-size: 11.5px; color: var(--text-tertiary); margin-top: 10px; }
+.feed-result { color: var(--text-secondary); }
+
+/* ============ 知识缺口 ============ */
+.gen-foot {
+  font-size: 11.5px;
+  color: var(--warning-text);
+  margin-top: 5px;
+}
+.evo-gaps {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+.gaps-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.gaps-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.gaps-note { font-size: 11.5px; color: var(--text-tertiary); }
+.gaps-count {
+  font-size: 11.5px;
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  border-radius: 5px;
+  padding: 1px 8px;
+}
+.gaps-empty {
+  padding: 18px 4px;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+.gaps-list { list-style: none; margin: 0; padding: 0; }
+.gap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.gap-row:last-child { border-bottom: none; }
+.gap-q {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+.gap-asked {
+  font-size: 11px;
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  border-radius: 5px;
+  padding: 1px 7px;
+  flex-shrink: 0;
+}
+.gap-last {
+  font-size: 11px;
+  color: var(--text-disabled);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
 /* ============ 窄屏 ============ */
 @media (max-width: 900px) {
   .gel-card { padding: 18px; gap: 20px; }
@@ -1646,5 +2554,10 @@ onMounted(loadAll)
   .status-filter { width: 118px; }
   .work-grid { grid-template-columns: 1fr; }
   .ask-row .el-input { min-width: 100%; }
+  .gen-card { padding-right: 14px; margin-right: 14px; }
+  .gen-value { font-size: 30px; }
+  .evo-chart { height: 108px; }
+  .feed-row { gap: 9px; }
+  .jd-file { min-width: 120px; }
 }
 </style>

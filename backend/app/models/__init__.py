@@ -406,6 +406,71 @@ class DnaGene(Base):
     )
 
 
+# ============ DNA 养料库：后台任务 ============
+class DnaJob(Base):
+    """一个后台吸收任务的进度条
+
+    为什么要有这张表：吸收一棵源码树是分钟级的事，
+    放在 HTTP 请求里做会超时；做成「提交完就返回、进度另查」，
+    页面才能一边跑一边显示「现在在解析哪个文件」。
+
+    进度写回库里而不是只放内存：
+    内存里的进度一重启就没了，用户看到的进度条会永远卡在 0%。
+    """
+    __tablename__ = "dna_job"
+
+    id = Column(Integer, primary_key=True)
+    job_type = Column(String(24), default="source_tree", index=True)
+    title = Column(String(256), default="")
+    # pending 排队 / running 进行中 / done 完成 / failed 失败 / canceled 已取消
+    status = Column(String(16), default="pending", index=True)
+    total = Column(Integer, default=0)          # 总文件数
+    processed = Column(Integer, default=0)      # 已处理
+    current = Column(String(512), default="")   # 正在处理的文件
+    created = Column(Integer, default=0)        # 新建基因
+    updated = Column(Integer, default=0)        # 更新基因
+    skipped = Column(Integer, default=0)        # 跳过（无价值/重复）
+    failed = Column(Integer, default=0)         # 失败
+    bytes_read = Column(Integer, default=0)     # 读了多少字节
+    error = Column(Text, default="")
+    detail = Column(JSON, default=dict)         # 明细（每个文件一行，最多留 200 条）
+    principal = Column(String(64), default="")  # 发起人（审计用）
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_dna_job_status_created", "status", "created_at"),
+    )
+
+
+# ============ DNA 养料库：知识缺口 ============
+class DnaGap(Base):
+    """系统答不上来的问题 —— 下一轮该喂什么
+
+    「不断喂养、不断自主进化」要能闭环，光有吸收不够：
+    得知道**缺什么**。用户问了一个问题，系统答「资料里没有」，
+    那这个问题就是一条缺口；等哪天补上了同样的知识，
+    缺口自动关闭 —— 一次完整的进化就是这么走完的。
+
+    没有这张表，系统就只知道「自己有什么」，
+    不知道「自己缺什么」，喂养就永远靠人拍脑袋。
+    """
+    __tablename__ = "dna_gap"
+
+    id = Column(Integer, primary_key=True)
+    question = Column(String(512), nullable=False, index=True)
+    fingerprint = Column(String(64), default="", index=True)   # 同一个问题问多次算一条
+    asked = Column(Integer, default=1)          # 被问过几次
+    status = Column(String(16), default="open", index=True)   # open / filled
+    note = Column(String(256), default="")       # 补上的说明
+    filled_by = Column(String(64), default="")   # 补上它的基因编号
+    last_asked_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 # ============ 系统元信息（向量维度等运行时状态） ============
 class SysMeta(Base):
     __tablename__ = "sys_meta"

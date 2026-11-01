@@ -438,6 +438,26 @@ export const Api = {
   dnaLibraryGene: (id) => api.get(`/api/dna/library/genes/${id}`),
   dnaLibrarySearch: (params) => api.get('/api/dna/library/search', { params }),
   dnaLibraryCite: (data) => api.post('/api/dna/library/cite', data),
+
+  // ---- 后台吸收任务（源码树整体上传 / 进度） ----
+  // 上传整个目录或一个 zip：FormData 里 files[] 是多文件，zip 是单文件
+  dnaLibraryUploadSourceTree: (formData, onProgress) =>
+    api.post('/api/dna/library/jobs/source-tree', formData, {
+      timeout: 600000,
+      onUploadProgress: onProgress,
+    }),
+  dnaLibraryJobs: (params) => api.get('/api/dna/library/jobs', { params }),
+  dnaLibraryJob: (id) => api.get(`/api/dna/library/jobs/${id}`),
+  dnaLibraryCancelJob: (id) => api.delete(`/api/dna/library/jobs/${id}`),
+
+  // ---- 进化账本 ----
+  dnaLibraryEvolution: () => api.get('/api/dna/library/evolution'),
+  dnaLibraryAutoFeed: (data) => api.put('/api/dna/library/auto-feed', data),
+  dnaLibraryAutoFeedRun: () => api.post('/api/dna/library/auto-feed/run'),
+
+  // ---- 知识缺口：系统答不上来的问题 ----
+  dnaLibraryGaps: () => api.get('/api/dna/library/gaps'),
+  dnaLibraryCloseGap: (id) => api.delete(`/api/dna/library/gaps/${id}`),
   dnaLibraryAnswer: (params) => api.get('/api/dna/library/answer', { params }),
   dnaLibraryDrill: () => api.get('/api/dna/library/drill'),
   dnaLibraryAbsorb: (payload) => api.post('/api/dna/library/absorb', payload),

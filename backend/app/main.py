@@ -68,6 +68,29 @@ async def lifespan(app: FastAPI):
     # 放在 yield 之前启动，确保服务开始接请求时维护已经在跑。
     await scheduler.start()
 
+    # 启动清理：上一轮进程崩了留下的后台任务与暂存源码
+    try:
+        from datetime import datetime
+
+        from sqlalchemy import update
+
+        from .models import DnaJob
+        from .services import dna_ingest
+        async with SessionLocal() as _db:
+            # 跑着的任务在进程重启后不可能再跑完 —— 标成失败，
+            # 否则进度条会永远停在中途，用户以为还在解析
+            await _db.execute(
+                update(DnaJob)
+                .where(DnaJob.status.in_(("pending", "running")))
+                .values(status="failed", error="服务重启中断",
+                        finished_at=datetime.now()))
+            await _db.commit()
+        n = dna_ingest.cleanup_staging()
+        if n:
+            log.info("清理陈旧暂存源码 %s 个目录", n)
+    except Exception as e:
+        log.warning("启动清理养料库任务失败：%s", e)
+
     try:
         yield
     finally:

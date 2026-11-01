@@ -18,18 +18,30 @@
 不硬拦 dna 页面位（原因见 routers/dna.py 顶部注释）。
 写操作（吸收、离线开关、导入）会写审计日志。
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+import asyncio
+import logging
+import shutil
+import zipfile
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models import DnaGene, Document, DocumentChunk
+from ..models import DnaGap, DnaGene, DnaJob, Document, DocumentChunk
+from ..services import audit as audit_svc
 from ..services import dna_library as svc
+from ..services import dna_ingest as ingest
 from ..services.auth import Principal, current_principal
 
 router = APIRouter(prefix="/api/dna/library", tags=["dna-library"])
+
+log = logging.getLogger("kb.dna_library.router")
+
+# 后台任务的 asyncio 句柄：用来取消还在跑的任务
+_JOBS: dict[int, asyncio.Task] = {}
 
 
 # ============ 请求体 ============
@@ -206,6 +218,225 @@ async def cite(payload: CiteBody, db: AsyncSession = Depends(get_db),
                 f">\n> " + (g.get("content") or "").replace("\n", "\n> "))
         text = "\n\n".join(blocks)
     return {"text": text, "genes": genes}
+
+
+# ============ 后台吸收任务（源码树整体上传 / 进度 / 进化账本） ============
+
+@router.post("/jobs/source-tree")
+async def create_source_tree_job(
+    files: list[UploadFile] = File(default=[]),
+    zip_file: UploadFile | None = File(None, alias="zip"),
+    title: str = Form(""),
+    destroy: bool = Form(True),
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(current_principal),
+):
+    """把一整棵源码树交给养料库学
+
+    上传的是**目录**（浏览器一次选几百个文件）或者一个 zip，
+    落盘到暂存区后立刻返回任务号，
+    真正的解析在后台跑 —— 进度用 GET /api/dna/library/jobs/{id} 查。
+
+    销毁顺序和单文件吸收一致：先蒸馏成基因、先写销毁证明，然后才删源码。
+    """
+    uploads = [f for f in (files or []) if f is not None and f.filename]
+    if zip_file is not None and zip_file.filename:
+        uploads.append(zip_file)
+    if not uploads:
+        raise HTTPException(status_code=400, detail="没有收到文件")
+
+    job = await ingest.create_job(
+        db, job_type="source_tree",
+        title=title or f"源码树 {len(uploads)} 个文件",
+        total=len(uploads),
+        principal=str(getattr(principal, "username", "") or ""))
+
+    staged = ingest.staging_root() / f"job-{job.id}"
+    staged.mkdir(parents=True, exist_ok=True)
+
+    total_bytes = 0
+    written = 0
+    try:
+        for up in uploads:
+            name = ingest._safe_name(up.filename)
+            if not name:
+                continue
+            dest = staged / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            data = await up.read()
+            total_bytes += len(data)
+            if total_bytes > ingest.MAX_TOTAL_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"上传总量超过 {ingest.MAX_TOTAL_BYTES // 1024 // 1024} MB")
+            dest.write_bytes(data)
+            written += 1
+            await up.close()
+    except HTTPException:
+        shutil.rmtree(staged, ignore_errors=True)
+        await ingest._update_job(db, job.id, status="failed",
+                                 error="上传中断", finished_at=ingest._now())
+        raise
+    except Exception as e:
+        shutil.rmtree(staged, ignore_errors=True)
+        await ingest._update_job(db, job.id, status="failed",
+                                 error=str(e)[:300], finished_at=ingest._now())
+        raise HTTPException(status_code=500, detail=f"保存上传文件失败：{e}")
+
+    # zip 要解开（安全解压：拒绝越界路径）
+    zips = [p for p in staged.rglob("*") if p.is_file() and p.suffix.lower() == ".zip"]
+    for zp in zips:
+        try:
+            with zipfile.ZipFile(zp) as zf:
+                for member in zf.namelist():
+                    # 目录条目要跳过：zip 里的目录项读出来是空的，
+                    # 而 zf.open 对目录会直接抛异常 ——
+                    # 一个目录项把整个解压循环带崩，整棵源码树就一个文件都没落地。
+                    if member.endswith("/"):
+                        continue
+                    safe = ingest._safe_name(member)
+                    if not safe or safe == "unnamed":
+                        continue
+                    try:
+                        out = staged / safe
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(member) as src, out.open("wb") as dst:
+                            shutil.copyfileobj(src, dst, length=1024 * 256)
+                    except Exception as e:
+                        log.warning("解压条目失败 %s：%s", member, e)
+        except Exception as e:
+            log.warning("解压 zip 失败 %s：%s", zp.name, e)
+        finally:
+            try:
+                zp.unlink()
+            except OSError:
+                pass
+
+    # 真实的文件数（解压后才知道）
+    real_files = [p for p in staged.rglob("*") if p.is_file()]
+    await ingest._update_job(db, job.id, total=len(real_files),
+                             title=title or f"源码树 {len(real_files)} 个文件")
+    job = (await db.execute(
+        select(DnaJob).where(DnaJob.id == job.id))).scalar_one_or_none()
+
+    # 后台跑：不等它
+    task = asyncio.create_task(ingest.run_source_tree_job(job.id, staged))
+    _JOBS[job.id] = task
+    await audit_svc.log_event(
+        getattr(principal, "username", "") or "-", "dna_source_tree_upload",
+        user_id=getattr(principal, "id", None),
+        resource="dna_library", method="POST",
+        path="/api/dna/library/jobs/source-tree",
+        detail={"job_id": job.id, "files": len(real_files),
+                "title": job.title, "staged_bytes": written},
+    )
+    return {"job": ingest.job_to_dict(job), "staged_files": len(real_files)}
+
+
+@router.get("/jobs")
+async def list_jobs(limit: int = Query(20, le=100),
+                    db: AsyncSession = Depends(get_db),
+                    principal: Principal = Depends(current_principal)):
+    """后台任务列表（含进度）"""
+    rows = (await db.execute(
+        select(DnaJob).order_by(DnaJob.id.desc()).limit(limit))).scalars().all()
+    return {"items": [ingest.job_to_dict(j) for j in rows]}
+
+
+@router.get("/jobs/{job_id}")
+async def get_job(job_id: int,
+                  db: AsyncSession = Depends(get_db),
+                  principal: Principal = Depends(current_principal)):
+    """单个任务的进度 —— 前端轮询这个"""
+    job = (await db.execute(
+        select(DnaJob).where(DnaJob.id == job_id))).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"job": ingest.job_to_dict(job)}
+
+
+@router.delete("/jobs/{job_id}")
+async def cancel_job(job_id: int,
+                     db: AsyncSession = Depends(get_db),
+                     principal: Principal = Depends(current_principal)):
+    """取消一个还在跑的任务"""
+    task = _JOBS.pop(job_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+    job = (await db.execute(
+        select(DnaJob).where(DnaJob.id == job_id))).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.status in ("pending", "running"):
+        job.status = "canceled"
+        job.finished_at = ingest._now()
+        await db.commit()
+    return {"job": ingest.job_to_dict(job)}
+
+
+@router.get("/gaps")
+async def list_gaps(db: AsyncSession = Depends(get_db),
+                    principal: Principal = Depends(current_principal)):
+    """系统还答不上来的问题 —— 下一轮该喂什么"""
+    return await ingest.gap_summary(db)
+
+
+@router.delete("/gaps/{gap_id}")
+async def close_gap(gap_id: int, db: AsyncSession = Depends(get_db),
+                    principal: Principal = Depends(current_principal)):
+    """手动关掉一条缺口（补过了）"""
+    gap = (await db.execute(
+        select(DnaGap).where(DnaGap.id == gap_id))).scalar_one_or_none()
+    if gap is None:
+        raise HTTPException(status_code=404, detail="缺口不存在")
+    gap.status = "filled"
+    gap.note = "手动关闭"
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/evolution")
+async def evolution(db: AsyncSession = Depends(get_db),
+                    principal: Principal = Depends(current_principal)):
+    """进化账本：吸收了多少 → 长出了多少 → 被用起来多少"""
+    snap = await ingest.evolution_snapshot(db)
+    snap["auto_feed"] = await ingest.get_auto_feed(db)
+    gaps = await ingest.gap_summary(db)
+    snap["gaps"] = {"open_count": gaps["open_count"],
+                    "filled_count": gaps["filled_count"],
+                    "total_count": gaps["total_count"]}
+    return snap
+
+
+class AutoFeedBody(BaseModel):
+    enabled: bool | None = None
+    interval_minutes: int | None = None
+
+
+@router.put("/auto-feed")
+async def update_auto_feed(body: AutoFeedBody,
+                            db: AsyncSession = Depends(get_db),
+                            principal: Principal = Depends(current_principal)):
+    """自动喂养开关：每隔一段时间自动吸收新资料"""
+    cfg = await ingest.set_auto_feed(db, enabled=body.enabled,
+                                     interval_minutes=body.interval_minutes)
+    await audit_svc.log_event(
+        getattr(principal, "username", "") or "-", "dna_auto_feed_update",
+        user_id=getattr(principal, "id", None),
+        resource="dna_library", method="PUT",
+        path="/api/dna/library/auto-feed",
+        detail={"enabled": cfg.get("enabled"),
+                "interval_minutes": cfg.get("interval_minutes")},
+    )
+    return {"ok": True, "auto_feed": cfg}
+
+
+@router.post("/auto-feed/run")
+async def run_auto_feed_now(db: AsyncSession = Depends(get_db),
+                             principal: Principal = Depends(current_principal)):
+    """立刻跑一轮自动喂养（不等定时器）"""
+    res = await ingest.auto_feed_once(db)
+    return {"ok": True, "result": res}
 
 
 @router.get("/search")

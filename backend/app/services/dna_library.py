@@ -642,9 +642,10 @@ async def absorb_code(db: AsyncSession, code: str, filename: str, *,
     from . import dna_distill
     res = dna_distill.distill_code(code, filename)
     created = updated = 0
+    gene_ids: list[int] = []
     for g in res.genes:
         try:
-            _, is_new = await upsert_gene(
+            gene, is_new = await upsert_gene(
                 db, kind=g["kind"], title=g["title"], content=g["content"],
                 tags=g.get("tags"), source_kind="code",
                 source_ref=f"code:{res.sha256[:16]}",
@@ -654,6 +655,8 @@ async def absorb_code(db: AsyncSession, code: str, filename: str, *,
                       "language": res.language, "file": filename})
             created += 1 if is_new else 0
             updated += 0 if is_new else 1
+            if gene is not None and gene.id:
+                gene_ids.append(gene.id)
         except ValueError:
             continue
     await db.commit()
@@ -662,6 +665,8 @@ async def absorb_code(db: AsyncSession, code: str, filename: str, *,
         "lines": res.lines, "stats": res.stats, "warnings": res.warnings,
         "genes": created + updated, "created": created, "updated": updated,
         "destroyed": False, "skeleton_preview": res.skeleton[:2000],
+        # 蒸馏出的基因 id：给「二生三」的关联步骤用
+        "gene_ids": gene_ids,
     }
     if destroy and (created + updated) > 0:
         # 销毁证明：留证据不留原文

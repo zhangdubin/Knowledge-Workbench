@@ -88,6 +88,22 @@ def _optimize_sync() -> None:
         conn.close()
 
 
+async def _auto_feed() -> dict:
+    """自动喂养一轮：把新出现/有变化的资料吸收成基因
+
+    「不断喂养、不断自主进化」的定时那一半。
+    开关存在 sys_meta 里（养料库页面可以直接开/关），
+    关闭时这里直接返回，不做任何扫描。
+    """
+    from ..database import SessionLocal
+    from . import dna_ingest
+    async with SessionLocal() as db:
+        cfg = await dna_ingest.get_auto_feed(db)
+        if not cfg.get("enabled"):
+            return {"skipped": True}
+        return await dna_ingest.auto_feed_once(db)
+
+
 async def _probe() -> dict:
     from ..database import probe_health
     return await probe_health()
@@ -134,8 +150,13 @@ class Scheduler:
         self._on_probe(out)
 
     async def start(self) -> None:
+        # 自动喂养是「功能」不是「维护」——
+        # 维护开关关掉的是数据库保养（会话清理、检查点之类），
+        # 不该把「自动吸收新资料」一起关掉。
+        self.tasks.append(_loop("养料库自动喂养", 300, _auto_feed))
         if not settings.maintenance_enabled:
-            log.warning("后台定时维护已关闭（KB_MAINTENANCE_ENABLED=false）")
+            log.warning("后台定时维护已关闭（KB_MAINTENANCE_ENABLED=false），"
+                        "养料库自动喂养仍在运行")
             return
         self.started_at = time.time()
 

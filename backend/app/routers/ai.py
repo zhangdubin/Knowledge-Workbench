@@ -1,4 +1,5 @@
 """AI 路由"""
+import logging
 import re
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -13,6 +14,8 @@ from ..services import agent as agent_svc
 from ..services import ai_config as ai_cfg_svc
 from ..services import document as doc_svc
 from ..services import embedding as embed_svc
+
+log = logging.getLogger("kb.ai")
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -307,7 +310,25 @@ async def ask(payload: AskIn, db: AsyncSession = Depends(get_db),
         g["citation"] = no
 
     answer = await ai_svc.ask(payload.question, context, genes=genes)
-    answer = ai_svc.normalize_gene_citations(answer)
+    # 模型写的是「上下文第几块」，要还原成基因自己的编号 ——
+    # 不还原的话，答案里的【基因#5】会被当成 5 号基因，而实际上是 25 号。
+    aliases = {g["citation"]: g["id"] for g in genes if g.get("citation")}
+    answer = ai_svc.normalize_gene_citations(answer, aliases)
+
+    # 知识缺口：答不上来的问题记一笔；补上知识后同名缺口自动关闭。
+    # 「不断喂养、不断自主进化」要闭环，光有吸收不够 ——
+    # 得知道缺什么，才知道下一轮该喂什么。
+    try:
+        from ..services import dna_ingest
+        if dna_ingest.looks_like_no_answer(answer):
+            await dna_ingest.record_gap(db, payload.question, answer)
+        else:
+            await dna_ingest.close_matching_gaps(
+                db, payload.question,
+                filled_by=",".join(f"基因#{g['id']}" for g in genes[:3]))
+    except Exception as e:
+        log.warning("知识缺口记录失败：%s", e)
+
     return {"answer": answer, "context_count": len(context),
             "sources": sources, "genes": genes}
 
@@ -336,7 +357,10 @@ async def _collect_genes(db, principal, question: str,
             out.append(_gene_ref(g))
     if not out:
         try:
-            hits = await dna_lib.search_genes(db, question, limit=4,
+            # 自动挑的时候只挑 3 条、正文只带 500 字：
+            # 自动注入是「提个醒」，不是「倒一桶」——
+            # 上下文里塞太多，模型会顺着写成长表格，答案写到一半被 max_tokens 截断。
+            hits = await dna_lib.search_genes(db, question, limit=3,
                                               kinds=["method", "experience",
                                                      "policy", "interface"])
         except Exception:
@@ -348,7 +372,9 @@ async def _collect_genes(db, principal, question: str,
             if (g.confidence or 0) < 0.7:
                 continue
             seen.add(g.id)
-            out.append(_gene_ref(g))
+            ref = _gene_ref(g)
+            ref["content"] = (ref["content"] or "")[:500]
+            out.append(ref)
     return out
 
 

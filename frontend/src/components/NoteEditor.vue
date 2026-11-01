@@ -45,6 +45,8 @@
       @tag-click="emit('tag-click', $event)"
     />
 
+    <GenePicker v-model="genePicker" mode="insert" @insert="insertCitation" />
+
     <!-- 正文：源码 / 预览 -->
     <div class="composer-body" :class="{ 'is-preview': preview }">
       <div v-if="mode === 'full'" class="composer-switch" role="tablist" aria-label="正文视图">
@@ -64,6 +66,14 @@
           :aria-selected="preview"
           @click="preview = true"
         >预览</button>
+      </div>
+
+      <!-- 引用养料库：把库里验证过的结论直接放进笔记 -->
+      <div class="composer-tools">
+        <button type="button" class="composer-tool" @click="genePicker = true">
+          <el-icon><Link /></el-icon>引用养料库
+        </button>
+        <span class="composer-tool-hint">插进来的引用带着基因编号和出处，回溯得到</span>
       </div>
 
       <div v-if="!preview" class="composer-editor-wrap">

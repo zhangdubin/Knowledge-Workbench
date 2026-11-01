@@ -99,6 +99,32 @@
                 <el-switch v-model="destroySource" active-text="蒸馏后销毁原文" />
                 <el-button type="primary" :loading="absorbing" @click="absorbCodeNow">蒸馏吸收</el-button>
               </div>
+
+              <el-divider>或：从文件库里选一份已上传的源码</el-divider>
+              <div class="src-pick">
+                <el-select
+                  v-model="sourceDocId"
+                  placeholder="选择文件库里的源码文件"
+                  filterable
+                  clearable
+                  style="flex:1"
+                >
+                  <el-option
+                    v-for="d in sourceDocs"
+                    :key="d.id"
+                    :label="`${d.title}（${d.ext || '无扩展名'}）`"
+                    :value="d.id"
+                  />
+                </el-select>
+                <el-switch v-model="destroySourceFile" active-text="销毁源文件" />
+                <el-button type="danger" plain :loading="absorbing" @click="absorbSourceNow">
+                  吸收并销毁
+                </el-button>
+              </div>
+              <div class="src-hint">
+                销毁顺序是固定的：先蒸馏成基因、先写销毁证明，然后才删磁盘上的源文件、清掉库里的抽取正文。
+                证明没落库就不删 —— 文件没了证据也没了，等于什么都没留下。
+              </div>
             </el-tab-pane>
           </el-tabs>
 
@@ -291,6 +317,9 @@ const absorbTitle = ref('')
 const absorbCode = ref('')
 const codeFilename = ref('snippet.py')
 const destroySource = ref(true)
+const destroySourceFile = ref(false)
+const sourceDocId = ref(null)
+const sourceDocs = ref([])
 
 const KIND_LABEL = {
   fact: '事实', method: '方法', experience: '经验',
@@ -345,6 +374,21 @@ async function loadAll() {
     error.value = '养料库读取失败：' + (e?.message || e)
   } finally {
     loading.value = false
+  }
+  await loadSourceDocs()
+}
+
+/** 可吸收的源码候选：文件库里看起来像代码的文件 */
+async function loadSourceDocs() {
+  try {
+    const r = await Api.listDocuments({ limit: 200 })
+    const items = r.items || r.documents || []
+    sourceDocs.value = items.filter(
+      (d) => /\.(py|js|ts|tsx|jsx|java|go|rs|rb|php|c|cc|cpp|h|hpp|sh|bash|sql|yaml|yml|json|toml|ini|conf)$/i
+        .test(d.filename || d.title || '')
+    )
+  } catch (e) {
+    sourceDocs.value = []
   }
 }
 
@@ -412,6 +456,36 @@ async function absorbCodeNow() {
     await loadAll()
   } catch (e) {
     ElMessage.error('源码蒸馏失败：' + (e?.message || e))
+  } finally {
+    absorbing.value = false
+  }
+}
+
+async function absorbSourceNow() {
+  if (!sourceDocId.value) {
+    ElMessage.warning('先选一份源码文件')
+    return
+  }
+  absorbing.value = true
+  try {
+    const r = await Api.dnaLibraryAbsorbSource({
+      document_id: sourceDocId.value,
+      destroy: true,
+      destroy_file: destroySourceFile.value,
+    })
+    ElMessage.success(
+      `蒸馏出 ${r.genes} 条基因` +
+      (r.file_deleted ? '，源文件已销毁' : '') +
+      (r.document_cleared ? '，库里的抽取正文已清空' : '')
+    )
+    lastAbsorb.value = {
+      genes: r.genes, summary: r.summary, destroyed: r.destroyed,
+      attestation: r.attestation, titles: [],
+    }
+    await loadAll()
+    await loadSourceDocs()
+  } catch (e) {
+    ElMessage.error('源码吸收失败：' + (e?.message || e))
   } finally {
     absorbing.value = false
   }
@@ -565,6 +639,10 @@ onMounted(loadAll)
 /* 吸收 */
 .absorb-tabs :deep(.el-tabs__header) { margin-bottom: 10px; }
 .absorb-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.src-pick { display: flex; gap: 8px; align-items: center; }
+.src-hint {
+  font-size: 11.5px; color: var(--text-tertiary); line-height: 1.6; margin-top: 8px;
+}
 .code-alert { margin-bottom: 10px; }
 .absorb-result {
   margin-top: 12px; padding: 10px 12px;

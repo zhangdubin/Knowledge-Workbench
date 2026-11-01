@@ -470,6 +470,10 @@ async def absorb_code(db: AsyncSession, code: str, filename: str, *,
     以后想核验「原文确实没留下」，看这条证明就行。
 
     destroy=False 只用于预览（前端想先看看会抽出什么）。
+
+    注意：本函数只管「库里不留原文」。
+    要把**磁盘上的源文件**也删掉，用 `absorb_source_file`
+    （那边有越界校验与二次确认）。
     """
     from . import dna_distill
     res = dna_distill.distill_code(code, filename)
@@ -515,6 +519,76 @@ async def absorb_code(db: AsyncSession, code: str, filename: str, *,
         result["destroyed"] = True
         result["attestation"] = {"sha256": res.sha256, "file": filename,
                                  "destroyed_at": _now().isoformat()}
+    return result
+
+
+async def absorb_source_file(db: AsyncSession, rel_path: str, *,
+                             destroy: bool = True,
+                             destroy_file: bool = False,
+                             document_id: int | None = None) -> dict:
+    """从文件库里取一个源码文件，蒸馏成基因，并（可选）销毁源文件
+
+    「吸收方法经验后销毁源码」落地在这里：蒸馏完、销毁证明写进库之后，
+    源文件从磁盘上删掉。
+
+    三道保险，缺一不可：
+    1. 路径必须在文件库根目录内（越界直接拒绝，不做任何写入）
+    2. 先写销毁证明，再删文件 —— 证明没落库就不删，
+       否则文件没了、证据也没了，等于什么都没留下
+    3. 只删文件本身，不碰数据库里的文档记录（那是另一件事，
+       要删文档走文档删除接口）
+
+    destroy_file=False 时只蒸馏不删文件（预览与可逆操作）。
+    """
+    from . import filestore
+    try:
+        path = filestore.abs_path(rel_path)
+    except ValueError as e:
+        raise ValueError(f"非法路径：{rel_path}") from e
+    if not path.is_file():
+        raise FileNotFoundError(f"文件不存在：{rel_path}")
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        raise OSError(f"读取失败：{e}") from e
+    result = await absorb_code(db, text, path.name, destroy=destroy)
+    result["source_path"] = rel_path
+    result["file_deleted"] = False
+    result["document_cleared"] = False
+    if destroy_file and result.get("destroyed"):
+        # 证明已经写进库了（absorb_code 里 commit 过），这才敢删
+        if filestore.remove(rel_path):
+            result["file_deleted"] = True
+            # 证明里补一句「文件已从磁盘删除」，方便以后核验
+            gene = (await db.execute(
+                select(DnaGene).where(
+                    DnaGene.source_ref == f"code:{result['sha256'][:16]}",
+                    DnaGene.kind == KIND_POLICY).order_by(DnaGene.id.desc())
+            )).scalars().first()
+            if gene is not None:
+                meta = dict(gene.meta or {})
+                meta["file_deleted"] = True
+                meta["file_deleted_at"] = _now().isoformat()
+                gene.meta = meta
+                await db.commit()
+        # 文档表里的抽取正文也是原文（.py 文件抽出来就是代码本身）——
+        # 只删文件不清正文，等于源码还在库里躺着。
+        doc = None
+        if document_id is not None:
+            doc = (await db.execute(
+                select(Document).where(Document.id == document_id))).scalar_one_or_none()
+        else:
+            doc = (await db.execute(
+                select(Document).where(Document.path == rel_path))).scalars().first()
+        if doc is not None:
+            doc.extracted_text = ""
+            doc.summary = "（源码已销毁，只留蒸馏出的基因）"
+            doc.extract_status = "destroyed"
+            doc.extract_error = ""
+            doc.deleted_at = _now()
+            await db.commit()
+            result["document_cleared"] = True
+            result["document_id"] = doc.id
     return result
 
 

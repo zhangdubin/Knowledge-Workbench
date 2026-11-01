@@ -25,7 +25,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models import DnaGene, DocumentChunk
+from ..models import DnaGene, Document, DocumentChunk
 from ..services import dna_library as svc
 from ..services.auth import Principal, current_principal
 
@@ -43,9 +43,19 @@ class AbsorbTextBody(BaseModel):
 
 
 class AbsorbCodeBody(BaseModel):
-    code: str = Field(..., description="源码原文；蒸馏后不留存")
+    code: str = Field("", description="源码原文；蒸馏后不留存")
     filename: str = "untitled"
     destroy: bool = Field(True, description="蒸馏完是否销毁原文（默认销毁）")
+    path: str = Field("", description="文件库里的源码相对路径（给了就用它，不给用 code）")
+    destroy_file: bool = Field(
+        False, description="蒸馏后把磁盘上的源文件也删掉（默认不删）")
+
+
+class AbsorbSourceBody(BaseModel):
+    document_id: int = Field(..., description="文件库里那份源码的文档 id")
+    destroy_file: bool = Field(
+        False, description="蒸馏后把源文件从磁盘删掉（默认只清库留证）")
+    destroy: bool = Field(True, description="蒸馏完是否写销毁证明（默认写）")
 
 
 class OfflineBody(BaseModel):
@@ -184,12 +194,54 @@ async def absorb(body: AbsorbTextBody, db: AsyncSession = Depends(get_db),
 @router.post("/absorb/code")
 async def absorb_code(body: AbsorbCodeBody, db: AsyncSession = Depends(get_db),
                       principal: Principal = Depends(current_principal)):
-    """吸收源码：蒸馏成方法与经验基因，原文不留"""
-    if not body.code.strip():
-        raise HTTPException(400, "源码为空")
+    """吸收源码：蒸馏成方法与经验基因，原文不留
+
+    给了 path 就从文件库取那个文件（可以再要求把源文件也删掉 ——
+    「吸收方法经验后销毁源码」）；不给就用粘过来的 code。
+    """
     try:
+        if body.path.strip():
+            return await svc.absorb_source_file(
+                db, body.path.strip(), destroy=body.destroy,
+                destroy_file=body.destroy_file)
+        if not body.code.strip():
+            raise HTTPException(400, "源码为空")
         return await svc.absorb_code(db, body.code, body.filename,
                                       destroy=body.destroy)
+    except HTTPException:
+        raise
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"源码蒸馏失败：{e}")
+
+
+@router.post("/absorb/source")
+async def absorb_source(body: AbsorbSourceBody, db: AsyncSession = Depends(get_db),
+                        principal: Principal = Depends(current_principal)):
+    """吸收文件库里的一份源码：蒸馏成基因，并可销毁源文件
+
+    这是「吸收方法经验后销毁源码」的用户入口：
+    先蒸馏成基因、写销毁证明，再删磁盘上的源文件、清掉库里的抽取正文。
+    销毁证明没落库就不删 —— 文件没了证据也没了，等于什么都没留下。
+    """
+    doc = (await db.execute(
+        select(Document).where(Document.id == body.document_id))).scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(404, "文档不存在")
+    if not (doc.path or "").strip():
+        raise HTTPException(400, "这份文档没有外置文件（原文在库里），"
+                                 "请改用「粘源码」的方式吸收")
+    try:
+        return await svc.absorb_source_file(
+            db, doc.path, destroy=body.destroy,
+            destroy_file=body.destroy_file, document_id=doc.id)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"源码蒸馏失败：{e}")
 

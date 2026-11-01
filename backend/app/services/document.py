@@ -616,6 +616,9 @@ async def embed_document(db: AsyncSession, doc: Document) -> bool:
     old_ids = [c.id for c in existing]
     if old_ids:
         await _delete_vectors(db, old_ids)
+        # 旧块的块级索引也要跟着走：块的 id 会重新分配，
+        # 留下的旧行会指向已经不存在的块 —— 查出来是「命中了但取不回内容」。
+        await docindex.remove_chunks(db, old_ids)
     for c in existing:
         await db.delete(c)
     await db.flush()
@@ -627,6 +630,11 @@ async def embed_document(db: AsyncSession, doc: Document) -> bool:
         rows.append(row)
     await db.flush()
     chunk_ids = [r.id for r in rows]
+
+    # 块级全文索引：就在切块写库的这一刻落 chunk_fts。
+    # 放到后面（比如等向量写完再写）会出现「块已经在库里、索引还没有」
+    # 的中间态，那段时间里长文档的答案段落是定位不到的。
+    await docindex.index_chunks(db, doc.id, [(r.id, r.text) for r in rows])
 
     vectors = await embed_svc.embed_texts(chunks, kind="db")
     if not vectors or len(vectors) != len(chunks):
@@ -948,6 +956,9 @@ async def restore_document(db: AsyncSession, doc: Document) -> dict:
     await docindex.index_document(
         db, doc.id, doc.title, doc.filename, doc.tags, doc.summary, doc.extracted_text or ""
     )
+    # 软删除时块级索引被一起清掉了，恢复时得补回来 ——
+    # 不然文件回来了，长文档里的答案段落却再也定位不到。
+    await docindex.rebuild_document_chunks(db, doc.id)
     await db.commit()
     await db.refresh(doc)
     return serialize(doc)
@@ -1038,38 +1049,59 @@ def _dedupe_hits_by_document(hits: list[dict]) -> list[dict]:
     return [best[d] for d in order]
 
 
+def _put_chunk_hit(out: dict[int, list[dict]], item: dict) -> None:
+    """把一个块命中并进结果（同一个块被多个通道命中时各取强）
+
+    「结构命中」的标记只要有一条通道说是，就保留 ——
+    标题命中本身就是一条独立的证据，不该被正文通道覆盖掉。
+    """
+    lst = out.setdefault(item["document_id"], [])
+    for x in lst:
+        if x["chunk_id"] == item["chunk_id"]:
+            x["sim"] = max(x.get("sim", 0.0), item.get("sim", 0.0))
+            x["kw"] = max(x.get("kw", 0.0), item.get("kw", 0.0))
+            x["struct"] = max(x.get("struct", 0.0), item.get("struct", 0.0))
+            x["hits"] = max(x.get("hits", 0), item.get("hits", 0))
+            x["structure"] = bool(x.get("structure")) or bool(item.get("structure"))
+            if x.get("seq") is None:
+                x["seq"] = item.get("seq")
+            return
+    lst.append({**item,
+                "sim": item.get("sim", 0.0),
+                "kw": item.get("kw", 0.0),
+                "struct": item.get("struct", 0.0),
+                "hits": item.get("hits", 0),
+                "structure": bool(item.get("structure"))})
+
+
 async def _collect_chunks(db: AsyncSession, doc_ids: list[int], query: str,
                           vec_chunk_hits: list[dict],
                           per_doc: int = 3) -> dict[int, list[dict]]:
     """给每篇文档挑出最相关的几块
 
-    两个来源：
+    三个来源：
       1. 向量通道命中的块 —— 已经知道语义相近
       2. 关键词通道在块级补扫 —— FTS 只到文档级，说不出「哪一段」
+      3. 结构定位通道 —— 命中的是块的标题（chunk_fts 的 heading 列）
 
-    选法是「两个通道各出各的头名」，不是把两边的分数混一起排序：
+    选法是「各通道各出各的头名」，不是把各边的分数混一起排序：
     混排时，只有一个通道认可、但另一个通道排第一的块会被稀释掉。
     实测有一道题（问手册 §8 里那条 git 硬约束），向量通道把它排到
     第 35 名，关键词通道却把它排在第 2 —— 混排的结果是它进不了
     前三，模型永远看不到那条真正的答案。
 
-    分数仍然保留（相似度 + 归一化后的关键词 idf），用于同通道内排序。
+    三个通道的分各自归一化再相加：bm25 的绝对值跨通道没有可比性
+    （正文通道的 20 分和标题通道的 20 分不是一回事），
+    混在一个池子里归一化会把正文命中的分数整体压下去。
+
+    分数仍然保留（相似度 + 归一化后的关键词 idf + 结构命中加权），
+    用于同通道内排序。
     """
     out: dict[int, list[dict]] = {}
     metric = await docindex.get_meta(db, docindex.META_VEC_METRIC)
 
     def _put(item: dict) -> None:
-        lst = out.setdefault(item["document_id"], [])
-        for x in lst:
-            if x["chunk_id"] == item["chunk_id"]:
-                # 同一个块两条通道都命中：两个分量各自取强
-                x["sim"] = max(x["sim"], item["sim"])
-                x["kw"] = max(x["kw"], item["kw"])
-                x["hits"] = max(x["hits"], item["hits"])
-                if x.get("seq") is None:
-                    x["seq"] = item.get("seq")
-                return
-        lst.append(item)
+        _put_chunk_hit(out, item)
 
     for h in vec_chunk_hits:
         did = h.get("document_id")
@@ -1077,22 +1109,42 @@ async def _collect_chunks(db: AsyncSession, doc_ids: list[int], query: str,
             continue
         sim = docindex.similarity(h.get("distance") or 0.0, metric)
         _put({"chunk_id": h.get("chunk_id"), "document_id": did, "seq": None,
-              "text": h["text"], "hits": 0, "sim": sim, "kw": 0.0})
+              "text": h["text"], "hits": 0, "sim": sim, "kw": 0.0,
+              "struct": 0.0, "structure": False})
 
+    # 关键词通道：查全库排序后按分数截断。
+    # 截断值不敢放大：候选池一大，别的文档的块也会挤进来，
+    # 同一道题的上下文跟着变，模型的答案会跟着飘
+    # （实测把截断从 16 放到 32，Q2 的预算数字就从 300 万答错了）。
+    # 这里的取舍是「上下文稳定」优先于「候选更多」。
     for c in await docindex.chunk_keyword_scan(db, doc_ids, query,
                                                 limit=max(8, len(doc_ids) * 4)):
         _put({"chunk_id": c["chunk_id"], "document_id": c["document_id"],
               "seq": c.get("seq"), "text": c["text"], "hits": c["hits"],
-              "sim": 0.0, "kw": float(c.get("score") or 0.0)})
+              "sim": 0.0, "kw": float(c.get("score") or 0.0), "struct": 0.0,
+              "structure": bool(c.get("structure"))})
+
+    # 结构定位：命中标题的块，权重比正文命中高。
+    # 标题是作者自己声明的结构，比正文里偶然撞上的几个字可靠得多。
+    for c in await docindex.chunk_heading_search(db, query,
+                                                 limit=max(8, len(doc_ids) * 2)):
+        _put({"chunk_id": c["chunk_id"], "document_id": c["document_id"],
+              "seq": c.get("seq"), "text": c["text"], "hits": c["hits"],
+              "sim": 0.0, "kw": 0.0,
+              "struct": float(c.get("score") or 0.0), "structure": True})
 
     for did, lst in out.items():
         kw_max = max((x["kw"] for x in lst), default=0.0)
+        st_max = max((x["struct"] for x in lst), default=0.0)
         for x in lst:
             x["kw_norm"] = (x["kw"] / kw_max) if kw_max > 0 else 0.0
-            x["score"] = round(x["sim"] + x["kw_norm"], 6)
+            x["struct_norm"] = (x["struct"] / st_max) if st_max > 0 else 0.0
+            x["score"] = round(x["sim"] + x["kw_norm"]
+                               + docindex.STRUCTURE_WEIGHT * x["struct_norm"], 6)
         # 通道内各自排序
         by_vec = sorted(lst, key=lambda x: (-x["sim"], x["chunk_id"]))
         by_kw = sorted(lst, key=lambda x: (-x["kw"], x["chunk_id"]))
+        by_struct = sorted(lst, key=lambda x: (-x["struct"], x["chunk_id"]))
         picked: list[dict] = []
         seen: set = set()
         # 向量通道出前两名，关键词通道也出前两名，谁都不被对方挤掉
@@ -1101,9 +1153,18 @@ async def _collect_chunks(db: AsyncSession, doc_ids: list[int], query: str,
                 if x["chunk_id"] not in seen:
                     seen.add(x["chunk_id"])
                     picked.append(x)
+        # 结构命中只占一个名额：它是加分项，不是主通道。
+        # 给两个名额的话，它会把正文命中里真正的答案段落挤出去 ——
+        # 实测问「手册 §8 的 git 硬约束」时，两个标题命中块占满了名额，
+        # 答案所在的那个块反而没进上下文，模型只能靠猜。
+        for x in by_struct[:1]:
+            if x["chunk_id"] not in seen:
+                seen.add(x["chunk_id"])
+                picked.append(x)
         picked.sort(key=lambda x: (-x["score"], x["chunk_id"]))
         out[did] = picked[:per_doc]
     return out
+
 
 
 async def search_documents(
@@ -1169,6 +1230,7 @@ async def search_documents(
 
     # 块级素材：向量命中的块（免费）+ 关键词在块级补扫（仅 with_chunks 时）
     chunk_map: dict[int, list[dict]] = {}
+    struct_ids: set[int] = set()
     if with_chunks:
         # 块级关键词扫描的范围要覆盖「向量通道提到的所有文档」，
         # 不只是排在最前的那几篇 —— 否则一篇文档哪怕被关键词通道
@@ -1178,6 +1240,8 @@ async def search_documents(
                          if h.get("document_id") is not None]
         ))
         chunk_map = await _collect_chunks(db, scan_ids, q, vec_chunk_hits)
+        struct_ids = {did for did, lst in chunk_map.items()
+                      if any(c.get("structure") for c in lst)}
     else:
         # 列表展示也要片段：直接用向量命中的块，不用额外查库
         metric = await docindex.get_meta(db, docindex.META_VEC_METRIC)
@@ -1189,6 +1253,12 @@ async def search_documents(
                 {"chunk_id": h.get("chunk_id"), "document_id": did, "seq": None,
                  "text": h["text"], "hits": 0,
                  "score": docindex.similarity(h.get("distance") or 0.0, metric)})
+        # 列表页不取块，但「结构命中」是要显示给用户看的：
+        # 命中的标题本身就是「这份文件里有这一节」的证据。
+        for c in await docindex.chunk_heading_search(db, q, limit=limit * 2):
+            did = c.get("document_id")
+            if did is not None:
+                struct_ids.add(did)
 
     items = []
     for did, score in order:
@@ -1200,6 +1270,10 @@ async def search_documents(
         item["matched_by"] = [
             m for m, s in (("keyword", fts_ids), ("semantic", vec_ids)) if did in s
         ]
+        # 结构命中：命中的是标题而不是正文，单独标出来，
+        # 用户才能分清「正文里提到了」和「文件里真有这么一节」
+        if did in struct_ids:
+            item["matched_by"].append("结构命中")
         picked = chunk_map.get(did) or []
         item["snippet"] = (_snippet_from_chunk(picked[0], q) if picked
                            else _snippet(d, q))
@@ -1207,6 +1281,7 @@ async def search_documents(
             item["chunks"] = [
                 {"chunk_id": c["chunk_id"], "seq": c.get("seq"),
                  "text": c["text"], "hits": c.get("hits", 0),
+                 "structure": bool(c.get("structure")),
                  "score": round(float(c.get("score", 0.0)), 6)}
                 for c in picked
             ]
@@ -1292,9 +1367,26 @@ async def build_ai_context(db: AsyncSession, question: str,
         hit_kind = "selected"
         # 用户点名了文件：在文件内部再定位一次块，
         # 免得问「付款条款是什么」却只喂了开头三千字
+        picked: dict[int, list[dict]] = {}
         for c in await docindex.chunk_keyword_scan(db, [d.id for d in docs],
                                                    question, limit=8):
-            picked_by_doc.setdefault(c["document_id"], []).append(c)
+            _put_chunk_hit(picked, {**c, "kw": float(c.get("score") or 0.0),
+                                    "sim": 0.0, "struct": 0.0})
+        # 结构定位：命中标题的块也算证据，权重更高
+        for c in await docindex.chunk_heading_search(db, question, limit=8):
+            _put_chunk_hit(picked, {**c, "kw": 0.0, "sim": 0.0,
+                                    "struct": float(c.get("score") or 0.0)})
+        for did, lst in picked.items():
+            # 两个通道各自归一化，标题命中再乘结构权重
+            kw_max = max((x["kw"] for x in lst), default=0.0)
+            st_max = max((x["struct"] for x in lst), default=0.0)
+            for x in lst:
+                x["kw_norm"] = (x["kw"] / kw_max) if kw_max > 0 else 0.0
+                x["struct_norm"] = (x["struct"] / st_max) if st_max > 0 else 0.0
+                x["score"] = round(x["kw_norm"]
+                                   + docindex.STRUCTURE_WEIGHT * x["struct_norm"], 6)
+            lst.sort(key=lambda x: (-x["score"], x["chunk_id"]))
+            picked_by_doc[did] = lst
     else:
         found = await search_documents(db, question, limit=max_docs, with_chunks=True)
         docs = []
@@ -1348,15 +1440,21 @@ async def build_ai_context(db: AsyncSession, question: str,
         # 编号必须跟 chunks 的下标一致 —— 上下文与出处是同一份顺序。
         cite_no = len(chunks) + 1
         chunks.append(f"【{cite_no}】{d.title}\n{body}")
+        matched_by = list(doc_meta.get(d.id, {}).get("matched_by")
+                          or ([hit_kind] if hit_kind == "selected" else []))
+        # 出处里标出「结构命中」：这条证据来自标题命中，
+        # 跟「正文里提到了」的命中不是一回事，用户要能分开看
+        if any(p.get("structure") for p in picked) and "结构命中" not in matched_by:
+            matched_by.append("结构命中")
         sources.append({
             "type": "document", "id": d.id,
             "title": d.title or d.filename,
-            "matched_by": doc_meta.get(d.id, {}).get("matched_by")
-                          or ([hit_kind] if hit_kind == "selected" else []),
+            "matched_by": matched_by,
             "snippet": doc_meta.get(d.id, {}).get("snippet") or "",
             "citation": cite_no,
             "chunks": [{"id": p.get("chunk_id"), "seq": p.get("seq"),
-                         "chars": len(p.get("text") or "")} for p in picked],
+                        "structure": bool(p.get("structure")),
+                        "chars": len(p.get("text") or "")} for p in picked],
         })
 
     # 再补上知识库笔记（原有能力）

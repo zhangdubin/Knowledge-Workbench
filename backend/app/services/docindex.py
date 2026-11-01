@@ -40,6 +40,19 @@ META_EMBED_DIM = "embed_dim"
 META_EMBED_MODEL = "embed_model"
 META_VEC_METRIC = "vec_metric"
 
+# 块级全文索引：rowid = document_chunk.id，两列（标题 / 正文）
+CHUNK_FTS_TABLE = "chunk_fts"
+# 分词方案版本号。分词一改，索引里存的就是另一套 token 了，
+# 增量补写只会得到「一半旧词一半新词」的索引 —— 查出来看着有命中、
+# 其实排序全乱，比空表更难排查。所以版本变了必须整表重建。
+CHUNK_FTS_VERSION = "bigram2"
+META_CHUNK_FTS_VERSION = "chunk_fts_version"
+
+# 结构命中相对正文命中的权重。标题是作者自己声明的结构，
+# 「变更日志」「付款条款」这种词出现在标题里，跟正文里偶然撞上两个字，
+# 可靠程度不是一个量级 —— 命中标题的块排序要压过命中正文的块。
+STRUCTURE_WEIGHT = 1.6
+
 # 距离度量。vec0 不写这个参数时默认是 L2（欧氏距离），
 # 而检索代码一直按「余弦距离」在解释 distance 值 —— 注释与实现对不上。
 # 更要命的是：换 embedding 模型后如果新模型输出的向量没有归一化，
@@ -75,6 +88,181 @@ def tokenize_for_index(*values: str) -> str:
     return "\n".join(seg_cjk(v) for v in values if v)
 
 
+# ---------- 块级 bigram 分词（chunk_fts 专用） ----------
+#
+# 为什么另起一套，不改 seg_cjk：
+# document_fts 是文档级通道，正在跑，改它的分词等于动整条检索链路。
+# 块级通道是新表新函数，老函数一行不动 —— 出问题可以整段回退。
+#
+# 为什么是 2-gram 而不是逐字：
+# 逐字切分把 bm25 的统计建立在「单字」上，而单字在中文里几乎没有
+# 区分度 —— 「的」「标」「注」「是」满库都是，真正有指向性的二字词
+# 被埋在噪声里。2-gram 天然长得很像词（「投标」「截止」「预算」），
+# 又不需要词典：离线装不了 jieba，规则切分是唯一能落地的办法。
+# 代价是丢掉单字召回（「预」这种查询搜不到），但那是可接受的取舍。
+
+# CJK 连续串 / 拉丁数字整词（切分的输入单元）
+_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+")
+_TOKEN_RUN_RE = re.compile(
+    r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+|[A-Za-z0-9]+")
+
+# Markdown 标题行：块的第一行就是它所属的标题（切块时带上来的）
+MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
+
+
+def _token_groups(value: str) -> list[list[str]]:
+    """把一段文字切成「短语组」，每组是一个 token 序列
+
+    这是切分的**唯一**实现：索引侧（写进 chunk_fts）和查询侧
+    （拼 MATCH 表达式）都必须走它。
+
+    为什么值得为这件事专门抽一个函数：两边只要有一处另写一份，
+    整条通道就会静默失效 —— 查询语法合法、不报错，
+    只是永远匹配不上（或者只匹配上另一批词）。
+    这种错在检索结果上表现为「搜不到」，排查起来最费时间。
+    """
+    groups: list[list[str]] = []
+    for m in _TOKEN_RUN_RE.finditer(value or ""):
+        s = m.group(0)
+        if _CJK_RUN_RE.fullmatch(s):
+            n = len(s)
+            # 长度为 1 的串单独成组：2-gram 对它没有定义，
+            # 直接丢掉就等于这个字永远搜不到。
+            groups.append([s] if n == 1 else [s[i:i + 2] for i in range(n - 1)])
+        else:
+            groups.append([s.lower()])
+    return groups
+
+
+def seg_bigram(value: str) -> str:
+    """CJK 连续串切成重叠 2-gram；拉丁字母与数字保持整词
+
+    索引侧写进 chunk_fts 的就是它切出来的 token。
+    """
+    out: list[str] = []
+    for g in _token_groups(value):
+        out.extend(g)
+    return " ".join(out)
+
+
+def chunk_fts_terms(query: str) -> list[str]:
+    """查询侧的 token 列表：与索引侧同构（同一个 _token_groups），去重保序
+
+    「同构」是这套方案能用的前提：索引侧写进去的是 bigram，
+    查询侧也必须是同一批 bigram，否则查的是另一套词表。
+    """
+    out: list[str] = []
+    for g in _token_groups(query):
+        for t in g:
+            if t not in out:
+                out.append(t)
+    return out
+
+
+def _col_phrase(column: str, phrase: str) -> str:
+    """给单个短语加上列过滤
+
+    FTS5 的列过滤**只作用于紧跟其后的那一个短语**，不是整个表达式。
+    `{heading} : "a" OR "b"` 里，"b" 是不受限的 —— 它照样能命中正文列，
+    于是「只搜标题」变成了「搜全文再假装是标题命中」。
+    这个坑很隐蔽：实测命中行数从 3 行变成 15 行，多出来的全是正文命中。
+    所以每个 OR 分支都得自己带上列过滤。
+    """
+    return f"{{{column}}} : {phrase}" if column else phrase
+
+
+def chunk_fts_query(query: str, *, column: str = "") -> str:
+    """块级检索的 MATCH 表达式：bigram token 之间用 OR
+
+    为什么不把整句做成一个短语：整句短语要求原文逐字连续出现整句，
+    问句「投标截止时间和开标时间分别是什么」在原文里根本不存在，
+    这样的查询永远返回空。拆成 bigram 之后变成「命中了哪些二字组合」，
+    排序交给 bm25 —— 稀有组合（git、27123、预算）自然排在前面。
+
+    column 非空时把检索限制在这一列上（结构定位通道用）。
+    """
+    terms = chunk_fts_terms(query)
+    if not terms:
+        return ""
+    return " OR ".join(_col_phrase(column, f'"{t}"') for t in terms)
+
+
+def chunk_fts_phrase_query(query: str, *, column: str = "") -> str:
+    """块级检索的「短语」表达式：一段连续汉字整体算一个 bigram 短语
+
+    「投标截止时间」→ "投标 标截 截止 止时 时间"，
+    只有原文真的出现这个连续子串才命中 —— 精度比逐字高得多。
+
+    token 序列直接来自 _token_groups（索引侧同一个函数），
+    不另写一份切分。
+    """
+    groups = _token_groups(query)
+    return " OR ".join(_col_phrase(column, '"' + " ".join(g) + '"') for g in groups)
+
+
+def chunk_fts_selfcheck(samples: list[str] | None = None) -> dict:
+    """自检：索引侧与查询侧必须是同一套切分
+
+    这个坑很安静：两边差一个字，整条通道就查不到东西，
+    而且不报错 —— 查询语法合法，只是永远匹配不上。
+    所以这里把两边钉死：
+
+      1) 切分只有一份实现（_token_groups），索引侧查询侧都走它；
+      2) 再验一遍真正发出去的那条 MATCH 表达式 ——
+         把表达式里的 token 抠出来，必须和同一段文字走索引侧切分
+         得到的 token 完全一致。
+
+    不一致直接抛异常：让这种错在重建索引时就炸，
+    而不是等到检索时才发现「搜不到」。
+    """
+    samples = samples or [
+        "V-MAX 手册 §8：HTTP 27123 端口，自签证书，git fetch 越权",
+        "投标截止时间和开标时间分别是什么",
+        "变更日志在哪",
+        "中",
+        "a",
+        "12345",
+    ]
+    checked = 0
+    for s in samples:
+        index_tokens = seg_bigram(s).split()
+        # 宽松表达式：去重后的 token 用 OR 连起来
+        loose_expr = chunk_fts_query(s)
+        loose_tokens = [t for p in loose_expr.split('"')[1::2] for t in p.split()]
+        if loose_tokens != list(dict.fromkeys(index_tokens)):
+            raise AssertionError(
+                f"宽松查询的 token 与索引侧不一致：{s!r} -> {loose_expr!r}")
+        # 短语表达式：每段原文切成一条 bigram 短语，token 顺序与索引侧一致
+        phrase_expr = chunk_fts_phrase_query(s)
+        phrase_tokens = [t for p in phrase_expr.split('"')[1::2] for t in p.split()]
+        if phrase_tokens != index_tokens:
+            raise AssertionError(
+                f"短语查询的 token 与索引侧不一致：{s!r} -> {phrase_expr!r}")
+        checked += 1
+    return {"samples": checked, "tokenizer": CHUNK_FTS_VERSION}
+
+
+def split_chunk_heading(text: str) -> tuple[str, str]:
+    """把块拆成 (标题, 正文)
+
+    块的第一行就是它所属的标题（切块时带上的），标题单独成列是
+    「结构定位」的前提：用户问「变更日志在哪」，命中的是标题，
+    而不是正文里恰好也出现「变更日志」四个字。
+
+    结构锚点只认 H2 及以下：H1 是文档标题，文档级通道
+    （document_fts 的 title 列）已经管着它。再把它当成「章节」用，
+    每篇文档的标题块都会拿到一张假的结构命中牌，
+    把真正的章节命中挤到后面去 —— 排序直接被带偏。
+    """
+    lines = (text or "").split("\n")
+    if lines:
+        m = MD_HEADING_RE.match(lines[0].strip())
+        if m:
+            level = len(m.group(1))
+            return (m.group(2) if level >= 2 else ""), "\n".join(lines[1:])
+    return "", text or ""
+
+
 # ---------- 建表 ----------
 
 async def ensure_index_tables(conn) -> None:
@@ -88,10 +276,117 @@ async def ensure_index_tables(conn) -> None:
     except Exception as e:
         log.warning("FTS5 索引表创建失败，全文检索将降级为 LIKE：%s", e)
 
+    # 块级全文索引 —— 跟 document_fts 一样只用 FTS5，不引入新扩展
+    await ensure_chunk_fts(conn)
+
     # 向量索引 —— 需要 sqlite-vec 扩展
     dim = await get_meta(conn, META_EMBED_DIM)
     if dim:
         await ensure_vec_table(conn, int(dim))
+
+
+async def ensure_chunk_fts(conn) -> bool:
+    """确保块级索引表存在，且内容是当前分词方案写的
+
+    版本记号（sys_meta.chunk_fts_version）对不上 = 这张表是用旧分词写的，
+    得整表重建。重建放在启动时做，是因为「新表刚上线」这个窗口里
+    检索必须能用：老库里的块还没有 chunk_fts 索引，
+    而块级定位是长文档里找回答案段落的关键一步。
+    """
+    try:
+        await conn.execute(text(
+            f"create virtual table if not exists {CHUNK_FTS_TABLE} using fts5("
+            "heading, body, tokenize='unicode61 remove_diacritics 2')"
+        ))
+    except Exception as e:
+        log.warning("块级 FTS5 索引表创建失败，块级定位将退回 Python 扫描：%s", e)
+        return False
+
+    version = await get_meta(conn, META_CHUNK_FTS_VERSION)
+    if version == CHUNK_FTS_VERSION:
+        return True
+    try:
+        # 先验切分：索引侧与查询侧不同构的话，这条通道等于不存在，
+        # 而它失败的方式是「搜不到」—— 最安静也最难查的那种错
+        chunk_fts_selfcheck()
+        n = await rebuild_chunk_fts(conn)
+        await set_meta(conn, META_CHUNK_FTS_VERSION, CHUNK_FTS_VERSION)
+        log.info("块级全文索引已重建：%s 块（分词方案 %s）", n, CHUNK_FTS_VERSION)
+        # 再验「查得回来」：光看代码一致不够，得确认库里写进去的
+        # 就是这份代码切出来的
+        rt = await chunk_fts_roundtrip_check(conn, limit=3)
+        if rt["body_miss"] or rt["head_miss"]:
+            log.warning("块级索引自检未通过（检索会静默失效）：%s", rt)
+        return True
+    except Exception as e:
+        log.warning("块级全文索引重建失败，块级定位将退回 Python 扫描：%s", e)
+        return False
+
+
+async def rebuild_chunk_fts(conn, batch: int = 500) -> int:
+    """按当前分词方案重建整张块级索引（rowid = document_chunk.id）
+
+    为什么必须整表重建而不是增量补写：分词方案变了（逐字 → bigram），
+    索引里存的就是另一套 token 了。增量补写会得到「一半旧词一半新词」
+    的索引 —— 查出来看着有命中，其实排序全乱，比空表更难排查。
+
+    软删除的文档不进索引：回收站里的文件不该还能被搜到，
+    否则「删除」就只是个摆设。
+    """
+    await conn.execute(text(f"delete from {CHUNK_FTS_TABLE}"))
+    total = 0
+    last = 0
+    while True:
+        rows = (await conn.execute(
+            text("select c.id, c.text from document_chunk c "
+                 "join document d on d.id = c.document_id "
+                 "where c.id > :last and d.deleted_at is null "
+                 "order by c.id limit :lim"),
+            {"last": last, "lim": batch})).all()
+        if not rows:
+            break
+        payload = []
+        for cid, ctext in rows:
+            heading, body = split_chunk_heading(ctext or "")
+            payload.append({"r": cid, "h": seg_bigram(heading),
+                            "b": seg_bigram(body)})
+            last = cid
+        await conn.execute(
+            text(f"insert into {CHUNK_FTS_TABLE}(rowid, heading, body) "
+                 "values (:r, :h, :b)"), payload)
+        total += len(payload)
+    return total
+
+
+async def chunk_fts_roundtrip_check(db, limit: int = 5) -> dict:
+    """拿库里的真实块做一次「查回来」自检
+
+    纯函数自检只能保证「代码里索引侧和查询侧一致」，
+    保证不了「库里写进去的就是这份代码切出来的」——
+    旧库、旧分词方案、写入路径漏写，都会破这一层。
+
+    所以再补一层：抽几块的正文当查询发出去，这几块必须能被自己查回来；
+    再抽几块的结构锚点当查询，标题通道必须能把它们查回来。
+    查不回来 = 索引与查询不同构，这条通道等于不存在。
+    """
+    rows = (await db.execute(
+        text("select id, text from document_chunk "
+             "where text is not null and length(text) > 40 limit :lim"),
+        {"lim": limit * 3})).all()
+    body_miss: list[int] = []
+    head_miss: list[int] = []
+    for cid, ctext in rows:
+        heading, body = split_chunk_heading(ctext or "")
+        probe = (body or "")[:60].strip()
+        if probe:
+            hits = await chunk_fts_search(db, probe, limit=60)
+            if not any(h["chunk_id"] == cid for h in hits):
+                body_miss.append(cid)
+        if heading:
+            hits = await chunk_heading_search(db, heading, limit=60)
+            if not any(h["chunk_id"] == cid for h in hits):
+                head_miss.append(cid)
+    return {"checked": len(rows), "body_miss": body_miss, "head_miss": head_miss}
 
 
 async def ensure_vec_table(conn, dim: int) -> bool:
@@ -248,9 +543,90 @@ async def remove_fts(db: AsyncSession, doc_id: int) -> None:
         log.warning("FTS 索引删除失败 doc=%s：%s", doc_id, e)
 
 
+# ---------- 块级索引写入 ----------
+
+async def index_chunks(db, doc_id: int, chunks: list[tuple[int, str]]) -> int:
+    """把切好的块写进块级索引（rowid = document_chunk.id，标题/正文两列）
+
+    幂等：写之前先清掉这篇文档在 chunk_fts 里的旧行，
+    同一次切块重跑不会留下上一轮的残骸。
+    """
+    if not chunks:
+        return 0
+    try:
+        await db.execute(
+            text(f"delete from {CHUNK_FTS_TABLE} where rowid in "
+                 "(select id from document_chunk where document_id = :d)"),
+            {"d": doc_id},
+        )
+        payload = []
+        for cid, ctext in chunks:
+            heading, body = split_chunk_heading(ctext or "")
+            payload.append({"r": cid, "h": seg_bigram(heading),
+                            "b": seg_bigram(body)})
+        await db.execute(
+            text(f"insert into {CHUNK_FTS_TABLE}(rowid, heading, body) "
+                 "values (:r, :h, :b)"), payload)
+        return len(payload)
+    except Exception as e:
+        log.warning("块级索引写入失败 doc=%s：%s", doc_id, e)
+        return 0
+
+
+async def remove_chunks(db, chunk_ids: list[int]) -> None:
+    """从块级索引里删掉这些块（重新切块时用）"""
+    if not chunk_ids:
+        return
+    qmarks = ",".join(f":c{i}" for i in range(len(chunk_ids)))
+    params = {f"c{i}": cid for i, cid in enumerate(chunk_ids)}
+    try:
+        await db.execute(
+            text(f"delete from {CHUNK_FTS_TABLE} where rowid in ({qmarks})"), params)
+    except Exception as e:
+        log.warning("块级索引删除失败：%s", e)
+
+
+async def rebuild_document_chunks(db, doc_id: int) -> int:
+    """按当前分词方案重建某篇文档的块级索引
+
+    用在「块还在、但索引丢了」的地方：软删除再恢复就是一个。
+    """
+    try:
+        rows = (await db.execute(
+            text("select id, text from document_chunk where document_id = :d"),
+            {"d": doc_id})).all()
+        await db.execute(
+            text(f"delete from {CHUNK_FTS_TABLE} where rowid in "
+                 "(select id from document_chunk where document_id = :d)"),
+            {"d": doc_id})
+        payload = []
+        for cid, ctext in rows:
+            heading, body = split_chunk_heading(ctext or "")
+            payload.append({"r": cid, "h": seg_bigram(heading),
+                            "b": seg_bigram(body)})
+        if payload:
+            await db.execute(
+                text(f"insert into {CHUNK_FTS_TABLE}(rowid, heading, body) "
+                     "values (:r, :h, :b)"), payload)
+        return len(payload)
+    except Exception as e:
+        log.warning("块级索引重建失败 doc=%s：%s", doc_id, e)
+        return 0
+
+
 async def remove_document(db: AsyncSession, doc_id: int) -> None:
-    """从 FTS5 与向量表移除文档"""
+    """从 FTS5、块级索引与向量表移除文档"""
     await remove_fts(db, doc_id)
+
+    # 块级索引：删文档就等于删掉它所有块的索引行，
+    # 不然回收站里的文件照样能被关键词搜出来 —— 「删除」成了摆设。
+    try:
+        await db.execute(
+            text(f"delete from {CHUNK_FTS_TABLE} where rowid in "
+                 "(select id from document_chunk where document_id = :d)"),
+            {"d": doc_id})
+    except Exception as e:
+        log.warning("块级索引删除失败 doc=%s：%s", doc_id, e)
 
     try:
         rows = (await db.execute(
@@ -402,11 +778,153 @@ def keyword_terms(query: str, max_cjk: int = 12, max_latin: int = 6) -> list[str
 async def chunk_keyword_scan(db: AsyncSession, doc_ids: list[int], query: str,
                              limit: int = 12, max_docs: int = 6,
                              max_chunks: int = 1500) -> list[dict]:
-    """在指定文档的块里做关键词定位
+    """块级关键词定位：优先查 chunk_fts，查不动再退回 Python 扫描
 
-    FTS5 表一行一篇文档（rowid = document.id），所以关键词通道只能
+    FTS5 表一行一篇文档（rowid = document.id），所以文档级通道只能
     告诉你「哪篇文档相关」，说不出「哪一段相关」。长文档里答案常在
     中间偏后，只给模型整篇开头就会答不上来 —— 这一步补上块级定位。
+
+    现在是查索引而不是把候选块的正文拉回 Python 做字符串匹配：
+    一次 MATCH 把全库的块排好序，既不再受「只扫前 6 篇文档 / 前 1500 块」
+    的截断影响，也让 bm25 的 idf 建立在全库统计上 ——
+    局部 idf 会把「在这几篇文档里常见」误当成「有信息量」。
+
+    兜底必须留着：chunk_fts 是新表，老库里它是空的（版本记号对不上），
+    直接返回空 = 长文档里的检索整体失效。
+    """
+    if not keyword_terms(query):
+        return []
+    if await chunk_fts_ready(db):
+        return await chunk_fts_search(db, query, limit=limit)
+    return await _chunk_keyword_scan_python(db, doc_ids, query, limit, max_docs,
+                                            max_chunks)
+
+
+async def chunk_fts_ready(db) -> bool:
+    """块级索引能不能用（表建好了、且是当前分词方案写的）
+
+    判据用 sys_meta 里的版本记号，而不是「表里有没有行」：
+    count(*) 在 FTS5 上是全表扫描，库大了每次检索都白扫一遍。
+    """
+    try:
+        version = await get_meta(db, META_CHUNK_FTS_VERSION)
+    except Exception:
+        return False
+    return (version or "") == CHUNK_FTS_VERSION
+
+
+async def _chunk_fts_rows(db, expr: str, limit: int) -> list[tuple[int, float]]:
+    """跑 chunk_fts 的 MATCH，返回 [(chunk_id, 相关度)]，相关度越大越相关
+
+    expr 里自带列过滤（结构定位通道用）：命中的是标题，
+    不是正文里恰好也出现的那几个字。
+    """
+    if not expr:
+        return []
+    try:
+        rows = (await db.execute(
+            text(f"select rowid, bm25({CHUNK_FTS_TABLE}) as r from {CHUNK_FTS_TABLE} "
+                 f"where {CHUNK_FTS_TABLE} match :q order by rank limit :lim"),
+            {"q": expr, "lim": limit})).all()
+    except Exception as e:
+        log.warning("块级 FTS 检索失败：%s", e)
+        return []
+    # bm25() 是「越小越相关」的负数，取反得到越大越相关
+    return [(r[0], -float(r[1] or 0.0)) for r in rows]
+
+
+async def _hydrate_chunk_hits(db, rows: list[tuple[int, float]], query: str,
+                              *, structure: bool = False) -> list[dict]:
+    """回表取 document_id/seq/text，并统计命中了几个词
+
+    「命中了几个词」用来在同分时排序：一个块命中 3 个词比只命中 1 个强。
+    命中数按索引侧同一套切分统计（而不是把空白压平再子串匹配），
+    否则「被换行劈开的二字词」会被算成命中，与索引事实不符。
+
+    结构通道只数标题里的命中：正文里命中再多词，也说明不了
+    「这一节就是你要的那一节」。
+    """
+    if not rows:
+        return []
+    ids = [r[0] for r in rows]
+    qmarks = ",".join(f":c{i}" for i in range(len(ids)))
+    params = {f"c{i}": cid for i, cid in enumerate(ids)}
+    try:
+        meta = (await db.execute(
+            text(f"select id, document_id, seq, text from document_chunk "
+                 f"where id in ({qmarks})"), params)).all()
+    except Exception as e:
+        log.warning("块级命中回表失败：%s", e)
+        return []
+    info = {r[0]: (r[1], r[2], r[3] or "") for r in meta}
+
+    terms = chunk_fts_terms(query)
+    # 分数在本通道内归一化：bm25 的绝对值跨通道没有可比性
+    # （idf 随语料变化，正文通道的 20 分和标题通道的 20 分不是一回事），
+    # 归一化之后才能诚实地给标题命中加权。
+    top = max((s for _cid, s in rows), default=0.0) or 1.0
+    out: list[dict] = []
+    for cid, score in rows:
+        got = info.get(cid)
+        if got is None:
+            continue
+        did, seq, ctext = got
+        heading, body = split_chunk_heading(ctext)
+        tokens = set(seg_bigram(heading if structure else body).split())
+        out.append({
+            "chunk_id": cid,
+            "document_id": did,
+            "seq": seq,
+            "text": ctext,
+            "hits": sum(1 for t in terms if t in tokens),
+            "score": round(score / top, 6),
+            "structure": structure,
+        })
+    return out
+
+
+async def chunk_fts_search(db, query: str, limit: int = 12) -> list[dict]:
+    """块级正文检索（chunk_fts 的 body 列）
+
+    查全库，不限文档：块级定位的价值就在于「答案可能落在
+    排名靠后那篇文档的中后段」，只扫前几篇文档等于把这部分答案扔掉。
+    """
+    expr = chunk_fts_query(query)
+    if not expr:
+        return []
+    rows = await _chunk_fts_rows(db, expr, limit)
+    return await _hydrate_chunk_hits(db, rows, query)
+
+
+async def chunk_heading_search(db, query: str, limit: int = 12) -> list[dict]:
+    """结构定位：只在 chunk_fts 的 heading 列上匹配
+
+    问「变更日志在哪」「付款条款是什么」，命中的是标题而不是正文 ——
+    标题是作者自己声明的结构，比正文里偶然撞上的几个字可靠得多。
+    这就是 OpenKB 里 PageIndex 那套「靠结构定位」的落法。
+
+    先用短语表达式（精确：原文得真出现这个连续子串），
+    命中不了再退回 bigram OR（召回：问句里「在哪」「是什么」这类
+    问词不在标题里，整句短语永远匹配不上）。
+
+    列过滤必须逐个 OR 分支都带上（FTS5 的列过滤只管紧跟其后的那个短语），
+    否则「只搜标题」会漏成「搜全文」，结构命中牌就发错了。
+    """
+    expr = chunk_fts_phrase_query(query, column="heading")
+    rows = await _chunk_fts_rows(db, expr, limit)
+    if not rows:
+        expr = chunk_fts_query(query, column="heading")
+        rows = await _chunk_fts_rows(db, expr, limit)
+    return await _hydrate_chunk_hits(db, rows, query, structure=True)
+
+
+async def _chunk_keyword_scan_python(db: AsyncSession, doc_ids: list[int],
+                                     query: str, limit: int = 12,
+                                     max_docs: int = 6,
+                                     max_chunks: int = 1500) -> list[dict]:
+    """兜底：没有块级索引时，在指定文档的块里做字符串匹配
+
+    这是块级索引上线之前的做法，现在只在 chunk_fts 不可用时兜底。
 
     打分用 BM25 那套 idf：命中「写入」这种到处都是的词，
     不该和命中「27123」这种只出现一次的词等价。
@@ -417,7 +935,8 @@ async def chunk_keyword_scan(db: AsyncSession, doc_ids: list[int], query: str,
     （「涉密信息\\n系统集成」），带空白的 LIKE 永远匹配不上，
     带空白的整词查询也会失手。
 
-    只在排名靠前的几篇文档里扫，不扫全库：块级扫描是补漏，不是主通道。
+    只在排名靠前的几篇文档里扫，不扫全库：这是兜底路径，
+    全库扫一遍的代价在库大了以后受不了。
     """
     terms = keyword_terms(query)
     if not terms or not doc_ids:
@@ -459,6 +978,8 @@ async def chunk_keyword_scan(db: AsyncSession, doc_ids: list[int], query: str,
             "text": ctext or "",
             "hits": len(matched),
             "score": sum(idf[i] for i in matched),
+            "structure": False,
         })
     out.sort(key=lambda x: (-x["score"], -x["hits"], x["chunk_id"]))
     return out[:limit]
+

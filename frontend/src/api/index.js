@@ -420,6 +420,8 @@ export const Api = {
   dnaDocuments: () => api.get('/api/dna/documents'),
   dnaDocument: (id) => api.get(`/api/dna/documents/${id}`),
   dnaTree: () => api.get('/api/dna/tree'),
+  // 关联脉络图：文件 → 章节骨架 → 挂着的记录
+  dnaGraph: () => api.get('/api/dna/graph'),
   // Markdown 总索引：必须走 blob —— 直接下会被 axios 当 JSON 解析
   dnaReport: () => api.get('/api/dna/report', { responseType: 'blob' }),
   dnaReportJson: () => api.get('/api/dna/report.json'),

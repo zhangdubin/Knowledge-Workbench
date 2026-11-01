@@ -2,7 +2,7 @@
   <div class="page dna-page">
     <PageTitle
       title="养料 DNA"
-      subtitle="喂给模型的资料的体检报告与基因图谱：成分、结构、指纹、健康度"
+      subtitle="喂给模型的资料的体检报告与基因图谱：成分、骨架、指纹、脉络、健康度"
       icon-key="DataLine"
     >
       <el-button :loading="loading" @click="loadAll">
@@ -21,52 +21,78 @@
     </el-alert>
 
     <div v-loading="loading && !overview" class="dna-body">
-      <!-- ============ 一、总量与健康分 ============ -->
-      <div v-if="overview" class="pgrid stat-row">
-        <div class="pcard" style="--ac-fg: var(--primary)">
-          <div class="stat-label">文档</div>
-          <div class="stat-value">{{ overview.totals.documents }}</div>
-          <div class="stat-sub">另有笔记 {{ overview.totals.notes }} 篇</div>
-        </div>
-        <div class="pcard" style="--ac-fg: var(--accent-blue)">
-          <div class="stat-label">知识块</div>
-          <div class="stat-value">{{ overview.totals.chunks }}</div>
-          <div class="stat-sub">{{ overview.totals.words }} 字 · 平均每块 {{ avgChunkWords }} 字</div>
-        </div>
-        <div class="pcard" style="--ac-fg: var(--accent-green)">
-          <div class="stat-label">向量覆盖</div>
-          <div class="stat-value">{{ overview.totals.embedded }}<span class="stat-unit">/{{ overview.totals.vector_rows }}</span></div>
-          <div class="stat-sub">{{ overview.engine.embed_model }} · {{ overview.engine.embed_dim }} 维 · {{ overview.engine.vec_metric }}</div>
-        </div>
-        <div class="pcard" style="--ac-fg: var(--accent-amber)">
-          <div class="stat-label">库体积</div>
-          <div class="stat-value">{{ formatBytes(overview.totals.db_bytes) }}</div>
-          <div class="stat-sub">其中向量 {{ formatBytes(overview.totals.vector_bytes) }}</div>
-        </div>
-        <div class="pcard score-card" :style="scoreAccent">
-          <div class="stat-label">健康分</div>
-          <div class="stat-value">{{ overview.score }}<span class="stat-unit">/100</span></div>
-          <div class="score-bar">
-            <div class="score-fill" :style="{ width: overview.score + '%' }" />
+      <!-- ============ 一、结论带：先给结论，再给细节 ============ -->
+      <div v-if="overview" class="pcard hero">
+        <div class="hero-score">
+          <div class="score-ring" :style="ringStyle">
+            <div class="score-inner">
+              <span class="score-num" :style="{ color: scoreColor }">{{ overview.score }}</span>
+              <span class="score-max">/ 100</span>
+            </div>
           </div>
-          <div class="stat-sub">{{ scoreText }}</div>
+          <div class="score-side">
+            <div class="score-title">健康分{{ scoreText }}</div>
+            <div class="score-desc">
+              {{ scoreDesc }}
+            </div>
+            <div class="engine-strip">
+              <span class="eng-item">模型 {{ overview.engine.embed_model }}</span>
+              <span class="eng-item">{{ overview.engine.embed_dim }} 维</span>
+              <span class="eng-item">{{ overview.engine.vec_metric }}</span>
+              <span class="eng-item">分块 {{ overview.engine.chunk_size }}+{{ overview.engine.chunk_overlap }}</span>
+              <span class="eng-item" :class="overview.engine.fts_available ? 'ok' : 'bad'">
+                全文 {{ overview.engine.fts_available ? '可用' : '不可用' }}
+              </span>
+              <span class="eng-item" :class="overview.engine.vec_available ? 'ok' : 'bad'">
+                向量 {{ overview.engine.vec_available ? '可用' : '不可用' }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-metrics">
+          <div class="metric">
+            <div class="metric-num">{{ overview.totals.documents }}</div>
+            <div class="metric-label">文档</div>
+            <div class="metric-sub">另有笔记 {{ overview.totals.notes }} 篇</div>
+          </div>
+          <div class="metric">
+            <div class="metric-num">{{ overview.totals.chunks }}</div>
+            <div class="metric-label">知识块</div>
+            <div class="metric-sub">平均每块 {{ avgChunkWords }} 字</div>
+          </div>
+          <div class="metric">
+            <div class="metric-num">{{ formatNumber(overview.totals.words) }}</div>
+            <div class="metric-label">总字数</div>
+            <div class="metric-sub">{{ formatBytes(overview.totals.db_bytes) }} 库体积</div>
+          </div>
+          <div class="metric">
+            <div class="metric-num">
+              {{ overview.totals.embedded }}<span class="metric-den">/{{ overview.totals.vector_rows }}</span>
+            </div>
+            <div class="metric-label">向量覆盖</div>
+            <div class="metric-sub">向量占 {{ vectorRatio }}%</div>
+          </div>
+          <div class="metric">
+            <div class="metric-num">{{ overview.totals.links }}</div>
+            <div class="metric-label">文件关联</div>
+            <div class="metric-sub">{{ overview.checks.length }} 项体检结论</div>
+          </div>
         </div>
       </div>
 
       <!-- ============ 二、体检清单（这个页面最要紧的东西） ============ -->
-      <div v-if="overview" class="section">
+      <section v-if="overview" class="section">
         <div class="section-head">
-          <h3 class="section-title">
-            体检清单
-            <span class="section-badge">{{ overview.checks.length }} 项</span>
-          </h3>
-          <div class="section-extra">
+          <h3 class="section-title">体检清单</h3>
+          <div class="section-tags">
             <span v-if="errCount" class="ptag" style="--ac-fg: var(--danger); --ac-bg: var(--danger-bg); --ac-line: var(--danger)">
               {{ errCount }} 严重
             </span>
             <span v-if="warnCount" class="ptag" style="--ac-fg: var(--warning); --ac-bg: var(--warning-bg); --ac-line: var(--warning)">
               {{ warnCount }} 警告
             </span>
+            <span class="section-note">{{ overview.checks.length }} 项结论 · 生成于 {{ formatTime(overview.generated_at) }}</span>
           </div>
         </div>
 
@@ -74,17 +100,18 @@
           <el-icon class="ok-icon"><CircleCheckFilled /></el-icon>
           <div>
             <div class="ok-title">一切正常</div>
-            <div class="ok-sub">没有检出问题：正文齐、向量齐、索引一致。</div>
+            <div class="ok-sub">没有检出问题：正文齐、向量齐、索引一致、没有重复内容。</div>
           </div>
         </div>
 
-        <div v-else class="check-list">
+        <div v-else class="check-grid">
           <div
             v-for="c in overview.checks"
             :key="c.key"
             class="pcard check-card"
             :class="c.level"
           >
+            <div class="check-bar" />
             <div class="check-main">
               <div class="check-title">
                 <el-icon class="check-icon"><component :is="levelIcon(c.level)" /></el-icon>
@@ -92,7 +119,7 @@
               </div>
               <div class="check-detail">{{ c.detail }}</div>
               <div class="check-hint">
-                <el-icon><InfoFilled /></el-icon>{{ c.hint }}
+                <el-icon><InfoFilled /></el-icon><span>{{ c.hint }}</span>
               </div>
             </div>
             <div v-if="c.action === 'reindex' && c.doc_ids && c.doc_ids.length" class="check-actions">
@@ -108,9 +135,9 @@
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <!-- ============ 三、主题指纹 + 成分 ============ -->
+      <!-- ============ 三、指纹 + 成分 ============ -->
       <div v-if="overview" class="pgrid two-col">
         <div class="pcard">
           <div class="section-head">
@@ -120,10 +147,11 @@
           <div v-if="!overview.fingerprint.length" class="empty">还没有可统计的正文</div>
           <div v-else class="fp-list">
             <div v-for="f in overview.fingerprint" :key="f.term" class="fp-row">
-              <span class="fp-term">{{ f.term }}</span>
+              <span class="fp-term" :title="f.term">{{ f.term }}</span>
               <div class="fp-bar">
                 <div class="fp-fill" :style="{ width: fpWidth(f) + '%' }" />
               </div>
+              <span class="fp-docs">{{ f.docs }} 篇</span>
               <span class="fp-weight">{{ f.weight.toFixed(1) }}</span>
             </div>
           </div>
@@ -179,11 +207,22 @@
         </div>
       </div>
 
-      <!-- ============ 四、文档谱系 ============ -->
-      <div v-if="overview" class="section">
+      <!-- ============ 四、关联脉络图 ============ -->
+      <section v-if="overview" class="section">
+        <div class="section-head">
+          <h3 class="section-title">关联脉络图</h3>
+          <span class="section-note">文件 → 章节骨架 → 挂着的记录，双击文件节点可去数据中心</span>
+        </div>
+        <div class="pcard graph-card">
+          <DnaGraph :graph="graph" />
+        </div>
+      </section>
+
+      <!-- ============ 五、文档谱系 ============ -->
+      <section v-if="overview" class="section">
         <div class="section-head">
           <h3 class="section-title">文档谱系</h3>
-          <span class="section-note">点一行看这篇的结构与切块</span>
+          <span class="section-note">点标题展开这篇的结构与切块</span>
         </div>
         <div class="pcard table-card">
           <el-table
@@ -263,7 +302,7 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column prop="title" label="标题" min-width="220">
+            <el-table-column prop="title" label="标题" min-width="230">
               <template #default="{ row }">
                 <div class="doc-title doc-title-link" @click="toggleRow(row)">{{ row.title }}</div>
                 <div class="doc-sum">{{ row.summary || '（没有摘要）' }}</div>
@@ -287,34 +326,39 @@
             <el-table-column prop="created_at" label="入库时间" width="160" />
           </el-table>
         </div>
-      </div>
+      </section>
 
-      <!-- ============ 五、全库结构索引 ============ -->
-      <div v-if="overview" class="section">
+      <!-- ============ 六、全库结构索引 ============ -->
+      <section v-if="overview" class="section">
         <div class="section-head">
           <h3 class="section-title">全库结构索引</h3>
           <span class="section-note">每篇文档的标题层级 —— 人和模型都能当目录用</span>
         </div>
-        <div class="pcard">
-          <div v-if="!tree.length" class="empty">没有结构信息</div>
-          <div v-for="t in tree" :key="t.id" class="tree-doc">
-            <div class="tree-doc-title">
-              {{ t.title }}
-              <span class="tree-doc-meta">{{ t.words }} 字</span>
+        <div class="pgrid tree-grid">
+          <div v-for="t in tree" :key="t.id" class="pcard tree-card">
+            <div class="tree-card-head">
+              <span class="tree-card-title">{{ t.title }}</span>
+              <span class="tree-card-meta">{{ t.words }} 字</span>
             </div>
-            <ul class="tree">
+            <ul v-if="t.outline && t.outline.length" class="tree">
               <li v-for="(n, i) in t.outline" :key="i">
                 <span class="tree-title">{{ n.title }}</span>
                 <ul v-if="n.children && n.children.length">
                   <li v-for="(c, j) in n.children" :key="j">
                     <span class="tree-title">{{ c.title }}</span>
+                    <ul v-if="c.children && c.children.length">
+                      <li v-for="(g, k) in c.children" :key="k">
+                        <span class="tree-title">{{ g.title }}</span>
+                      </li>
+                    </ul>
                   </li>
                 </ul>
               </li>
             </ul>
+            <div v-else class="empty small">没有标题层级（正文型文件）</div>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   </div>
 </template>
@@ -323,19 +367,21 @@
 /**
  * 养料 DNA —— 喂给模型的资料的体检报告与基因图谱
  *
- * 这个页面只读：它回答四个问题
+ * 这个页面只读：它回答五个问题
  *   成分（我到底喂了什么）· 骨架（这些东西长什么样）
- *   指纹（主题特征是什么）· 健康度（哪里有毛病）
+ *   指纹（主题特征是什么）· 脉络（它们之间怎么连着）
+ *   健康度（哪里有毛病）
  *
  * 唯一的写操作是体检清单里的「重建索引」——
  * 那不是 DNA 的一部分，是给体检结论配的一个修复按钮。
  *
- * 结构树那一块借鉴的是 OpenKB 的 PageIndex：
+ * 结构树借鉴的是 OpenKB 的 PageIndex：
  * 把文档编成标题树，靠结构定位，而不是只靠相似度。
  */
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageTitle from '../components/PageTitle.vue'
+import DnaGraph from '../components/DnaGraph.vue'
 import { Api } from '../api'
 
 const loading = ref(false)
@@ -343,6 +389,7 @@ const error = ref('')
 const overview = ref(null)
 const documents = ref([])
 const tree = ref([])
+const graph = ref({ nodes: [], edges: [], stats: {} })
 const details = ref({})
 const reindexing = ref(0)
 const tableRef = ref(null)
@@ -369,18 +416,41 @@ const avgChunkWords = computed(() => {
   return Math.round(t.words / t.chunks)
 })
 
-const scoreAccent = computed(() => {
+const scoreColor = computed(() => {
   const s = overview.value?.score ?? 0
-  const color = s >= 90 ? 'var(--success)' : s >= 70 ? 'var(--warning)' : 'var(--danger)'
-  return { '--ac-fg': color }
+  if (s >= 90) return 'var(--success)'
+  if (s >= 70) return 'var(--warning)'
+  return 'var(--danger)'
+})
+
+const ringStyle = computed(() => {
+  const s = overview.value?.score ?? 0
+  const c = scoreColor.value
+  return {
+    background: `conic-gradient(${c} ${s * 3.6}deg, var(--bg-sunken) 0deg)`,
+  }
 })
 
 const scoreText = computed(() => {
   const s = overview.value?.score ?? 0
-  if (s >= 95) return '状态很好'
-  if (s >= 90) return '基本健康'
-  if (s >= 70) return '有些问题要处理'
-  return '需要尽快处理'
+  if (s >= 95) return ' · 状态很好'
+  if (s >= 90) return ' · 基本健康'
+  if (s >= 70) return ' · 有些问题要处理'
+  return ' · 需要尽快处理'
+})
+
+const scoreDesc = computed(() => {
+  const t = overview.value?.totals
+  if (!t) return ''
+  const bad = errCount.value + warnCount.value
+  if (!bad) return '这批资料可以直接喂给模型。'
+  return `这批资料能喂给模型，但有 ${bad} 处需要注意（见下方体检清单）。`
+})
+
+const vectorRatio = computed(() => {
+  const t = overview.value?.totals
+  if (!t || !t.db_bytes) return 0
+  return Math.round((t.vector_bytes / t.db_bytes) * 100)
 })
 
 const fpMax = computed(() => {
@@ -420,6 +490,15 @@ function formatBytes(n) {
   return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
+function formatNumber(n) {
+  return (n || 0).toLocaleString('zh-CN')
+}
+
+function formatTime(iso) {
+  if (!iso) return ''
+  return String(iso).replace('T', ' ').slice(0, 16)
+}
+
 function detailFor(id) {
   return details.value[id] || { loading: false, data: null }
 }
@@ -440,6 +519,12 @@ async function loadAll() {
     error.value = '养料 DNA 读取失败：' + (e?.message || e)
   } finally {
     loading.value = false
+  }
+  // 脉络图单独拉：它比概览重，失败也不该把整页拖垮
+  try {
+    graph.value = await Api.dnaGraph()
+  } catch (e) {
+    graph.value = { nodes: [], edges: [], stats: {} }
   }
 }
 
@@ -517,82 +602,133 @@ onMounted(loadAll)
 <style scoped>
 .dna-body { min-height: 200px; }
 
-/* ---- 统计卡 ---- */
-.stat-row {
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  margin-bottom: 22px;
+/* ============ 结论带 ============ */
+.hero {
+  display: flex;
+  align-items: stretch;
+  gap: 26px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+  --ac-fg: var(--primary);
 }
-.stat-label {
-  font-size: var(--text-xs);
+.hero-score { display: flex; align-items: center; gap: 16px; min-width: 320px; }
+.score-ring {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.score-inner {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.05;
+}
+.score-num { font-size: 25px; font-weight: 680; font-variant-numeric: tabular-nums; }
+.score-max { font-size: 10.5px; color: var(--text-tertiary); }
+.score-side { min-width: 0; }
+.score-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.score-desc { font-size: 12.5px; color: var(--text-secondary); margin-top: 3px; line-height: 1.55; }
+.engine-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+.eng-item {
+  font-size: 11px;
   color: var(--text-tertiary);
-  letter-spacing: 0.04em;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
 }
-.stat-value {
-  font-size: 26px;
+.eng-item.ok { color: var(--success-text); background: var(--success-bg); border-color: transparent; }
+.eng-item.bad { color: var(--danger-text); background: var(--danger-bg); border-color: transparent; }
+
+.hero-metrics {
+  flex: 1;
+  min-width: 320px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 4px 18px;
+  border-left: 1px solid var(--border-light);
+  padding-left: 26px;
+}
+.metric { padding: 2px 0; }
+.metric-num {
+  font-size: 21px;
   font-weight: 650;
   color: var(--text-primary);
-  line-height: 1.25;
-  margin-top: 2px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
-.stat-unit {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-tertiary);
-  margin-left: 2px;
-}
-.stat-sub {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  margin-top: 2px;
-}
-.score-bar {
-  height: 5px;
-  border-radius: 3px;
-  background: var(--bg-sunken);
-  overflow: hidden;
-  margin: 7px 0 4px;
-}
-.score-fill {
-  height: 100%;
-  border-radius: 3px;
-  background: var(--ac-fg, var(--primary));
-  transition: width 0.4s var(--ease-out);
-}
+.metric-den { font-size: 13px; color: var(--text-tertiary); font-weight: 500; }
+.metric-label { font-size: 12px; color: var(--text-secondary); margin-top: 1px; }
+.metric-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
 
-/* ---- 分区 ---- */
-.section { margin-bottom: 24px; }
+/* ============ 分区 ============ */
+.section { margin-bottom: 26px; }
 .section-head {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 11px;
+  flex-wrap: wrap;
 }
 .section-title {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
+  padding-left: 9px;
+  position: relative;
 }
-.section-badge {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  font-weight: 500;
+.section-title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--primary-grad);
 }
-.section-note {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-.section-extra { margin-left: auto; display: flex; gap: 6px; }
+.section-note { font-size: 12px; color: var(--text-tertiary); }
+.section-tags { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .two-col {
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  margin-bottom: 24px;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  margin-bottom: 26px;
 }
+.graph-card { padding: 14px 16px 16px; }
+.tree-grid { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 
-/* ---- 体检清单 ---- */
-.check-list { display: flex; flex-direction: column; gap: 10px; }
-.check-card { flex-direction: row; align-items: flex-start; gap: 14px; }
+/* ============ 体检清单 ============ */
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 12px;
+}
+.check-card { flex-direction: row; align-items: flex-start; gap: 12px; padding-left: 16px; }
 .check-card.error { --ac-fg: var(--danger); --ac-line: var(--danger); --ac-bg: var(--danger-bg); }
 .check-card.warn { --ac-fg: var(--warning); --ac-line: var(--warning); --ac-bg: var(--warning-bg); }
+.check-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--ac-fg);
+}
 .check-main { flex: 1; min-width: 0; }
 .check-title {
   display: flex;
@@ -615,25 +751,25 @@ onMounted(loadAll)
   gap: 5px;
   font-size: 12px;
   color: var(--text-tertiary);
-  margin-top: 5px;
+  margin-top: 6px;
   line-height: 1.55;
 }
 .check-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  max-width: 260px;
+  max-width: 220px;
 }
 .ok-card { flex-direction: row; align-items: center; gap: 12px; }
 .ok-icon { color: var(--success); font-size: 22px; }
 .ok-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .ok-sub { font-size: 12.5px; color: var(--text-tertiary); margin-top: 2px; }
 
-/* ---- 指纹 ---- */
-.fp-list { display: flex; flex-direction: column; gap: 7px; }
+/* ============ 指纹 ============ */
+.fp-list { display: flex; flex-direction: column; gap: 8px; }
 .fp-row { display: flex; align-items: center; gap: 10px; }
 .fp-term {
-  width: 104px;
+  width: 100px;
   flex-shrink: 0;
   font-size: 12.5px;
   color: var(--text-primary);
@@ -654,30 +790,34 @@ onMounted(loadAll)
   background: var(--primary-grad);
   min-width: 4px;
 }
+.fp-docs {
+  width: 42px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: right;
+}
 .fp-weight {
-  width: 38px;
+  width: 34px;
   text-align: right;
   font-size: 11.5px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- 成分 ---- */
-.comp-list { display: flex; flex-direction: column; gap: 12px; }
+/* ============ 成分 ============ */
+.comp-list { display: flex; flex-direction: column; gap: 13px; }
 .comp-label {
-  font-size: var(--text-xs);
+  font-size: 11.5px;
   color: var(--text-tertiary);
   margin-bottom: 6px;
+  letter-spacing: 0.03em;
 }
 .comp-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 
-/* ---- 文档谱系 ---- */
+/* ============ 文档谱系 ============ */
 .table-card { padding: 0; overflow: hidden; }
 .doc-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary); }
-.doc-title-link {
-  cursor: pointer;
-  display: inline-block;
-}
+.doc-title-link { cursor: pointer; display: inline-block; }
 .doc-title-link:hover { color: var(--primary); }
 .doc-sum {
   font-size: 11.5px;
@@ -695,10 +835,11 @@ onMounted(loadAll)
   gap: 18px;
 }
 .detail-head {
-  font-size: var(--text-xs);
+  font-size: 11.5px;
   color: var(--text-tertiary);
   margin-bottom: 7px;
   font-weight: 600;
+  letter-spacing: 0.03em;
 }
 .chunk-list {
   display: flex;
@@ -737,38 +878,29 @@ onMounted(loadAll)
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.issue {
-  font-size: 12px;
-  color: var(--warning);
-  margin-bottom: 4px;
-}
+.issue { font-size: 12px; color: var(--warning); margin-bottom: 4px; }
 
-/* ---- 结构树 ---- */
-.tree-doc { padding: 10px 0; border-bottom: 1px solid var(--border-light); }
-.tree-doc:last-child { border-bottom: none; }
-.tree-doc-title {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 5px;
-}
-.tree-doc-meta { font-size: 11.5px; color: var(--text-tertiary); font-weight: 400; margin-left: 6px; }
+/* ============ 结构树 ============ */
+.tree-card { padding: 14px 16px; }
+.tree-card-head { margin-bottom: 7px; }
+.tree-card-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary); }
+.tree-card-meta { font-size: 11.5px; color: var(--text-tertiary); margin-left: 6px; }
 .tree {
   list-style: none;
   margin: 0;
-  padding-left: 16px;
+  padding-left: 15px;
   font-size: 12.5px;
   color: var(--text-secondary);
-  line-height: 1.75;
+  line-height: 1.72;
 }
 .tree > li { position: relative; }
 .tree > li::before {
   content: '';
   position: absolute;
-  left: -10px;
+  left: -9px;
   top: 11px;
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
   background: var(--primary-200);
 }
@@ -781,4 +913,22 @@ onMounted(loadAll)
   text-align: center;
 }
 .empty.small { padding: 8px 0; font-size: 12px; }
+
+/* ============ 窄屏 ============ */
+@media (max-width: 768px) {
+  .hero { gap: 16px; }
+  /* 分隔线在窄屏是道竖杠，横着排指标时它没有意义 */
+  .hero-metrics {
+    border-left: none;
+    padding-left: 0;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px 14px;
+  }
+  .hero-score { min-width: 0; }
+  .check-grid { grid-template-columns: 1fr; }
+  .fp-term { width: 72px; }
+  .score-ring { width: 76px; height: 76px; }
+  .score-inner { width: 62px; height: 62px; }
+  .score-num { font-size: 21px; }
+}
 </style>

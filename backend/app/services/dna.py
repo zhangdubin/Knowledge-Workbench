@@ -42,13 +42,15 @@ from ..models import (
     DocumentLink,
     EntityRecord,
     EntityType,
+    FieldDefinition,
     RelationDef,
     RelationRecord,
     SysMeta,
 )
 from . import access
 from . import docindex
-from .auth import Principal
+from . import graph as graph_svc
+from .auth import Principal, admin_perms
 
 log = logging.getLogger("kb.dna")
 
@@ -1141,6 +1143,406 @@ async def build_report_json(db: AsyncSession, principal: Principal) -> dict:
              "outline": ana["outlines"].get(it["id"], [])}
             for it in ana["items"]
         ]},
+    }
+
+
+# ---------- 关联脉络图 ----------
+
+# 图规模上限。前端一次要画几百个节点、几千条边，vis-network 会开始卡；
+# 而「这里被截断了」必须让前端知道 —— 静默丢边等于骗人：
+# 「图上没连上」会被读成「这两份资料确实没关系」。
+GRAPH_NODE_LIMIT = 200
+GRAPH_EDGE_LIMIT = 400
+# 每篇文件最多收多少小节。一篇长手册能有几十个标题，全收进来节点立刻爆炸，
+# 而一屏里人只会盯着十几个标题看。
+GRAPH_SECTIONS_PER_DOC = 12
+
+# 节点 id 前缀：看一眼就知道点它会跳到哪儿
+DOC_PREFIX = "doc-"
+SECTION_PREFIX = "sec-"
+RECORD_PREFIX = "rec-"
+
+
+def _doc_node_id(doc_id: int) -> str:
+    return f"{DOC_PREFIX}{doc_id}"
+
+
+def _section_node_id(doc_id: int, index: int) -> str:
+    return f"{SECTION_PREFIX}{doc_id}-{index}"
+
+
+def _record_node_id(rec_id: int) -> str:
+    return f"{RECORD_PREFIX}{rec_id}"
+
+
+def _normalize_node_id(node_id: str) -> str:
+    """graph.py 的节点 id（r-12 / d-3）→ 本契约的 id（rec-12 / doc-3）
+
+    为什么要转：两套前缀各说各话，前端就得为同一张图维护两张对照表。
+    而节点 id 的用途只有一个 —— 点节点跳到对应的东西 ——
+    统一成「前缀 + 数字」之后，看一眼 id 就知道跳哪儿。
+    """
+    for prefix, maker in (("r-", _record_node_id), ("d-", _doc_node_id)):
+        if node_id.startswith(prefix):
+            try:
+                return maker(int(node_id[len(prefix):]))
+            except ValueError:
+                return node_id
+    return node_id
+
+
+def _id_sort_key(node_id: str) -> tuple[str, int, int]:
+    """id 的自然序：doc-2 在 doc-10 前面，sec-3-2 在 sec-3-10 前面
+
+    直接按字符串排会得到 doc-10 排在 doc-2 前面 ——
+    数字 id 按字典序排是人看的顺序，不是人预期的顺序。
+    而且同一份库两次请求必须给出同一个顺序，
+    否则前端的图每次刷新都在跳。
+    """
+    m = re.match(r"^(doc|rec|sec)-(\d+)(?:-(\d+))?$", node_id or "")
+    if not m:
+        return (node_id or "", 0, 0)
+    return (m.group(1), int(m.group(2)), int(m.group(3) or 0))
+
+
+def _flatten_outline(nodes: list[dict]) -> list[dict]:
+    """结构树 → 扁平列表（保持正文里出现的先后顺序）"""
+    out: list[dict] = []
+    stack = list(reversed(nodes or []))
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        stack.extend(reversed(node.get("children") or []))
+    return out
+
+
+def _rel_endpoint(rec_id, doc_id) -> str:
+    """关系的一端 → 节点 id（记录优先，其次文件，都没有就空）"""
+    if rec_id:
+        return graph_svc.rid_node_id(rec_id)
+    if doc_id:
+        return graph_svc.did_node_id(doc_id)
+    return ""
+
+
+def _title_matches(heading: str, doc_label: str) -> bool:
+    """这个标题是不是就是文件自己的标题
+
+    为什么要比对：Markdown 正文里的 h1 通常就是文件标题本身
+    （「V-MAX Agent 协同记录手册.md」的第一行是
+    「# V-MAX Agent 协同记录手册」）。文件节点上已经写着这个标题，
+    再画一个小节节点等于同一个东西在图上出现两次。
+    比对时忽略扩展名 —— 文件名带 .md，正文里的标题不带。
+    """
+    h = (heading or "").strip()
+    if not h:
+        return False
+    label = (doc_label or "").strip()
+    candidates = {label}
+    if "." in label:
+        base, _, ext = label.rpartition(".")
+        if base and ext.isascii() and ext.isalnum() and len(ext) <= 5:
+            candidates.add(base)
+    return h in candidates
+
+
+async def _alive_note_ids(db: AsyncSession) -> set[int] | None:
+    """还活着的笔记 id；库里没有笔记模型时返回 None（没东西要过滤）"""
+    type_id = (await db.execute(
+        select(EntityType.id).where(EntityType.key == "note")
+    )).scalar()
+    if not type_id:
+        return None
+    rows = (await db.execute(
+        select(EntityRecord.id).where(
+            EntityRecord.entity_type_id == type_id,
+            EntityRecord.deleted_at.is_(None),
+        )
+    )).all()
+    return {int(r[0]) for r in rows}
+
+
+async def build_graph(db: AsyncSession, principal: Principal) -> dict:
+    """关联脉络图：文件的骨架 + 文件的挂载 + 记录之间的关联
+
+    三层放在同一张图上，因为它们回答的是同一个问题 ——
+    「这批资料是怎么长成现在这样的」：
+      骨架（文件 → 小节）说结构，挂载（文件 → 记录）说归属，
+      关联（记录 → 记录）说流转。
+    只画其中一层，另外两层就成了「凭空冒出来的节点」。
+
+    权限：文件与记录各走 access 的统一规则（services/access.py），
+    节点过滤交给 graph.filter_graph_by_access ——
+    不在这里另写一套；另写一套就意味着迟早有一处漏掉，
+    而漏掉的那一处就是一次泄露。
+
+    只读：这个函数只查不写，和本模块其它接口一样。
+    """
+    if principal is None:
+        # 没有身份按本机管理员算（与关闭鉴权时 current_principal 的口径一致）
+        principal = Principal(None, admin_perms(), auth_disabled=True)
+
+    snap = await _snapshot(db, principal)
+    ana = _analyze(snap)
+    doc_items = {it["id"]: it for it in ana["items"]}
+
+    # 记录侧脉络：业务关联（记录 ↔ 记录 / 文件）与笔记双链
+    biz = await graph_svc.get_global_graph(
+        db, limit=GRAPH_NODE_LIMIT, principal=principal)
+    notes = await graph_svc.get_notes_graph(db, limit=GRAPH_NODE_LIMIT)
+
+    nodes_by_id: dict[str, dict] = {}
+    edges_by_id: dict[str, dict] = {}
+    for part in (biz, notes):
+        for n in part.get("nodes") or []:
+            nodes_by_id[n["id"]] = n
+        for e in part.get("edges") or []:
+            edges_by_id[e["id"]] = e
+
+    # 全部文件都要进图。
+    #
+    # 为什么不能只留「被关系/挂载提到」的那些：养料图谱讲的是
+    # 「这批资料长什么样」，一份没跟任何记录沾边的文件同样在养料里 ——
+    # 它只是还没被人挂到记录上，不代表它不重要。
+    # 漏掉它们，这些文件连同它们的结构骨架就整段消失了。
+    for doc_id in doc_items:
+        nid = graph_svc.did_node_id(doc_id)
+        nodes_by_id.setdefault(nid, {
+            "id": nid, "kind": "document", "ref_id": doc_id,
+        })
+
+    # 回收站里的笔记不进图。
+    # graph.get_notes_graph 没有排除软删除的记录（老问题）：
+    # 「已经删掉」的东西还带着标题站在图上，等于删除没生效。
+    alive_notes = await _alive_note_ids(db)
+    if alive_notes is not None:
+        for nid in [nid for nid, n in nodes_by_id.items()
+                    if n.get("kind") == "record" and n.get("type") == "note"
+                    and int(n.get("ref_id") or 0) not in alive_notes]:
+            nodes_by_id.pop(nid, None)
+
+    # 挂载边：文件 → 挂在它上面的记录
+    #
+    # 为什么自己查 document_link 而不是直接用 graph.py 那条：
+    # 那边只给业务记录补挂载的文件，笔记挂着附件时那条边根本不会出现 ——
+    # 而「这条笔记是看着这份 PDF 写的」恰恰是脉络图最该说的话。
+    # 方向也要反过来：契约里挂载边是「文件 → 记录」。
+    mount_rows = (await db.execute(
+        select(DocumentLink, Document, EntityRecord)
+        .join(Document, Document.id == DocumentLink.document_id)
+        .join(EntityRecord, EntityRecord.id == DocumentLink.record_id)
+        .where(Document.deleted_at.is_(None),
+               EntityRecord.deleted_at.is_(None))
+    )).all()
+    # 字段名要人看得懂的那一份（files → 附件），不是字段 key。
+    # 图上一条边写「字段：files」谁也看不懂它挂的是什么。
+    field_names: dict[tuple[int, str], str] = {}
+    for fd in (await db.execute(
+        select(FieldDefinition).where(
+            FieldDefinition.type.in_(("file", "image")))
+    )).scalars().all():
+        field_names[(fd.entity_type_id, fd.key)] = fd.name
+    for link, doc, rec in mount_rows:
+        rec_nid = graph_svc.rid_node_id(rec.id)
+        if rec_nid not in nodes_by_id:
+            continue                      # 记录不在图里，挂载也就无从说起
+        if doc.id not in doc_items:
+            continue                      # 读不到的文件不进图
+        doc_nid = graph_svc.did_node_id(doc.id)
+        nodes_by_id.setdefault(doc_nid, {
+            "id": doc_nid, "kind": "document", "ref_id": doc.id,
+        })
+        field_label = (field_names.get((rec.entity_type_id, link.field_key or ""))
+                       or link.field_key or "附件")
+        edges_by_id[f"dl-{link.id}"] = {
+            "id": f"dl-{link.id}",
+            "source": doc_nid, "target": rec_nid,
+            "relation": f"字段：{field_label}",
+            "via": "field",
+        }
+
+    # 补齐被 get_global_graph 丢掉的关联边
+    #
+    # 丢在哪：get_global_graph 明确把笔记排除在业务图之外
+    # （那是「关联图谱」的分工 —— 笔记归「知识图谱」），
+    # 于是「业务记录 ↔ 笔记」这类关系的另一端没有节点，边被丢掉了。
+    # 脉络图里笔记和记录同处一张图，这种边不补，图就是断的。
+    rec_ids = [int(n["ref_id"]) for n in nodes_by_id.values()
+               if n.get("kind") == "record"]
+    if rec_ids:
+        rel_rows = (await db.execute(
+            select(RelationRecord, RelationDef)
+            .join(RelationDef, RelationDef.id == RelationRecord.relation_def_id,
+                  isouter=True)
+            .where(or_(
+                RelationRecord.source_record_id.in_(rec_ids),
+                RelationRecord.target_record_id.in_(rec_ids),
+            ))
+        )).all()
+        for rel, rdef in rel_rows:
+            eid = f"rr-{rel.id}"
+            if eid in edges_by_id:
+                continue
+            src = _rel_endpoint(rel.source_record_id, rel.source_document_id)
+            tgt = _rel_endpoint(rel.target_record_id, rel.target_document_id)
+            if src not in nodes_by_id or tgt not in nodes_by_id:
+                continue
+            edges_by_id[eid] = {
+                "id": eid, "source": src, "target": tgt,
+                "relation": rdef.name if rdef else "关联",
+                "via": "relation",
+            }
+
+    # 权限过滤统一走 graph 那条路（文件按 access 的文件规则，
+    # 记录按模型读权限），摘掉读不到的节点与指向它们的边
+    merged = await graph_svc.filter_graph_by_access(
+        db, principal,
+        {"nodes": list(nodes_by_id.values()),
+         "edges": list(edges_by_id.values())})
+
+    # ---------- 换成契约里的节点/边形状 ----------
+
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    doc_of_node: dict[str, int] = {}
+
+    for n in merged["nodes"]:
+        kind = n.get("kind")
+        nid = _normalize_node_id(n["id"])
+        if kind == "document":
+            item = doc_items.get(n.get("ref_id"))
+            if item is None:
+                continue          # 读不到的文件不进图
+            doc_of_node[nid] = int(n["ref_id"])
+            nodes.append({
+                "id": nid,
+                "kind": "document",
+                "ref_id": int(n["ref_id"]),
+                "label": item["title"],
+                "meta": {
+                    "type": item["kind"],
+                    "words": item["words"],
+                    "chunks": item["chunks"],
+                },
+            })
+        elif kind == "record":
+            nodes.append({
+                "id": nid,
+                "kind": "record",
+                "ref_id": int(n["ref_id"]),
+                "label": n.get("label") or f"记录 #{n['ref_id']}",
+                "meta": {
+                    "type": n.get("type") or "",
+                    "entity_type": n.get("type_name") or "",
+                },
+            })
+
+    # 骨架：文件 → 它的小节
+    for nid, doc_id in doc_of_node.items():
+        doc_label = (doc_items.get(doc_id) or {}).get("title") or ""
+        picked: list[dict] = []
+        for sec in _flatten_outline(ana["outlines"].get(doc_id) or []):
+            title = sec.get("title") or ""
+            if not picked and _title_matches(title, doc_label):
+                # 与文件标题重复的那个标题不单独成节：
+                # 文件节点上已经写着这个标题了，
+                # 再画一个小节节点等于同一个东西在图上出现两次。
+                continue
+            picked.append(sec)
+            if len(picked) >= GRAPH_SECTIONS_PER_DOC:
+                break
+        for index, sec in enumerate(picked):
+            sid = _section_node_id(doc_id, index)
+            nodes.append({
+                "id": sid,
+                "kind": "section",
+                "label": sec.get("title") or "正文",
+                "meta": {
+                    "document_id": doc_id,
+                    "level": int(sec.get("level") or 1),
+                },
+            })
+            edges.append({
+                "source": nid, "target": sid,
+                "kind": "structure", "label": "章节",
+            })
+
+    for e in merged["edges"]:
+        src = _normalize_node_id(e.get("source") or "")
+        tgt = _normalize_node_id(e.get("target") or "")
+        if not src or not tgt or src == tgt:
+            continue
+        label = e.get("relation") or "关联"
+        if e.get("via") == "field":
+            # 挂载边：方向统一成「文件 → 记录」
+            if src.startswith(RECORD_PREFIX) and tgt.startswith(DOC_PREFIX):
+                src, tgt = tgt, src
+            kind = "attach"
+        elif src.startswith(DOC_PREFIX) or tgt.startswith(DOC_PREFIX):
+            # 文件为端点的关系（文件归属项目之类）也归挂载：
+            # 契约里只有三类边，没有「文件关系」这一类，
+            # 而它讲的同样是「这个文件挂在那条记录上」。
+            if src.startswith(RECORD_PREFIX):
+                src, tgt = tgt, src
+            kind = "attach"
+        else:
+            kind = "relation"
+        edges.append({"source": src, "target": tgt,
+                      "kind": kind, "label": label})
+
+    # 去重：同一对节点之间、同一种边、同一种说法只留一条
+    seen: set[tuple] = set()
+    uniq: list[dict] = []
+    for e in edges:
+        key = (e["source"], e["target"], e["kind"], e["label"])
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(e)
+    edges = uniq
+
+    # ---------- 规模控制与稳定排序 ----------
+
+    nodes.sort(key=lambda n: (n["kind"], _id_sort_key(n["id"])))
+    truncated = False
+    if len(nodes) > GRAPH_NODE_LIMIT:
+        nodes = nodes[:GRAPH_NODE_LIMIT]
+        truncated = True
+    kept = {n["id"] for n in nodes}
+
+    # 节点被截掉之后，指向它的边就成了悬空的线 —— 一并摘掉
+    edges = [e for e in edges
+             if e["source"] in kept and e["target"] in kept]
+    edges.sort(key=lambda e: (e["kind"], _id_sort_key(e["source"]),
+                               _id_sort_key(e["target"]), e["label"]))
+    if len(edges) > GRAPH_EDGE_LIMIT:
+        edges = edges[:GRAPH_EDGE_LIMIT]
+        truncated = True
+    # 边 id 最后统一编号：前端只要认 e1/e2/... 就行
+    for i, e in enumerate(edges, 1):
+        e["id"] = f"e{i}"
+
+    stats = {
+        "documents": sum(1 for n in nodes if n["kind"] == "document"),
+        "sections": sum(1 for n in nodes if n["kind"] == "section"),
+        "records": sum(1 for n in nodes if n["kind"] == "record"),
+        "edges": len(edges),
+        "truncated": truncated,
+    }
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "stats": stats,
+        # 截断必须说清楚：不说就等于骗人 ——
+        # 「图上没有」会被读成「确实没关系」。
+        "meta": {
+            "truncated": truncated,
+            "node_limit": GRAPH_NODE_LIMIT,
+            "edge_limit": GRAPH_EDGE_LIMIT,
+            "sections_per_doc": GRAPH_SECTIONS_PER_DOC,
+            "note": ("节点或边超出上限，已按稳定序截断；"
+                     "被截掉的内容不在图里") if truncated else "",
+        },
     }
 
 

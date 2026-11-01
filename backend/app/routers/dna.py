@@ -5,6 +5,7 @@
     GET /api/dna/documents
     GET /api/dna/documents/{id}
     GET /api/dna/tree
+    GET /api/dna/graph             （关联脉络图：nodes/edges/stats）
     GET /api/dna/report            （Markdown 文本）
     GET /api/dna/report.json
 
@@ -63,6 +64,17 @@ async def tree(db: AsyncSession = Depends(get_db),
                 principal: Principal = Depends(current_principal)):
     """全库结构索引"""
     return await svc.build_tree(db, principal)
+
+
+@router.get("/graph")
+async def graph(db: AsyncSession = Depends(get_db),
+                principal: Principal = Depends(current_principal)):
+    """关联脉络图：文件骨架 + 文件挂载 + 记录关联
+
+    前端 vis-network 直接吃这个形状：节点三种（文件/小节/记录），
+    边三种（章节/挂载/关联），id 前缀固定。
+    """
+    return await svc.build_graph(db, principal)
 
 
 @router.get("/report")

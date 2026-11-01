@@ -754,9 +754,18 @@ const hiSet = computed(() => {
   return out
 })
 
-function dimmed(color) {
+/**
+ * 把颜色往背景里压
+ *
+ * k 是「还剩多少原色」：
+ *  - 悬停时压到 0.16 —— 鼠标扫过的那条链要跳出来，其余的赶紧让位
+ *  - 选中时压到 0.42 —— 被点名的那一个要跳出来，
+ *    但双链图的价值就在于看它跟谁配对，
+ *    其余节点压太狠会连上下文一起压没了
+ */
+function dimmed(color, k = 0.16) {
   const card = cssVar('--bg-card', '#ffffff')
-  return mix(card, color, 0.16)
+  return mix(card, color, k)
 }
 
 /* ------------------------------------------------------------------ *
@@ -884,9 +893,11 @@ function buildNodes() {
       if (font) font = { ...font, color: '#ffffff', bold: true }
       borderWidth = 3
     } else if (faded) {
+      // 选中引起的变淡比悬停轻 —— 上下文还得看得见
+      const k = selId ? 0.42 : 0.16
       color = {
-        background: dimmed(color.background),
-        border: dimmed(color.border),
+        background: dimmed(color.background, k),
+        border: dimmed(color.border, k),
         highlight: color.highlight,
         hover: color.hover,
       }
@@ -904,7 +915,7 @@ function buildNodes() {
       fixed: { x: true, y: true },
       borderWidth,
       color,
-      font: faded ? { ...font, color: dimmed(font.color || '#888888') } : font,
+      font: faded ? { ...font, color: dimmed(font.color || '#888888', selId ? 0.42 : 0.16) } : font,
       shapeProperties: { borderRadius: 11 },
       widthConstraint: { maximum: 96 },
     }

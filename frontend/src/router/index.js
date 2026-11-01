@@ -34,6 +34,8 @@ const routes = [
       { path: 'knowledge/graph', name: 'knowledge-graph', component: () => import('../views/KnowledgeGraph.vue'), meta: { title: '知识图谱', perm: 'knowledge_graph' } },
       // 养料 DNA：喂给模型的资料的体检报告与基因图谱（只读）
       { path: 'dna', name: 'dna', component: () => import('../views/DnaView.vue'), meta: { title: '养料 DNA', perm: 'dna' } },
+      // 养料库：DNA 基因层（吸收/蒸馏/离线/打包），权限跟着 DNA 走
+      { path: 'dna-library', name: 'dna-library', component: () => import('../views/DnaLibraryView.vue'), meta: { title: '养料库', perm: 'dna' } },
       // 数据中心
       { path: 'library', name: 'library', component: () => import('../views/Library.vue'), meta: { title: '数据中心', perm: 'library' } },
       // 系统管理

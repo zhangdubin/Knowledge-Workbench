@@ -215,18 +215,30 @@ async def set_offline(body: OfflineBody, db: AsyncSession = Depends(get_db),
 
 # ============ 打包 ============
 
-@router.get("/bundle")
+@router.post("/bundle")
 async def export_bundle(db: AsyncSession = Depends(get_db),
                         principal: Principal = Depends(current_principal)):
-    """导出养料库包（tar.gz），供离线机器使用"""
+    """导出养料库包（tar.gz），供离线机器使用
+
+    放哪儿：优先 DATA_DIR 下的 dna-bundles/，再退到 /tmp。
+    放 DATA_DIR 是因为容器里的 /tmp 是临时的 ——
+    养料库包是给人带走的东西，放到临时目录等于没导出。
+    """
     try:
         from ..services import dna_bundle
     except Exception as e:
         raise HTTPException(500, f"打包模块不可用：{e}")
     import os
-    out_dir = os.environ.get("DNA_BUNDLE_DIR", "/tmp/dna-bundles")
-    os.makedirs(out_dir, exist_ok=True)
-    name = f"养料库-{__import__('datetime').datetime.now().strftime('%Y%m%d-%H%M%S')}.tar.gz"
+    from datetime import datetime
+    from ..config import settings
+    out_dir = os.environ.get("DNA_BUNDLE_DIR") or os.path.join(
+        settings.data_dir, "dna-bundles")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except Exception:
+        out_dir = "/tmp/dna-bundles"
+        os.makedirs(out_dir, exist_ok=True)
+    name = f"养料库-{datetime.now().strftime('%Y%m%d-%H%M%S')}.tar.gz"
     path = os.path.join(out_dir, name)
     try:
         info = await dna_bundle.export_bundle(db, path)

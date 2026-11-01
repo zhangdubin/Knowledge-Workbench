@@ -97,12 +97,14 @@ def gene_uid(kind: str, fingerprint: str) -> str:
 
 
 def _fingerprint(title: str, content: str) -> str:
-    """内容指纹：标题 + 正文归一化后的 sha256
+    """内容指纹：**只算正文**，不算标题
 
-    归一化只做「空白与全角标点归一」，不做语义归一 ——
-    语义归一需要模型，离线场景用不了。
+    为什么标题不进指纹：标题是会变的（同一段内容，抽出来的标题可能
+    因为规则调整而不同）。标题进了指纹，改一次标题就多一条基因 ——
+    同一件事在库里躺着两条，检索时两条都出来，看起来像「有两份知识」。
+    只算正文，身份就跟着内容走；标题变了就地更新，不新增。
     """
-    norm = re.sub(r"\s+", " ", f"{title} {content}").strip()
+    norm = re.sub(r"\s+", " ", (content or "")).strip()
     return _sha256(norm)
 
 
@@ -234,6 +236,11 @@ async def upsert_gene(db: AsyncSession, *, kind: str, title: str, content: str,
         select(DnaGene).where(DnaGene.uid == uid))).scalar_one_or_none()
     if existing is not None:
         existing.content = content
+        # 标题跟着正文走：抽取规则改了标题（比如原来拿文件名当标题，
+        # 后来改成取正文第一句），这里就地把标题换掉，
+        # 而不是留下一条旧标题的同内容基因。
+        if title and (existing.title or "") != title:
+            existing.title = title
         existing.summary = summary or existing.summary
         existing.tags = _norm_tags(tags) or existing.tags
         existing.confidence = max(existing.confidence, confidence)
@@ -373,6 +380,9 @@ def _first_sentence(text: str, limit: int = 42) -> str:
         break
     if not line:
         return ""
+    # PDF 抽出来的正文常有 "[标题] xxx" "[第 1 页]" 这类前缀，
+    # 直接当标题会得到「标题 军队采购网」这种带噪声的一行。
+    line = re.sub(r"^\[[^\]]{0,10}\]\s*", "", line)
     line = re.sub(r"[*_`>#\-\[\]()]", "", line).strip()
     for sep in ("。", "；", ";", "，", ","):
         if sep in line and line.index(sep) > 6:

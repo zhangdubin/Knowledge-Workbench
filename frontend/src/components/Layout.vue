@@ -268,6 +268,8 @@ const NAV = [
     // 养料 DNA：喂给模型的资料的体检报告与基因图谱（只读）
     // 图标用 DataLine —— Element Plus 里没有 DNA 图标，别写不存在的名字
     { path: '/dna', label: '养料 DNA', icon: 'DataLine', perm: 'dna' },
+    // 养料库：基因层操作台（吸收、蒸馏销毁、离线直答、打包带走）
+    { path: '/dna-library', label: '养料库', icon: 'DataBoard', perm: 'dna' },
   ] },
   { title: '系统', items: [
     { path: '/system/users', label: '用户管理', icon: 'UserFilled', perm: 'system', feature: 'user_manage' },

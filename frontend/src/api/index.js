@@ -428,4 +428,22 @@ export const Api = {
   // 体检清单里的「重建索引」：重新抽取 → 重新分块 → 重新向量化
   reindexDocument: (id, embed = true) =>
     api.post(`/api/documents/${id}/reindex`, { embed }, { timeout: 300000 }),
+
+  // ---- DNA 养料库 ----
+  // 基因层：把资料变成可复用的知识单元；断网时靠它直答
+  dnaLibraryOverview: () => api.get('/api/dna/library/overview'),
+  dnaLibraryGenes: (params = {}) => api.get('/api/dna/library/genes', { params }),
+  dnaLibraryGene: (id) => api.get(`/api/dna/library/genes/${id}`),
+  dnaLibrarySearch: (params) => api.get('/api/dna/library/search', { params }),
+  dnaLibraryAnswer: (params) => api.get('/api/dna/library/answer', { params }),
+  dnaLibraryDrill: () => api.get('/api/dna/library/drill'),
+  dnaLibraryAbsorb: (payload) => api.post('/api/dna/library/absorb', payload),
+  dnaLibraryAbsorbCode: (payload) =>
+    api.post('/api/dna/library/absorb/code', payload, { timeout: 120000 }),
+  dnaLibraryAbsorbAll: () => api.post('/api/dna/library/absorb/all', null, { timeout: 300000 }),
+  dnaLibraryOffline: (payload) => api.post('/api/dna/library/offline', payload),
+  dnaLibraryBundle: () => api.post('/api/dna/library/bundle', null, { timeout: 300000 }),
+  dnaLibraryBundleInspect: (path) => api.post('/api/dna/library/bundle/inspect', { path }),
+  dnaLibraryBundleImport: (path, mode = 'merge') =>
+    api.post('/api/dna/library/bundle/import', { path, mode }, { timeout: 300000 }),
 }

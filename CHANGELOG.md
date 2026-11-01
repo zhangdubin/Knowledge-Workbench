@@ -90,8 +90,25 @@
 
 ### 📦 本次发布带的东西
 
-同 v0.13.0：双架构（arm64 / amd64）镜像 + 离线整包 + 校验文件，
-Release 页面上直接下载就能在断网机器上跑起来。
+Release 页面上直接下载就能在断网机器上跑起来 —— 5 个资产，双架构都在：
+
+| 资产 | 大小 | 用途 |
+|---|---|---|
+| `kb-workbench-images-arm64.tar.gz` | 124 MB | 后端 + 前端镜像（Apple Silicon） |
+| `kb-workbench-images-amd64.tar.gz` | 127 MB | 后端 + 前端镜像（x86） |
+| `kb-workbench-backend-tools-arm64.tar.gz` | 98 MB | 带 git/docker/compose 的后端（「一键升级」用） |
+| `kb-workbench-backend-tools-amd64.tar.gz` | 101 MB | 同上，x86 |
+| `kb-workbench-offline-v1.0.0.tar.gz` | 425 MB | 完整离线安装包（含两个架构） |
+
+**实测过**（不是「应该能跑」）：
+
+- arm64 / amd64 两个架构的镜像包都从 Release 上**下载回来**，
+  `gzip -t` 完整性通过、`docker load` 成功、
+  容器里 `app_version` 确认是 `1.0.0`、
+  内置的 `docker --version`（27.3.1）与 `docker compose version`（v2.29.7）都在
+- 离线包 19 个文件，manifest 里的版本对账通过（两个架构都是 1.0.0）
+- 线上已升级到 v1.0.0：后端 `:8001`、前端 `:8082`，两个容器都 healthy
+- 检索回归：8 题评测集原始 6/8、公平口径 8/8
 
 ## 0.13.0 — 2026-11-01
 

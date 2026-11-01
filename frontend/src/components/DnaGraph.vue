@@ -2,22 +2,29 @@
   <div class="dna-graph">
     <!-- 图例 + 筛选 + 操作 -->
     <div class="dg-toolbar">
+      <!-- 搜索：图上一两百个节点，靠肉眼找某个名字是不现实的 -->
+      <el-input
+        v-model="q"
+        size="small"
+        class="dg-search"
+        placeholder="在图里找：文件名、章节、基因"
+        clearable
+      >
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
+
       <div class="dg-legend">
-        <span class="lg-item">
-          <span class="lg-glyph gene" />基因<span class="lg-n">{{ counts.gene }}</span>
-        </span>
-        <span class="lg-item">
-          <span class="lg-glyph doc" />文件<span class="lg-n">{{ counts.document }}</span>
-        </span>
-        <span class="lg-item">
-          <span class="lg-glyph sec" />章节<span class="lg-n">{{ counts.section }}</span>
-        </span>
-        <span class="lg-item">
-          <span class="lg-glyph rec" />记录<span class="lg-n">{{ counts.record }}</span>
-        </span>
-        <span v-if="counts.library" class="lg-item">
-          <span class="lg-glyph lib" />养料库
-        </span>
+        <button
+          v-for="l in legendItems"
+          :key="l.key"
+          type="button"
+          class="lg-item lg-btn"
+          :class="{ 'is-off': !l.on }"
+          :title="l.on ? `隐藏${l.label}` : `显示${l.label}`"
+          @click="toggleNodeKind(l.key)"
+        >
+          <span class="lg-glyph" :class="l.key" />{{ l.label }}<span class="lg-n">{{ l.count }}</span>
+        </button>
       </div>
 
       <!-- 基因种类：按碱基色分四类，点一下就能筛掉一类 -->
@@ -149,6 +156,9 @@ import { cssVar, isDark } from '../utils/theme'
 
 const props = defineProps({
   graph: { type: Object, default: () => ({ nodes: [], edges: [], stats: {} }) },
+  // 定位：外部（比如染色体清单）说「看这个节点」，
+  // 图会把它选并滚到视野中央
+  focusId: { type: String, default: '' },
 })
 const emit = defineEmits(['select'])
 
@@ -159,6 +169,29 @@ const seed = ref(0)
 const hoverId = ref(null)
 const geneLimit = ref(12)
 const offKinds = ref(new Set())
+const q = ref('')
+const offNodeKinds = ref(new Set())
+
+/** 图例：带计数，点一下切换这一类节点的显示 */
+const legendItems = computed(() => {
+  const all = props.graph?.nodes || []
+  const count = (k) => all.filter((n) => n.kind === k).length
+  return [
+    { key: 'gene', label: '基因', count: count('gene') },
+    { key: 'document', label: '文件', count: count('document') },
+    { key: 'section', label: '章节', count: count('section') },
+    { key: 'record', label: '记录', count: count('record') },
+    { key: 'library', label: '养料库', count: count('library') },
+  ].filter((l) => l.count > 0)
+    .map((l) => ({ ...l, on: !offNodeKinds.value.has(l.key) }))
+})
+
+function toggleNodeKind(kind) {
+  const s = new Set(offNodeKinds.value)
+  if (s.has(kind)) s.delete(kind)
+  else s.add(kind)
+  offNodeKinds.value = s
+}
 
 let net = null
 let nodesDS = null
@@ -329,17 +362,43 @@ const visibleGenes = computed(() => {
 
 const geneIds = computed(() => new Set(visibleGenes.value.map((n) => n.id)))
 
+/** 搜索命中：节点名里有词的，外加它的一跳邻居（不然命中了也看不出关系） */
+const searchHit = computed(() => {
+  const kw = (q.value || '').trim().toLowerCase()
+  if (!kw) return null
+  const all = props.graph?.nodes || []
+  const hit = new Set()
+  for (const n of all) {
+    const hay = `${n.label || ''} ${n.meta?.source_title || ''} ${n.meta?.gene_kind || ''}`.toLowerCase()
+    if (hay.includes(kw)) hit.add(n.id)
+  }
+  if (!hit.size) return { ids: new Set(), count: 0 }
+  // 带上邻居，保留上下文
+  const keep = new Set(hit)
+  for (const e of props.graph?.edges || []) {
+    if (hit.has(e.source)) keep.add(e.target)
+    if (hit.has(e.target)) keep.add(e.source)
+  }
+  return { ids: keep, count: hit.size }
+})
+
 const nodes = computed(() => {
   const all = props.graph?.nodes || []
+  let out
   if (filter.value === 'all') {
-    return all.filter((n) => n.kind !== 'gene' || geneIds.value.has(n.id))
-  }
-  if (filter.value === 'knowledge') {
-    return all.filter(
+    out = all.filter((n) => n.kind !== 'gene' || geneIds.value.has(n.id))
+  } else if (filter.value === 'knowledge') {
+    out = all.filter(
       (n) => n.kind === 'gene' || n.kind === 'document' || n.kind === 'section' || n.kind === 'library'
     ).filter((n) => n.kind !== 'gene' || geneIds.value.has(n.id))
+  } else {
+    out = all.filter((n) => n.kind === 'record')
   }
-  return all.filter((n) => n.kind === 'record')
+  // 图例关掉的类别不画
+  out = out.filter((n) => !offNodeKinds.value.has(n.kind))
+  // 搜索：只留命中节点与它的一跳邻居
+  if (searchHit.value) out = out.filter((n) => searchHit.value.ids.has(n.id))
+  return out
 })
 
 const visibleEdges = computed(() => {
@@ -1087,6 +1146,31 @@ onMounted(() => {
 
 watch([nodes, visibleEdges, isDark], draw, { deep: true })
 watch(seed, draw)
+
+// 外部定位（比如染色体清单里点「在双螺旋里看」）：
+// 选中它并把它移到视野中央。
+// 找不到就不动 —— 图还没加载完时不要把用户的选择吃掉。
+watch(() => props.focusId, async (id) => {
+  if (!id) return
+  await nextTick()
+  const n = (props.graph?.nodes || []).find((x) => x.id === id)
+  if (!n) return
+  selected.value = n
+  emit('select', n)
+  draw()
+  await nextTick()
+  if (!net) return
+  // 视口中心移到该节点
+  try {
+    const pos = net.getPositions([id])
+    const p = pos[id]
+    if (p) {
+      const scale = net.getScale()
+      net.moveTo({ x: p.x * scale - (host.value?.clientWidth || 0) / 2,
+                   y: p.y * scale - (host.value?.clientHeight || 0) / 2 })
+    }
+  } catch (e) { /* 视口挪不动也不该报错 */ }
+}, { immediate: false })
 
 onBeforeUnmount(() => {
   try { ro?.disconnect() } catch (e) { /* 已经断开 */ }

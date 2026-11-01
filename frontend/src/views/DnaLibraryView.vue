@@ -41,24 +41,40 @@
             <span class="unit">条基因</span>
           </div>
           <div class="hero-meta">
-            <span class="chip">{{ overview.health.used }} 条被用过</span>
+            <button
+              type="button" class="chip chip-btn"
+              :class="{ 'is-on': geneFlag === 'used' }"
+              title="只看被用过的基因" @click="setFlag('used')"
+            >{{ overview.health.used }} 条被用过</button>
             <span class="chip">累计引用 {{ overview.health.usage_total }} 次</span>
-            <span class="chip">冷基因 {{ overview.health.cold }}</span>
+            <button
+              type="button" class="chip chip-btn"
+              :class="{ 'is-on': geneFlag === 'cold' }"
+              title="只看没人用的基因 —— 该复核了" @click="setFlag('cold')"
+            >冷基因 {{ overview.health.cold }}</button>
             <span class="chip">源码销毁 {{ overview.health.destroyed_sources }}</span>
+            <button
+              v-if="overview.health.superseded"
+              type="button" class="chip chip-btn"
+              :class="{ 'is-on': statusFilter === 'superseded' }"
+              title="看被取代的旧版本" @click="setStatus('superseded')"
+            >已被取代 {{ overview.health.superseded }}</button>
           </div>
         </div>
         <div class="base-strip">
-          <div
+          <button
             v-for="k in overview.kinds"
             :key="k.key"
+            type="button"
             class="base-cell"
-            :class="k.key"
-            :title="`${k.label}：${k.desc}`"
+            :class="[k.key, { 'is-on': kindFilter === k.key }]"
+            :title="`${k.label}：${k.desc}（点击筛选这一类）`"
+            @click="filterByKind(k.key)"
           >
             <div class="base-bar" :style="{ height: baseHeight(k.count) }" />
             <div class="base-num">{{ k.count }}</div>
             <div class="base-label">{{ k.label }}</div>
-          </div>
+          </button>
         </div>
       </div>
 
@@ -238,25 +254,80 @@
         </div>
       </div>
 
+      <!-- 四点五、库体检：把"有多少问题"变成"是哪几条" -->
+      <div v-if="overview" class="pcard health-card">
+        <div class="card-head">
+          <h3>库体检</h3>
+          <span class="card-note">数字只是结论，点了能看到是哪几条</span>
+        </div>
+        <div class="health-grid">
+          <div
+            v-for="h in healthItems"
+            :key="h.key"
+            class="health-cell"
+            :class="{ 'is-bad': h.count > 0, 'is-ok': h.count === 0 }"
+          >
+            <div class="hc-num">{{ h.count }}</div>
+            <div class="hc-label">{{ h.label }}</div>
+            <div class="hc-hint">{{ h.hint }}</div>
+            <div v-if="h.samples && h.samples.length" class="hc-samples">
+              <button
+                v-for="g in h.samples"
+                :key="g.id"
+                type="button"
+                class="hc-sample"
+                @click="openGeneById(g.id)"
+              >{{ g.title }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 五、基因清单 -->
       <div v-if="overview" class="pcard">
         <div class="card-head">
-          <h3>基因清单</h3>
+          <h3>
+            基因清单
+            <span v-if="geneFlag" class="flag-tag">
+              {{ FLAG_LABEL[geneFlag] }}
+              <el-icon class="flag-x" @click="setFlag('')"><Close /></el-icon>
+            </span>
+          </h3>
           <div class="kind-filter">
-            <el-radio-group v-model="kindFilter" size="small" @change="loadGenes">
+            <el-input
+              v-model="geneQuery"
+              size="small"
+              class="gene-search"
+              placeholder="按标题找基因"
+              clearable
+              @keyup.enter="loadGenes(0)"
+              @clear="loadGenes(0)"
+            >
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+            <el-radio-group v-model="kindFilter" size="small" @change="loadGenes(0)">
               <el-radio-button value="">全部</el-radio-button>
               <el-radio-button v-for="k in overview.kinds" :key="k.key" :value="k.key">
                 {{ k.label }} {{ k.count }}
               </el-radio-button>
             </el-radio-group>
-            <el-select v-model="statusFilter" size="small" class="status-filter" @change="loadGenes">
+            <el-select v-model="statusFilter" size="small" class="status-filter" @change="loadGenes(0)">
               <el-option label="当前基因" value="active" />
               <el-option label="已被取代" value="superseded" />
               <el-option label="全部" value="all" />
             </el-select>
+            <el-select v-model="geneSort" size="small" class="status-filter" @change="loadGenes(0)">
+              <el-option label="按种类" value="id" />
+              <el-option label="按表达度" value="usage" />
+              <el-option label="按最近更新" value="updated" />
+              <el-option label="按置信度" value="confidence" />
+            </el-select>
           </div>
         </div>
-        <el-table :data="genes" class="ptable" v-loading="loading && !genes.length" row-key="id">
+        <el-table
+          :data="genes" class="ptable" v-loading="loading && !genes.length" row-key="id"
+          @row-click="openGene"
+        >
           <el-table-column prop="kind" label="种类" width="90">
             <template #default="{ row }">
               <span class="gene-kind" :class="row.kind">{{ kindLabel(row.kind) }}</span>
@@ -280,13 +351,51 @@
           <el-table-column label="置信" width="80">
             <template #default="{ row }">{{ row.confidence }}</template>
           </el-table-column>
-          <el-table-column type="expand">
-            <template #default="{ row }">
-              <pre class="gene-content">{{ row.content }}</pre>
-            </template>
-          </el-table-column>
         </el-table>
+        <div class="gene-pager">
+          <span class="pager-note">共 {{ geneTotal }} 条基因</span>
+          <el-pagination
+            v-model:current-page="genePage"
+            :page-size="genePageSize"
+            :total="geneTotal"
+            layout="prev, pager, next"
+            small
+            background
+            @current-change="loadGenes"
+          />
+        </div>
       </div>
+
+      <!-- 基因详情抽屉：点清单里的一行 -->
+      <el-drawer
+        v-model="geneDrawer"
+        :size="detailSize"
+        direction="rtl"
+        :title="detail ? `${KIND_LABEL[detail.kind] || detail.kind} · ${detail.title}` : '基因详情'"
+      >
+        <div v-if="detail" class="gene-detail">
+          <div class="gd-meta">
+            <span class="chip">被用 {{ detail.usage_count }} 次</span>
+            <span class="chip">置信 {{ detail.confidence }}</span>
+            <span class="chip">来源：{{ detail.source_title || detail.source_kind || '养料库' }}</span>
+            <span v-if="detail.meta && detail.meta.destroyed" class="chip danger">原文已销毁</span>
+            <span v-if="detail.status === 'superseded'" class="chip danger">已被取代</span>
+          </div>
+          <pre class="gd-content">{{ detail.content }}</pre>
+          <div v-if="detail.tags && detail.tags.length" class="gd-tags">
+            <span v-for="t in detail.tags" :key="t" class="chip">{{ t }}</span>
+          </div>
+          <div class="gd-foot">
+            <span class="gd-time">创建 {{ fmtTime(detail.created_at) }}</span>
+            <span class="gd-time">更新 {{ fmtTime(detail.updated_at) }}</span>
+          </div>
+          <div v-if="detail.source_ref && detail.source_ref.startsWith('doc-')" class="gd-actions">
+            <el-button size="small" @click="gotoDocument(detail.source_ref)">
+              <el-icon><Document /></el-icon>去数据中心看这份资料
+            </el-button>
+          </div>
+        </div>
+      </el-drawer>
     </div>
   </div>
 </template>
@@ -304,7 +413,7 @@
  * 视觉上刻意与「养料 DNA」页同族：那是体检报告，这是操作台。
  * 五种基因用五种碱基色（A/T/G/C + 中性色）区分，跟 DNA 页的测序风格对齐。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageTitle from '../components/PageTitle.vue'
 import { Api } from '../api'
@@ -323,6 +432,20 @@ const drilling = ref(false)
 const offlineLocal = ref(false)
 const kindFilter = ref('')
 const statusFilter = ref('active')
+const geneQuery = ref('')
+const geneFlag = ref('')
+const FLAG_LABEL = {
+  cold: '只看冷基因（没人用）',
+  used: '只看用过的基因',
+  no_source: '只看没出处的基因',
+  low_conf: '只看低置信的基因',
+}
+const geneSort = ref('id')
+const genePage = ref(1)
+const genePageSize = 50
+const geneTotal = ref(0)
+const geneDrawer = ref(false)
+const detail = ref(null)
 const query = ref('')
 const absorbTab = ref('text')
 const absorbText = ref('')
@@ -345,6 +468,18 @@ const KIND_DESC = {
 
 function kindLabel(k) {
   return KIND_LABEL[k] || k
+}
+
+/** 点碱基柱：按那一类筛基因清单（再点一次取消） */
+function filterByKind(key) {
+  kindFilter.value = kindFilter.value === key ? '' : key
+  loadGenes()
+  // 筛完把清单带到视野里 —— 否则点了柱子，变化在屏幕外，看不到效果
+  nextTick(() => {
+    document.querySelector('.lib-body .ptable')?.scrollIntoView({
+      behavior: 'smooth', block: 'center',
+    })
+  })
 }
 
 function capLabel(k) {
@@ -378,11 +513,15 @@ async function loadAll() {
   try {
     const [ov, list] = await Promise.all([
       Api.dnaLibraryOverview(),
-      Api.dnaLibraryGenes({ kind: kindFilter.value, status: statusFilter.value, limit: 200 }),
+      Api.dnaLibraryGenes({
+        kind: kindFilter.value, status: statusFilter.value,
+        q: geneQuery.value, sort: geneSort.value, flag: geneFlag.value,
+        limit: genePageSize }),
     ])
     overview.value = ov
     offlineLocal.value = !!ov.offline
     genes.value = list.items || []
+    geneTotal.value = list.total || 0
   } catch (e) {
     error.value = '养料库读取失败：' + (e?.message || e)
   } finally {
@@ -405,15 +544,91 @@ async function loadSourceDocs() {
   }
 }
 
-async function loadGenes() {
+/** 体检条目：把 health 的数字翻译成人能懂的话 */
+const healthItems = computed(() => {
+  const h = overview.value?.health || {}
+  const sm = h.samples || {}
+  return [
+    { key: 'cold', count: h.cold || 0, label: '冷基因',
+      hint: '没人用过 —— 该复核了', samples: sm.cold },
+    { key: 'used', count: h.used || 0, label: '用过的',
+      hint: '被检索命中过，说明有用', samples: null },
+    { key: 'no_source', count: h.no_source || 0, label: '没出处',
+      hint: '说不出从哪来 —— 不可信', samples: sm.no_source },
+    { key: 'duplicated', count: h.duplicated || 0, label: '疑似重复',
+      hint: '同一件事写了两遍', samples: sm.duplicated },
+    { key: 'superseded', count: h.superseded || 0, label: '已被取代',
+      hint: '旧版本，留着当历史', samples: null },
+    { key: 'destroyed', count: h.destroyed_sources || 0, label: '源码已销毁',
+      hint: '只留方法，不留原文', samples: null },
+  ]
+})
+
+/** 点体检条目里的样本 → 打开那条基因 */
+async function openGeneById(id) {
+  try {
+    const g = await Api.dnaLibraryGene(id)
+    detail.value = g
+    geneDrawer.value = true
+  } catch (e) {
+    ElMessage.error('读基因失败：' + (e?.message || e))
+  }
+}
+
+/** 体检筛选：点概览上的数字，直接看是哪几条 */
+function setFlag(flag) {
+  geneFlag.value = geneFlag.value === flag ? '' : flag
+  loadGenes(0)
+  nextTick(() => {
+    document.querySelector('.lib-body .ptable')?.scrollIntoView({
+      behavior: 'smooth', block: 'center',
+    })
+  })
+}
+
+function setStatus(v) {
+  statusFilter.value = statusFilter.value === v ? 'active' : v
+  loadGenes(0)
+  nextTick(() => {
+    document.querySelector('.lib-body .ptable')?.scrollIntoView({
+      behavior: 'smooth', block: 'center',
+    })
+  })
+}
+
+async function loadGenes(page) {
+  if (typeof page === 'number') genePage.value = page
   try {
     const list = await Api.dnaLibraryGenes({
-      kind: kindFilter.value, status: statusFilter.value, limit: 200 })
+      kind: kindFilter.value, status: statusFilter.value,
+      q: geneQuery.value, sort: geneSort.value, flag: geneFlag.value,
+      limit: genePageSize, offset: (genePage.value - 1) * genePageSize })
     genes.value = list.items || []
+    geneTotal.value = list.total || 0
   } catch (e) {
     ElMessage.error('读基因清单失败：' + (e?.message || e))
   }
 }
+
+/** 点清单里的一行 → 右侧抽屉看全文 */
+function openGene(row) {
+  detail.value = row
+  geneDrawer.value = true
+}
+
+function gotoDocument(sourceRef) {
+  const id = String(sourceRef).replace('doc-', '')
+  window.location.hash = `/library?doc=${id}`
+}
+
+function fmtTime(v) {
+  if (!v) return '—'
+  return String(v).replace('T', ' ').slice(0, 16)
+}
+
+/** 抽屉宽度：窄屏别占满屏 */
+const detailSize = computed(() =>
+  (typeof window !== 'undefined' && window.innerWidth < 760 ? '92%' : '520px'))
 
 async function absorbAll() {
   absorbing.value = true
@@ -618,7 +833,18 @@ onMounted(loadAll)
   gap: 10px; align-items: end;
   border-left: 1px solid var(--border-light); padding-left: 26px;
 }
-.base-cell { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.base-cell {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  border: 1px solid transparent; border-radius: 8px;
+  background: transparent; padding: 4px 2px 2px;
+  font-family: inherit; cursor: pointer;
+  transition: background .15s ease, border-color .15s ease;
+}
+.base-cell:hover { background: var(--bg-subtle); }
+.base-cell.is-on {
+  background: var(--primary-bg);
+  border-color: var(--primary-100);
+}
 .base-bar {
   width: 100%; max-width: 46px; border-radius: 4px 4px 0 0;
   background: var(--primary-grad); min-height: 4px;
@@ -789,4 +1015,74 @@ onMounted(loadAll)
   .ask-row { flex-direction: column; }
   .kind-filter { margin-left: 0; }
 }
+
+/* 基因清单：搜索、排序、分页 */
+.gene-search { width: 170px; }
+.gene-pager {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-top: 12px; flex-wrap: wrap;
+}
+.pager-note { font-size: 12.5px; color: var(--text-secondary); }
+
+/* 基因详情抽屉 */
+.gene-detail { display: flex; flex-direction: column; gap: 14px; }
+.gd-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--bg-subtle); color: var(--text-secondary);
+  font-size: 12px;
+}
+.chip.danger { background: rgba(220, 38, 38, .1); color: #dc2626; }
+.gd-content {
+  margin: 0; padding: 12px 14px; border-radius: 10px;
+  background: var(--bg-subtle); color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px; line-height: 1.75;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 46vh; overflow: auto;
+}
+.gd-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.gd-foot { display: flex; gap: 14px; font-size: 12px; color: var(--text-tertiary, var(--text-secondary)); }
+.gd-actions { display: flex; gap: 8px; }
+
+.chip-btn {
+  border: 1px solid transparent; font-family: inherit; cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.chip-btn:hover { border-color: var(--primary-100); }
+.chip-btn.is-on { background: var(--primary-bg); color: var(--primary); border-color: var(--primary-100); }
+.flag-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 8px; padding: 2px 8px; border-radius: 999px;
+  background: var(--primary-bg); color: var(--primary);
+  font-size: 12px; font-weight: 500;
+}
+.flag-x { cursor: pointer; font-size: 12px; }
+
+/* 库体检 */
+.health-card { margin-bottom: 16px; }
+.card-note { font-size: 12px; color: var(--text-secondary); }
+.health-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+.health-cell {
+  padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border-light); background: var(--bg-subtle);
+}
+.health-cell.is-bad { border-color: rgba(220, 38, 38, .25); }
+.hc-num { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.health-cell.is-ok .hc-num { color: var(--text-tertiary, var(--text-secondary)); }
+.health-cell.is-bad .hc-num { color: #dc2626; }
+.hc-label { font-size: 12.5px; color: var(--text-primary); margin-top: 2px; }
+.hc-hint { font-size: 11.5px; color: var(--text-secondary); margin-top: 2px; }
+.hc-samples { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.hc-sample {
+  text-align: left; border: none; background: transparent; padding: 0;
+  font-size: 11.5px; color: var(--text-secondary); cursor: pointer;
+  font-family: inherit;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hc-sample:hover { color: var(--primary); text-decoration: underline; }
 </style>

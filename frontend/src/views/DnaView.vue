@@ -16,6 +16,20 @@
       </el-button>
     </PageTitle>
 
+    <!-- 章节目录：报告有七节，滚动找太慢，钉在顶上 -->
+    <nav v-if="overview" class="sec-nav" aria-label="报告目录">
+      <button
+        v-for="s in SECTIONS"
+        :key="s.id"
+        type="button"
+        class="sec-nav-item"
+        :class="{ active: activeSection === s.id }"
+        @click="jumpTo(s.id)"
+      >
+        <span class="sec-nav-no">{{ s.no }}</span>{{ s.title }}
+      </button>
+    </nav>
+
     <!-- 页头装饰：一条碱基测序条带 -->
     <div class="seq-band" aria-hidden="true">
       <span
@@ -32,7 +46,7 @@
 
     <div v-loading="loading && !overview" class="dna-body">
       <!-- ============ 01 测序概览 ============ -->
-      <section v-if="overview" class="section">
+      <section v-if="overview" id="sec-overview" class="section">
         <div class="sec-head">
           <span class="sec-no">01</span>
           <h3 class="sec-title">测序概览</h3>
@@ -103,7 +117,7 @@
       </section>
 
       <!-- ============ 02 基因缺陷检测 ============ -->
-      <section v-if="overview" class="section">
+      <section v-if="overview" id="sec-defects" class="section">
         <div class="sec-head">
           <span class="sec-no">02</span>
           <h3 class="sec-title">基因缺陷检测</h3>
@@ -158,7 +172,7 @@
 
       <!-- ============ 03 + 04 指纹与成分 ============ -->
       <div v-if="overview" class="two-col">
-        <section class="section">
+        <section id="sec-fingerprint" class="section">
           <div class="sec-head">
             <span class="sec-no">03</span>
             <h3 class="sec-title">碱基测序图谱</h3>
@@ -188,7 +202,7 @@
           </div>
         </section>
 
-        <section class="section">
+        <section id="sec-composition" class="section">
           <div class="sec-head">
             <span class="sec-no">04</span>
             <h3 class="sec-title">碱基组成统计</h3>
@@ -219,7 +233,7 @@
       </div>
 
       <!-- ============ 05 DNA 双螺旋图谱 ============ -->
-      <section v-if="overview" class="section">
+      <section v-if="overview" id="sec-helix" class="section">
         <div class="sec-head">
           <span class="sec-no">05</span>
           <h3 class="sec-title">DNA 双螺旋图谱</h3>
@@ -227,12 +241,12 @@
           <span class="sec-rule" />
         </div>
         <div class="panel panel-flush">
-          <DnaGraph :graph="graph" />
+          <DnaGraph :graph="graph" :focus-id="focusNodeId" />
         </div>
       </section>
 
       <!-- ============ 06 染色体清单 ============ -->
-      <section v-if="overview" class="section">
+      <section v-if="overview" id="sec-chromosomes" class="section">
         <div class="sec-head">
           <span class="sec-no">06</span>
           <h3 class="sec-title">染色体清单</h3>
@@ -253,6 +267,20 @@
                 />
               </span>
               <span class="chr-meta">{{ doc.words ?? 0 }} 字 · {{ doc.chunks ?? 0 }} 块</span>
+              <span class="chr-acts" @click.stop>
+                <el-button size="small" text @click="locateInHelix(doc)">
+                  <el-icon><Aim /></el-icon>双螺旋定位
+                </el-button>
+                <el-button size="small" text @click="openInLibrary(doc)">
+                  <el-icon><Document /></el-icon>打开
+                </el-button>
+                <el-button
+                  size="small" text :loading="reindexing === doc.id"
+                  @click="reindex(doc.id)"
+                >
+                  <el-icon><Refresh /></el-icon>重建索引
+                </el-button>
+              </span>
               <el-icon class="chr-arrow" :class="{ open: isOpen(doc.id) }"><ArrowRight /></el-icon>
             </button>
             <div v-if="isOpen(doc.id)" class="chr-detail">
@@ -325,7 +353,7 @@
       </section>
 
       <!-- ============ 07 基因骨架 ============ -->
-      <section v-if="overview" class="section">
+      <section v-if="overview" id="sec-skeleton" class="section">
         <div class="sec-head">
           <span class="sec-no">07</span>
           <h3 class="sec-title">基因骨架</h3>
@@ -380,11 +408,46 @@
  * 结构树借鉴的是 OpenKB 的 PageIndex：
  * 把文档编成标题树，靠结构定位，而不是只靠相似度。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageTitle from '../components/PageTitle.vue'
 import DnaGraph from '../components/DnaGraph.vue'
 import { Api } from '../api'
+
+/** 报告目录：七节，编号与页面上的节号一致 */
+const SECTIONS = [
+  { id: 'sec-overview', no: '01', title: '测序概览' },
+  { id: 'sec-defects', no: '02', title: '缺陷检测' },
+  { id: 'sec-fingerprint', no: '03', title: '测序图谱' },
+  { id: 'sec-composition', no: '04', title: '碱基组成' },
+  { id: 'sec-helix', no: '05', title: '双螺旋图谱' },
+  { id: 'sec-chromosomes', no: '06', title: '染色体清单' },
+  { id: 'sec-skeleton', no: '07', title: '基因骨架' },
+]
+
+const activeSection = ref('sec-overview')
+/** 双螺旋里要高亮的节点（染色体清单点「定位」时用） */
+const focusNodeId = ref('')
+
+/** 把某个文件在双螺旋里点亮并滚过去 */
+async function locateInHelix(doc) {
+  focusNodeId.value = ''
+  await nextTick()
+  focusNodeId.value = `doc-${doc.id}`
+  jumpTo('sec-helix')
+}
+
+/** 去数据中心看这份文件 */
+function openInLibrary(doc) {
+  window.location.hash = `/library?doc=${doc.id}`
+}
+
+function jumpTo(id) {
+  const el = document.getElementById(id)
+  if (!el) return
+  activeSection.value = id
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 const loading = ref(false)
 const error = ref('')
@@ -557,8 +620,12 @@ function chromSegs(doc) {
   return Array.from({ length: n }, (_, i) => i + 1)
 }
 
-function isOpen(doc) {
-  return openDoc.value === doc.id
+// 注意参数是 **id** 不是文档对象：
+// 模板里写的是 isOpen(doc.id)。之前这里写成 isOpen(doc)，
+// 于是函数体里的 doc.id 变成了 undefined —— 永远比较不相等，
+// 展开面板永远不显示（点击像是没反应，其实数据都取回来了）。
+function isOpen(id) {
+  return openDoc.value === id
 }
 
 function toggleDoc(doc) {
@@ -698,12 +765,100 @@ async function exportJson() {
   }
 }
 
-onMounted(loadAll)
+/* ------------------------------------------------------------------ *
+ * 滚动高亮：当前在第几节
+ * ------------------------------------------------------------------ */
+let spy = null
+
+function setupSpy() {
+  if (spy) spy.disconnect()
+  if (typeof IntersectionObserver === 'undefined') return
+  spy = new IntersectionObserver((entries) => {
+    // 取当前贴着视口上沿的那一节
+    const visible = entries
+      .filter((e) => e.isIntersecting)
+      .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
+    if (visible.length) activeSection.value = visible[0].target.id
+  }, { rootMargin: '-72px 0px -60% 0px', threshold: 0 })
+  SECTIONS.forEach((s) => {
+    const el = document.getElementById(s.id)
+    if (el) spy.observe(el)
+  })
+}
+
+onMounted(async () => {
+  await loadAll()
+  await nextTick()
+  setupSpy()
+})
+
+onBeforeUnmount(() => {
+  if (spy) spy.disconnect()
+  spy = null
+})
 </script>
 
 <style scoped>
 .dna-body { min-height: 200px; }
 .dna-alert { margin-bottom: 20px; }
+
+/* 章节目录：报告有七节，滚动找太慢 —— 钉在顶上 */
+.sec-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  margin: 0 0 14px;
+  padding: 7px 8px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  box-shadow: 0 1px 8px rgba(15, 18, 30, 0.04);
+  scrollbar-width: none;
+}
+.sec-nav::-webkit-scrollbar { display: none; }
+.sec-nav-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 5px 11px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.sec-nav-item:hover { background: var(--bg-subtle); color: var(--text-primary); }
+.sec-nav-item.active {
+  background: var(--primary-bg);
+  color: var(--primary);
+  font-weight: 600;
+}
+.sec-nav-no {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  opacity: .65;
+}
+
+/* 染色体行内快捷操作：平时藏着，悬停才出来 */
+.chr-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.chr:hover .chr-acts, .chr:focus-within .chr-acts { opacity: 1; }
+.chr-acts :deep(.el-button) { font-size: 12px; }
+@media (hover: none) {
+  .chr-acts { opacity: 1; }
+}
 
 /* ============ 页头装饰条 ============ */
 .seq-band {

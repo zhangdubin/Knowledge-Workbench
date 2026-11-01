@@ -104,6 +104,10 @@ async def genes(kind: str = Query("", description="按种类过滤"),
                 q: str = Query("", description="标题/正文模糊过滤"),
                 status: str = Query("active",
                                     description="active 当前 / superseded 已被取代 / all 全部"),
+                sort: str = Query("id",
+                                  description="id 默认 / usage 表达度 / updated 最近更新 / confidence 置信"),
+                flag: str = Query("",
+                                  description="体检筛选：cold 没人用 / used 用过 / no_source 没出处 / low_conf 置信低"),
                 limit: int = Query(50, le=500),
                 offset: int = Query(0),
                 db: AsyncSession = Depends(get_db),
@@ -120,10 +124,25 @@ async def genes(kind: str = Query("", description="按种类过滤"),
         stmt = stmt.where(DnaGene.status == status)
     if q:
         stmt = stmt.where(DnaGene.title.like(f"%{q}%"))
+    # 体检筛选：让「冷基因 55」这种结论能点开看是哪 55 条，
+    # 而不是只给一个数字让人猜
+    if flag == "cold":
+        stmt = stmt.where(DnaGene.usage_count == 0)
+    elif flag == "used":
+        stmt = stmt.where(DnaGene.usage_count > 0)
+    elif flag == "no_source":
+        stmt = stmt.where(DnaGene.source_ref == "")
+    elif flag == "low_conf":
+        stmt = stmt.where(DnaGene.confidence < 0.6)
     total = (await db.execute(
         select(func.count()).select_from(stmt.subquery()))).scalar_one()
+    order = {
+        "usage": (DnaGene.usage_count.desc(), DnaGene.id),
+        "updated": (DnaGene.updated_at.desc(), DnaGene.id),
+        "confidence": (DnaGene.confidence.desc(), DnaGene.id),
+    }.get(sort, (DnaGene.kind, DnaGene.id))
     rows = (await db.execute(
-        stmt.order_by(DnaGene.kind, DnaGene.id)
+        stmt.order_by(*order)
         .offset(offset).limit(limit))).scalars().all()
     return {"items": [svc.serialize_gene(g) for g in rows],
             "total": total, "limit": limit, "offset": offset}

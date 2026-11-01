@@ -393,6 +393,11 @@ def extract_genes_from_markdown(text: str, *, title: str = "") -> list[dict]:
                 "confidence": 0.7,
                 "meta": {"section": sec["title"], "origin": "table"},
             })
+            # 表格行已经从接口基因里存了一份，就别再当散文抽一遍 ——
+            # 整段都是表格的章节，之前会同时产出一条接口基因和一条
+            # 内容完全一样的事实基因（体检里的「疑似重复」就是它们）
+            prose = "\n".join(ln for ln in prose.splitlines()
+                               if not _TABLE_ROW.match(ln)).strip()
         if len(prose) < 40:
             continue
         kind = _kind_of(sec["title"], prose)
@@ -413,6 +418,21 @@ def extract_genes_from_markdown(text: str, *, title: str = "") -> list[dict]:
                      "doc_title": title},
         })
     return out
+
+
+def _same_content(a: str, b: str, threshold: float = 0.8) -> bool:
+    """两段正文是不是同一件事（字符集合的 Jaccard 相似度）
+
+    只比标题会把「表格结构」基因和它旁边的散文基因判成重复，
+    那不是重复 —— 一个说的是表结构，一个是散文。
+    """
+    sa = set(re.sub(r"\s+", "", a or "")[:3000])
+    sb = set(re.sub(r"\s+", "", b or "")[:3000])
+    if not sa or not sb:
+        return False
+    inter = len(sa & sb)
+    union = len(sa | sb)
+    return union > 0 and (inter / union) >= threshold
 
 
 def _first_sentence(text: str, limit: int = 42) -> str:
@@ -1083,12 +1103,23 @@ async def gene_health(db: AsyncSession) -> dict:
     no_source = [g for g in genes if not g.source_ref]
     cold = [g for g in genes if (g.usage_count or 0) == 0]
     low_conf = [g for g in genes if (g.confidence or 0) < 0.6]
+    # 疑似重复：标题前 24 字相同 **而且** 正文也基本一样。
+    # 只看标题会误伤 —— 一张表的「表格结构」基因和这段表旁边的散文基因
+    # 标题前缀天然相同，但说的不是一回事（实测库里就有一条这样的误报）。
     by_title: dict[str, list[DnaGene]] = {}
     for g in genes:
         key = re.sub(r"\s+", "", g.title or "")[:24]
         if key:
             by_title.setdefault(key, []).append(g)
-    dup = [v[0] for v in by_title.values() if len(v) > 1]
+    dup: list[DnaGene] = []
+    for group in by_title.values():
+        if len(group) < 2:
+            continue
+        for i, a in enumerate(group):
+            for b in group[i + 1:]:
+                if _same_content(a.content, b.content):
+                    dup.append(a)
+                    break
     destroyed = [g for g in genes if (g.meta or {}).get("destroyed")]
     by_kind: dict[str, int] = {}
     for g in genes:

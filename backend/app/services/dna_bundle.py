@@ -58,22 +58,18 @@ from __future__ import annotations
 
 import gzip
 import hashlib
-import io
 import json
 import logging
 import os
-import posixpath
 import shutil
 import sqlite3
 import tarfile
 import tempfile
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from . import docindex
@@ -648,7 +644,9 @@ async def export_bundle(db, out_path: str) -> dict:
             encoding="utf-8")
 
         # ---- 10. 打包 ----
-        _write_tar_gz(out, staging)
+        # 成员 mtime 统一取 manifest 的 created_at：包里所有时间戳指向同一刻
+        stamp = datetime.fromisoformat(created_at).timestamp()
+        _write_tar_gz(out, staging, int(stamp))
 
         size = out.stat().st_size
         digest = _sha256_file(out)
@@ -708,15 +706,17 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _write_tar_gz(out: Path, staging: Path) -> None:
+def _write_tar_gz(out: Path, staging: Path, mtime: int) -> None:
     """把 staging 目录打成 tar.gz
 
-    gzip 的 mtime 固定成 0、tar 的 mtime 固定成 manifest 的时间戳：
-    同样的内容打出来的包，sha256 必须一样。
-    「验得出来」这句话要成立，就要求同内容同包 ——
-    每次打包都差一个时间戳的话，运维拿到的校验值没法复用。
+    gzip 的 mtime 固定成 0、tar 里每个成员的 mtime 统一取 manifest 的 created_at：
+    包里所有时间戳指向同一刻，而不是各处散着不同的“打包时刻”。
+    gzip 头里那个时间戳尤其要清掉 —— 它藏得深，最容易在比对两包时对不上。
+
+    注意：包**不是**逐字节可复现的。manifest 里的 created_at 记的是
+    「这份快照是什么时候取的」，它本来就该变；两次导出的 sha256 不同是正常的。
+    要比内容就比成员哈希（integrity.json 里有），别比整包的 sha256。
     """
-    mtime = int(time.time())
     tmp = out.with_suffix(out.suffix + ".tmp")
     with open(tmp, "wb") as raw:
         with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:

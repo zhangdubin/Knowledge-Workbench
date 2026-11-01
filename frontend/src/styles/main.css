@@ -2379,6 +2379,28 @@ html.dark {
 .md-body > *:first-child { margin-top: 0; }
 .md-body > *:last-child { margin-bottom: 0; }
 
+/* 答案正文里的引用编号【n】—— 点一下滚到对应的出处。
+   出处以前只在响应体的 sources[] 里，答案正文一个标记都没有，
+   用户没法判断哪句话是从哪条资料来的。现在编号两边对得上。 */
+.md-body a[href^='#cite-'] {
+  display: inline-block;
+  padding: 0 5px;
+  margin: 0 1px;
+  border-radius: 5px;
+  background: var(--primary-bg);
+  border: 1px solid var(--primary-100);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-decoration: none;
+  vertical-align: 1px;
+}
+.md-body a[href^='#cite-']:hover {
+  background: var(--primary-bg-strong);
+  border-color: var(--primary-200);
+}
+
 .md-body p { margin: 0 0 8px; }
 
 .md-body h3,

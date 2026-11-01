@@ -77,10 +77,17 @@
       <div v-if="task === 'ask' && sources.length" class="output-src">
         <div class="src-title">参考来源（{{ sources.length }}）</div>
         <div class="src-list">
-          <div v-for="(s, i) in sources" :key="i" class="src-item">
+          <div
+            v-for="(s, i) in sources"
+            :id="'cite-' + (s.citation || i + 1)"
+            :key="i"
+            class="src-item"
+          >
             <el-tag size="small" :type="s.type === 'document' ? 'primary' : 'success'" effect="plain">
               {{ s.type === 'document' ? '文件' : '笔记' }}
             </el-tag>
+            <!-- 引用编号：答案正文里的【n】点过来会滚到这里 -->
+            <span class="src-cite">【{{ s.citation || i + 1 }}】</span>
             <span class="src-name">{{ s.title }}</span>
             <span class="src-why">
               {{ (s.matched_by || []).map(m => m === 'semantic' ? '语义命中'
@@ -236,7 +243,7 @@ async function run() {
         ? { document_ids: props.documentIds, auto_retrieve: false }
         : { auto_retrieve: true }
       resp = await Api.aiAsk(input.value, ctx, opts)
-      output.value = resp.answer
+      output.value = withCitationLinks(resp.answer)
       sources.value = resp.sources || []
       if (!sources.value.length && resp.context_count) {
         sources.value = [{ type: 'context', title: `页面上下文 ${resp.context_count} 条`, matched_by: [] }]
@@ -247,6 +254,19 @@ async function run() {
   } finally {
     loading.value = false
   }
+}
+
+
+/**
+ * 答案正文里的【n】转成锚点链接，点一下就滚到对应的出处。
+ *
+ * 为什么走 Markdown 链接而不是直接插 HTML：
+ * 答案正文要经过 MarkdownText 渲染，而它内部是「先转义再解析」，
+ * 直接塞 <a> 会被当成普通文本显示出来。
+ */
+function withCitationLinks(text) {
+  // 模型可能写【1】也可能写【来源1】，两种都归一到【n】
+  return (text || '').replace(/【(?:来源)?(\d+)】/g, (_m, n) => `[【${n}】](#cite-${n})`)
 }
 
 
@@ -352,4 +372,16 @@ function applyOutput() {
   min-width: 0;
 }
 .src-why { color: var(--text-tertiary); font-size: 11.5px; flex-shrink: 0; }
+/* 引用编号：跟答案正文里的【n】是同一个号 */
+.src-cite {
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 11.5px;
+  flex-shrink: 0;
+  scroll-margin-top: 12px;
+}
+.src-item:target {
+  background: var(--primary-bg);
+  border-radius: 6px;
+}
 </style>

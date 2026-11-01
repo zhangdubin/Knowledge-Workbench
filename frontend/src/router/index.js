@@ -32,6 +32,8 @@ const routes = [
       { path: 'notes', name: 'notes', component: () => import('../views/Notes.vue'), meta: { title: '知识库', perm: 'notes' } },
       { path: 'notes/:id', name: 'note-detail', component: () => import('../views/NoteDetail.vue'), meta: { title: '笔记详情', perm: 'notes' } },
       { path: 'knowledge/graph', name: 'knowledge-graph', component: () => import('../views/KnowledgeGraph.vue'), meta: { title: '知识图谱', perm: 'knowledge_graph' } },
+      // 养料 DNA：喂给模型的资料的体检报告与基因图谱（只读）
+      { path: 'dna', name: 'dna', component: () => import('../views/DnaView.vue'), meta: { title: '养料 DNA', perm: 'dna' } },
       // 数据中心
       { path: 'library', name: 'library', component: () => import('../views/Library.vue'), meta: { title: '数据中心', perm: 'library' } },
       // 系统管理

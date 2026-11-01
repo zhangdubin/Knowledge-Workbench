@@ -406,10 +406,40 @@ async def suggest_title(content: str) -> str:
 
 
 async def ask(question: str, context: list[str] | None = None) -> str:
-    """AI 问答（带上下文）"""
-    sys_msg = "你是知识工作台 AI 助手。基于上下文回答用户问题，简洁准确。"
+    """AI 问答（带上下文）
+
+    三条提示词规矩，每条都对应一个真实踩过的坑：
+
+    1. **要标出处**：上下文块带【n】编号，答案里对应的句子后面写【n】。
+       以前出处只在响应体的 sources[] 里，答案正文一个标记都没有 ——
+       用户没法判断哪句话是从哪条资料来的。
+    2. **资料里没有就说没有**：明确禁止用常识补齐。
+       不写这条的时候，问「中标供应商是谁」这种语料外的问题，
+       模型会顺口编一个 —— 检索没命中不等于事实不存在，答案必须说清。
+    3. **上下文不能截断到只剩前 5 条**：以前是 context[:5]，
+       检索准备了十几块证据，最后只喂了 5 块就扔了剩下的。
+       现在按字符预算截，块数不再硬砍。
+    """
+    sys_msg = (
+        "你是知识工作台 AI 助手。基于上下文回答用户问题，简洁准确。\n"
+        "规矩：\n"
+        "1. 每条结论后面用【n】标明它来自第 n 条上下文（上下文块以【n】开头）。\n"
+        "2. 上下文里没有的信息，直接说「资料里没有」，不要用常识或推测补齐。\n"
+        "3. 不确定的地方明确说不确定，不要含糊带过。"
+    )
     if context:
-        sys_msg += "\n\n参考上下文：\n" + "\n---\n".join(context[:5])
+        # 按字符预算截，而不是按块数硬砍 —— 块数砍掉的是「排在后面的证据」，
+        # 而排在后面不等于不重要（跨文档问题的第二份材料常在后面）。
+        budget = 12000
+        kept: list[str] = []
+        used = 0
+        for c in context:
+            c = c or ""
+            if used + len(c) > budget and kept:
+                break
+            kept.append(c)
+            used += len(c)
+        sys_msg += "\n\n参考上下文：\n" + "\n---\n".join(kept)
 
     return await chat_real([
         {"role": "system", "content": sys_msg},

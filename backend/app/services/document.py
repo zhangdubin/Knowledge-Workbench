@@ -1283,6 +1283,7 @@ async def build_ai_context(db: AsyncSession, question: str,
     # 每篇文档挑中的块：{document_id: [{"text": ..., "seq": ...}, ...]}
     picked_by_doc: dict[int, list[dict]] = {}
 
+    doc_meta: dict[int, dict] = {}
     if document_ids:
         docs = (await db.execute(
             select(Document).where(Document.id.in_(document_ids),
@@ -1302,31 +1303,17 @@ async def build_ai_context(db: AsyncSession, question: str,
             if d:
                 docs.append(d)
                 picked_by_doc[d.id] = item.get("chunks") or []
-                sources.append({
-                    "type": "document",
-                    "id": d.id,
-                    "title": d.title or d.filename,
-                    "matched_by": item.get("matched_by") or [],
-                    "snippet": item.get("snippet") or "",
-                })
+                doc_meta[d.id] = {"matched_by": item.get("matched_by") or [],
+                                  "snippet": item.get("snippet") or ""}
         hit_kind = "retrieved"
 
-    if document_ids and docs:
-        for d in docs:
-            sources.append({
-                "type": "document", "id": d.id,
-                "title": d.title or d.filename,
-                "matched_by": [hit_kind], "snippet": "",
-            })
-
-    # 裁掉读不了的文件，来源列表也要跟着裁（否则前端会列出打不开的文件）
+    # 裁掉读不了的文件。出处是在拼上下文的时候才写的，
+    # 所以这里裁掉的文档不会在出处列表里留下残影。
     if principal is not None:
         allowed = []
         for d in docs:
             if await can_read_document(db, principal, d):
                 allowed.append(d)
-            else:
-                sources = [s for s in sources if s.get("id") != d.id]
         docs = allowed
 
     # 上下文预算：块不能无限堆。按文档排名往下发，
@@ -1356,15 +1343,38 @@ async def build_ai_context(db: AsyncSession, question: str,
         summary = (d.summary or "").strip()
         if summary and summary not in body:
             body = f"【摘要】{summary}\n\n{body}"
-        chunks.append(f"【文件：{d.title}】\n{body}")
+        # 【n】是给答案里的引用编号用的：上下文块与出处一一对应，
+        # 模型在句末写【2】，前端就能把这句话连回第 2 条出处。
+        # 编号必须跟 chunks 的下标一致 —— 上下文与出处是同一份顺序。
+        cite_no = len(chunks) + 1
+        chunks.append(f"【{cite_no}】{d.title}\n{body}")
+        sources.append({
+            "type": "document", "id": d.id,
+            "title": d.title or d.filename,
+            "matched_by": doc_meta.get(d.id, {}).get("matched_by")
+                          or ([hit_kind] if hit_kind == "selected" else []),
+            "snippet": doc_meta.get(d.id, {}).get("snippet") or "",
+            "citation": cite_no,
+            "chunks": [{"id": p.get("chunk_id"), "seq": p.get("seq"),
+                         "chars": len(p.get("text") or "")} for p in picked],
+        })
 
     # 再补上知识库笔记（原有能力）
     try:
         if principal is None or principal.has_page("notes"):
             notes = await _search_notes(db, question, limit=3)
-            for n in notes:
-                chunks.append(n["chunk"])
-                sources.append(n["source"])
+            for note in notes:
+                cite_no = len(chunks) + 1
+                title = note["source"].get("title") or "笔记"
+                body = note["chunk"]
+                # 笔记块自带「【笔记：标题】」前缀，去掉 ——
+                # 编号头已经说明了出处，两个前缀叠在一起模型会看晕
+                if body.startswith("【笔记：") and "】" in body:
+                    body = body.split("】", 1)[1].lstrip("\n")
+                chunks.append(f"【{cite_no}】{title}\n{body}")
+                src = dict(note["source"])
+                src["citation"] = cite_no
+                sources.append(src)
     except Exception:
         pass
 

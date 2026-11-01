@@ -326,6 +326,8 @@ async def ask_document(doc_id: int, payload: AskIn, db: AsyncSession = Depends(g
     if not body:
         raise HTTPException(400, "该文件没有可检索的正文")
     answer = await ai_svc.ask(
-        payload.question, [f"【文件：{doc.title}】\n{body[:6000]}"]
+        # 【1】是引用编号：答案句末的【1】指回这份文件，
+        # 前端据此把出处和答案对上号（跟 /api/ai/ask 的编号口径一致）。
+        payload.question, [f"【1】{doc.title}\n{body[:6000]}"]
     )
     return {"answer": answer, "document_id": doc.id, "title": doc.title}

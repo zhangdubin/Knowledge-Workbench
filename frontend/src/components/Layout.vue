@@ -265,6 +265,9 @@ const NAV = [
   { title: '发现', items: [
     { path: '/knowledge/graph', label: '知识图谱', icon: 'DataAnalysis', perm: 'knowledge_graph' },
     { path: '/search', label: '全局搜索', icon: 'Search', perm: 'search' },
+    // 养料 DNA：喂给模型的资料的体检报告与基因图谱（只读）
+    // 图标用 DataLine —— Element Plus 里没有 DNA 图标，别写不存在的名字
+    { path: '/dna', label: '养料 DNA', icon: 'DataLine', perm: 'dna' },
   ] },
   { title: '系统', items: [
     { path: '/system/users', label: '用户管理', icon: 'UserFilled', perm: 'system', feature: 'user_manage' },

@@ -18,6 +18,7 @@ PAGES = [
     "relations",       # 关联定义
     "graph",           # 关联图谱
     "knowledge_graph", # 知识图谱
+    "dna",             # 养料 DNA（只读体检）
     "search",          # 全局搜索
     "guide",           # 使用指南
     "ai",              # AI 设置
@@ -35,6 +36,7 @@ PAGE_LABELS = {
     "relations": "关联定义",
     "graph": "关联图谱",
     "knowledge_graph": "知识图谱",
+    "dna": "养料 DNA",
     "search": "全局搜索",
     "guide": "使用指南",
     "ai": "AI 设置",
@@ -98,6 +100,8 @@ def editor_perms() -> dict:
     })
     return {
         "all": False,
+        # 养料 DNA 是只读页面，页面位随 PAGES 一起给到，
+        # 不需要额外的 feature 位 —— 它本身没有任何写操作。
         "pages": [p for p in PAGES if p != "system"],
         "models": {"*": "write"},
         "features": feats,

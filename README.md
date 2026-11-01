@@ -9,6 +9,7 @@
 - 🔗 **跨实体关联分析** —— 可视化关系图谱，发现实体间的隐含关联
 - 📁 **非结构化数据** —— 文件附件、图片、富文本，一个平台全部承载
 - 🔍 **全局全文检索** —— 跨所有实体类型的关键字搜索
+- 🧬 **养料 DNA** —— 喂给模型的资料的体检报告与基因图谱：成分、结构树、主题指纹、健康分，一页看清这批资料能不能用
 - 🖥️ **自由画布驾驶舱** —— 卡片任意拖拽缩放、吸附对齐、宽度自适应填满、一键切全屏高感大屏
 - 🤖 **AI 助理（对话即操作）** —— 一句话查数据、记一笔、改记录，写操作先确认后执行
 - 🚀 **多应用承载** —— 同一套数据底座，预置项目管理、销售管理、合同管理 3 个示例应用
@@ -352,6 +353,7 @@ backups/snap-20260924-220600/
 | 附件 | `POST /api/attachments/upload`、`GET /api/attachments/{id}/download` |
 | 数据中心 | `GET /api/documents`（列表/检索）、`GET /api/documents/{id}/raw|download|content|meta` |
 | 全文搜索 | `GET /api/search?keyword=xx` |
+| 养料 DNA | `GET /api/dna/overview`（体检+成分+指纹）· `GET /api/dna/documents` · `GET /api/dna/documents/{id}` · `GET /api/dna/tree` · `GET /api/dna/report`（Markdown 总索引）· `GET /api/dna/report.json` |
 | AI 助理 | `POST /api/ai/agent`（工具调用）`POST /api/ai/ask`（RAG 问答）|
 | 关联图谱 | `GET /api/graph/record/{id}?depth=2`、`GET /api/graph/type/{id}` |
 

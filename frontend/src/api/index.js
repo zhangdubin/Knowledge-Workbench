@@ -413,4 +413,17 @@ export const Api = {
       args: pending.args,
       digest: pending.digest || [],
     }, { timeout: 180000 }),
+
+  // ---- 养料 DNA ----
+  // 喂给模型的资料的体检报告与基因图谱（全部只读）
+  dnaOverview: () => api.get('/api/dna/overview'),
+  dnaDocuments: () => api.get('/api/dna/documents'),
+  dnaDocument: (id) => api.get(`/api/dna/documents/${id}`),
+  dnaTree: () => api.get('/api/dna/tree'),
+  // Markdown 总索引：必须走 blob —— 直接下会被 axios 当 JSON 解析
+  dnaReport: () => api.get('/api/dna/report', { responseType: 'blob' }),
+  dnaReportJson: () => api.get('/api/dna/report.json'),
+  // 体检清单里的「重建索引」：重新抽取 → 重新分块 → 重新向量化
+  reindexDocument: (id, embed = true) =>
+    api.post(`/api/documents/${id}/reindex`, { embed }, { timeout: 300000 }),
 }

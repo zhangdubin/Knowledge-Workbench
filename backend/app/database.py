@@ -259,6 +259,16 @@ async def init_db():
         from .services.seed import run_seed
         await run_seed(session)
 
+    # v7：给内置角色补「养料 DNA」页面权限 ——
+    # 排在 bootstrap 之后：迁移改的是已存在角色的 perms，
+    # 角色还没建出来的时候它什么也改不到。
+    # （全新库里 bootstrap 建的角色本来就带 dna，迁移会跳过。）
+    try:
+        from .services.migrate_v7 import migrate_dna_page_perm_v7
+        await migrate_dna_page_perm_v7()
+    except Exception as e:
+        log.error("养料 DNA 页面权限迁移失败，左侧导航可能看不到这一项：%s", e)
+
     # 索引表（FTS5 + vec0）不是 SQLAlchemy 模型，单独建
     from .services import docindex
     async with engine.begin() as conn:

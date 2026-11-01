@@ -14,6 +14,7 @@ import io
 import json
 import mimetypes
 import re
+import unicodedata
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -434,6 +435,36 @@ def _pdf_extract(data: bytes) -> dict | None:
 
 
 
+# 零宽字符 / 方向控制符 / 软连字符。
+# 用显式 \u 转义写，别直接贴字符 —— 贴进去的肉眼难辨的字符
+# 很容易变成普通连字符，于是「把正文里的连字符全删了」这种事故就来了。
+_ZERO_WIDTH = re.compile("[\u200b-\u200f\u202a-\u202e\u2060\ufeff\u00ad]")
+
+
+def normalize_text(text: str) -> str:
+    """把抽取出来的正文归一化
+
+    两件必须做的事：
+
+    1. **NFKC 归一化**。PDF 抽出来的中文常带「兼容汉字」——
+       ⽬ ⼆ ⼋ ⽂ 这些 U+F900 区间的字形，看着是正规汉字，编码却不是。
+       用户搜「本项目」，库里存的是「本项⽬」，一个字符对不上，
+       全文检索就永远命中不了，向量那边也白白拉低了相似度。
+    2. **去掉零宽字符与软连字符**。PDF 里很常见，肉眼看不见，
+       但会把一句话从中间劈开，后面所有匹配都在跟它较劲。
+
+    不做这一步，后面分块、索引、块级匹配全都在替脏数据擦屁股。
+    """
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _ZERO_WIDTH.sub("", text)
+    text = unicodedata.normalize("NFKC", text)
+    # NFKC 会把 ㏎ 这类字符展开成 \r\n，再收一次
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text
+
+
 def plain_text(data: bytes, filename: str) -> str:
     """把文档压成一段纯文本，供 FTS 索引与向量化使用
 
@@ -445,7 +476,7 @@ def plain_text(data: bytes, filename: str) -> str:
         return ""
     kind = doc.get("kind")
     if kind == "text":
-        return doc.get("text") or ""
+        return normalize_text(doc.get("text") or "")
     if kind == "pdf":
         out = []
         for p in doc.get("pages") or []:
@@ -455,7 +486,7 @@ def plain_text(data: bytes, filename: str) -> str:
         meta = doc.get("meta") or {}
         if meta.get("title"):
             out.insert(0, f"[标题] {meta['title']}")
-        return "\n".join(out)
+        return normalize_text("\n".join(out))
     if kind == "docx":
         out = []
         for b in doc.get("blocks") or []:
@@ -464,7 +495,7 @@ def plain_text(data: bytes, filename: str) -> str:
                     out.append(" | ".join(str(c) for c in row))
             else:
                 out.append(b.get("text") or "")
-        return "\n".join(x for x in out if x)
+        return normalize_text("\n".join(x for x in out if x))
     if kind == "xlsx":
         out = []
         for sh in doc.get("sheets") or []:
@@ -476,10 +507,10 @@ def plain_text(data: bytes, filename: str) -> str:
         out = []
         for s in doc.get("slides") or []:
             out.append(f"[第 {s.get('index')} 页] " + " ".join(s.get("lines") or []))
-        return "\n".join(x for x in out if x.strip())
+        return normalize_text("\n".join(x for x in out if x.strip()))
     if kind == "csv":
-        return "\n".join(" | ".join(str(c) for c in row)
-                         for row in (doc.get("rows") or []))
+        return normalize_text("\n".join(" | ".join(str(c) for c in row)
+                                        for row in (doc.get("rows") or [])))
     return ""
 
 

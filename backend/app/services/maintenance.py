@@ -1972,9 +1972,17 @@ def _ensure_vec_table_after_swap() -> str:
         try:
             import sqlite_vec
             c.load_extension(sqlite_vec.loadable_path())
+            # 距离度量必须和正常建表时一致（见 docindex.VEC_METRIC）：
+            # 补建出来的表若度量不同，ensure_vec_table 会判定为「度量变更」
+            # 并重建一次 —— 白折腾，所以这里直接写对。
             c.execute(f"create virtual table document_vec "
-                      f"using vec0(embedding float[{dim}])")
+                      f"using vec0(embedding float[{dim}] "
+                      f"distance_metric=cosine)")
             c.execute("update document_chunk set embedded = 0")
+            c.execute("insert into sys_meta(key, value, updated_at) "
+                      "values ('vec_metric', 'cosine', datetime('now')) "
+                      "on conflict(key) do update set value='cosine', "
+                      "updated_at=datetime('now')")
             log.info("快照缺向量表，已补建（dim=%s）并标记重新向量化", dim)
             return "created"
         except Exception as e:

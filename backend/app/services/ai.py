@@ -151,10 +151,25 @@ async def chat_real(
     else:
         try:
             async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                r = await client.post(url, json=payload, headers=headers)
-                r.raise_for_status()
-                data = r.json()
-                return scrub_reasoning(data["choices"][0]["message"]["content"])
+                for attempt in range(2):
+                    r = await client.post(url, json=payload, headers=headers)
+                    r.raise_for_status()
+                    data = r.json()
+                    raw = (data["choices"][0]["message"].get("content") or "")
+                    out = scrub_reasoning(raw)
+                    if out.strip():
+                        return out
+                    # 空回答有两种来路：模型把 max_tokens 全花在思考块上，
+                    # 或者正文本身被 max_tokens 截断在思考块里。
+                    # 两种都表现为「剥掉思考块之后什么都不剩」——
+                    # 实测问「中标供应商」时命中过，接口 200，答案却是空的。
+                    # 这时候加 token 再问一次，比把空答案扔给用户强。
+                    logger.warning("AI 返回空内容（第 %s 次），加大 max_tokens 重试", attempt + 1)
+                    try:
+                        payload["max_tokens"] = int(payload.get("max_tokens") or 1024) * 2
+                    except (TypeError, ValueError):
+                        payload["max_tokens"] = 2048
+                return await chat_mock(messages)
         except Exception as e:
             # 优雅降级：真实 API 失败（额度用尽 / 网络异常 / Key 失效）时
             # 回退到本地规则引擎，保证业务功能不中断

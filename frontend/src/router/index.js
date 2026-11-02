@@ -38,6 +38,11 @@ const routes = [
       { path: 'dna-library', name: 'dna-library', component: () => import('../views/DnaLibraryView.vue'), meta: { title: '养料库', perm: 'dna' } },
       // 数据中心
       { path: 'library', name: 'library', component: () => import('../views/Library.vue'), meta: { title: '数据中心', perm: 'library' } },
+      // 软件开发：项目列表 / 项目工作台 / 开发设置
+      // settings 必须排在 :id 前面 —— 否则 /dev/settings 会被当成项目 id
+      { path: 'dev', name: 'dev', component: () => import('../views/dev/DevProjects.vue'), meta: { title: '软件开发', perm: 'dev' } },
+      { path: 'dev/settings', name: 'dev-settings', component: () => import('../views/dev/DevSettings.vue'), meta: { title: '开发设置', perm: 'dev' } },
+      { path: 'dev/:id', name: 'dev-workspace', component: () => import('../views/dev/DevWorkspace.vue'), meta: { title: '开发工作台', perm: 'dev' } },
       // 系统管理
       { path: 'system/users', name: 'sys-users', component: () => import('../views/system/Users.vue'), meta: { title: '用户管理', perm: 'system' } },
       { path: 'system/roles', name: 'sys-roles', component: () => import('../views/system/Roles.vue'), meta: { title: '角色权限', perm: 'system' } },

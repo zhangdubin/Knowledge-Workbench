@@ -282,6 +282,9 @@ const NAV = [
     { path: '/dna', label: '养料 DNA', icon: 'DataLine', perm: 'dna' },
     // 养料库：基因层操作台（吸收、蒸馏销毁、离线直答、打包带走）
     { path: '/dna-library', label: '养料库', icon: 'DataBoard', perm: 'dna' },
+    // 软件开发：把喂养的源码知识变成项目（在线协同 / 离线闭环）
+    // 图标用 Cpu —— Element Plus 里确实有这个图标
+    { path: '/dev', label: '软件开发', icon: 'Cpu', perm: 'dev' },
   ] },
   { title: '系统', items: [
     { path: '/system/users', label: '用户管理', icon: 'UserFilled', perm: 'system', feature: 'user_manage' },

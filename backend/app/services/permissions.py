@@ -19,6 +19,7 @@ PAGES = [
     "graph",           # 关联图谱
     "knowledge_graph", # 知识图谱
     "dna",             # 养料 DNA（只读体检）
+    "dev",             # 软件开发（项目/任务/产出物/闭环反哺）
     "search",          # 全局搜索
     "guide",           # 使用指南
     "ai",              # AI 设置
@@ -37,6 +38,7 @@ PAGE_LABELS = {
     "graph": "关联图谱",
     "knowledge_graph": "知识图谱",
     "dna": "养料 DNA",
+    "dev": "软件开发",
     "search": "全局搜索",
     "guide": "使用指南",
     "ai": "AI 设置",

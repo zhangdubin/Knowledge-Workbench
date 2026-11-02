@@ -3,7 +3,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import HTTPException as FastAPIHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -13,7 +13,7 @@ from .config import settings
 from .database import SessionLocal, init_db
 from .routers import (    entity_types, records, relations, attachments, apps, search, notes, jsontree, ai,
     knowledge, documents, note_groups, nav_items, auth, system, dashboards, recycle, dna,
-    dna_library,
+    dna_library, dev,
 )
 from .services.audit import AuditMiddleware
 from .services.auth import current_principal
@@ -158,15 +158,22 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 
 
 @app.get("/api/health")
-async def health():
+async def health(response: Response):
     """存活 + 就绪检查（Docker healthcheck 每 10 秒打一次，必须足够快）
 
     db.ok 取自后台定时探测的缓存，不在请求里查库 —— 每 10 秒跑一次
     quick_check 纯属浪费，而缓存值超过 3 个探测周期未更新会被标成 stale，
     这本身就是「后台维护停摆」的信号。
+
+    **必须不缓存**：升级之后前端就是靠这个接口确认「现在跑的是哪一版」，
+    而浏览器、反代、CDN 任何一层缓存了它，
+    用户刷新后看到的还是旧版本号 —— 正是「显示升级完成、版本没变」的样子。
     """
     from .services.scheduler import health_snapshot
     h = health_snapshot()
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return {
         "ok": True,
         "app": settings.app_name,
@@ -184,7 +191,7 @@ async def health():
 
 
 @app.get("/api/health/deep")
-async def health_deep():
+async def health_deep(response: Response):
     """深度自检：现跑一次库检查 + 文件目录余量 + 备份目录可写
 
     给上线前自检和排障用；不要挂到 Docker healthcheck 上（会定期跑全库检查）。
@@ -192,6 +199,10 @@ async def health_deep():
     from .database import probe_health
     from .services import filestore
     from .services.maintenance import backup_dir
+
+    # 同样不缓存：排障时看到的版本号必须是此刻真在跑的那一版
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
 
     probe = await probe_health()
     store = filestore.status()
@@ -225,7 +236,7 @@ app.include_router(auth.router)
 PROTECTED = [
     entity_types, records, relations, attachments, documents,
     apps, search, notes, knowledge, jsontree, ai, dashboards, recycle,
-    note_groups, nav_items, dna, dna_library,
+    note_groups, nav_items, dna, dna_library, dev,
 ]
 for mod in PROTECTED:
     app.include_router(mod.router, dependencies=[Depends(current_principal)])

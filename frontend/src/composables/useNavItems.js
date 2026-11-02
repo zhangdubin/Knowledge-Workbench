@@ -22,6 +22,7 @@ const PATH_PERM = {
   '/dashboards': 'dashboards',
   '/notes': 'notes',
   '/library': 'library',
+  '/dev': 'dev',
   '/apps': 'apps',
   '/types': 'types',
   '/relations': 'relations',
@@ -46,6 +47,7 @@ export function permForPath(path) {
   if (p.startsWith('/apps')) return 'apps'
   if (p.startsWith('/notes')) return 'notes'
   if (p.startsWith('/library')) return 'library'
+  if (p.startsWith('/dev')) return 'dev'
   if (p.startsWith('/types')) return 'types'
   if (p.startsWith('/system')) return 'system'
   return ''

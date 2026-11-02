@@ -466,6 +466,24 @@
 
         <el-alert v-if="upgrade.error" :title="upgrade.error" type="error" show-icon :closable="false" />
 
+        <!-- 服务端核验结论：差在哪一层、下一步执行什么。
+             判定全在后端（它看得见镜像、容器与源码）——
+             界面自己比两个字符串是比不出「哪一层」的，
+             而用户最需要的恰恰是「现在该做什么」。 -->
+        <div v-if="upgrade.verify && !upgrade.verify.ok" class="upgrade-verify">
+          <div class="upgrade-verify-title">
+            <el-icon><WarningFilled /></el-icon>
+            {{ verifyLayerTitle }}
+          </div>
+          <div v-if="upgrade.verify.reason" class="upgrade-verify-reason">
+            {{ upgrade.verify.reason }}
+          </div>
+          <template v-if="verifyCommands.length">
+            <div class="upgrade-verify-cmd-title">在服务器上执行下面这条（后端会自己重建容器）：</div>
+            <pre class="upgrade-verify-cmd mono">{{ verifyCommands.join('\n') }}</pre>
+          </template>
+        </div>
+
         <!-- 后端核对过的结论（例如「已确认运行版本 v0.6.9」）。
              它是后端拿自己跑的版本号对过账之后给的，
              比界面自己猜的可靠。 -->
@@ -599,7 +617,7 @@
             <el-icon v-else-if="upgrade.phase === 'failed'"><WarningFilled /></el-icon>
             <el-icon v-else><Loading /></el-icon>
             <span v-if="upgrade.phase === 'restarting'">
-              正在重启服务，请稍候……（最多等待 90 秒，还剩 {{ upgrade.waitLeft }} 秒）
+              正在重启服务，请稍候……（最多等待 {{ upgrade.waitTotal }} 秒，还剩 {{ upgrade.waitLeft }} 秒）
             </span>
             <span v-else-if="upgrade.phase === 'failed'">
               升级没有完成 —— 原因见上面的红色提示，下面的日志里有细节
@@ -640,6 +658,13 @@
             {{ upgradeBusy ? '后台继续' : '关闭' }}
           </el-button>
           <el-button
+            v-if="upgrade.phase === 'failed'"
+            :loading="upgrade.verifying || upgrade.repairing"
+            @click="confirmUpgrade"
+          >
+            <el-icon><Refresh /></el-icon>重新核验并修复
+          </el-button>
+          <el-button
             v-if="canStartUpgrade"
             type="primary"
             :loading="upgrade.starting"
@@ -659,7 +684,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Api } from '../../api'
-import { upgradeCommand as upgradeCommandText, upgradeTip as upgradeTipText, DEPLOY_MODE, planSummary as planSummaryText, assetSize as assetSizeText, autoUpgradeSupported, enableCommands as enableCommandsOf, isLatestPlan, normVersion, sameVersion, versionMismatchText } from '../../utils/update'
+import { upgradeCommand as upgradeCommandText, upgradeTip as upgradeTipText, DEPLOY_MODE, planSummary as planSummaryText, assetSize as assetSizeText, autoUpgradeSupported, enableCommands as enableCommandsOf, isLatestPlan, verifyFailureText, detectCacheLayer, VERIFY_LAYER, VERIFY_LAYER_TEXT } from '../../utils/update'
 import { useAuthStore } from '../../stores/auth'
 import PageTitle from '../../components/PageTitle.vue'
 import MarkdownText from '../../components/MarkdownText.vue'
@@ -757,6 +782,7 @@ const upgradeTip = computed(() => upgradeTipText(updateInfo.value?.current, depl
 
 const POLL_MS = 1500           // 日志轮询间隔
 const RESTART_WAIT_MS = 90000  // 第 4 步之后最多等多久（后端要重建容器）
+const REPAIR_WAIT_MS = 120000   // 自愈（强制换镜像 + 重建容器）之后最多等多久
 
 const upgrade = reactive({
   visible: false,
@@ -767,6 +793,10 @@ const upgrade = reactive({
   phase: 'idle',      // idle | running | restarting | done | failed
   error: '',
   waitLeft: 0,
+  waitTotal: 90,       // 「最多等待 N 秒」里的 N（重启 90 秒 / 自愈 120 秒）
+  verify: null,        // 服务端核验结论（差在哪一层、该执行什么）
+  verifying: false,    // 正在核验
+  repairing: false,    // 正在让后端自愈
 })
 
 const logBox = ref(null)
@@ -930,9 +960,15 @@ async function pollOnce() {
 function enterRestartWait() {
   if (upgrade.phase === 'restarting') return
   upgrade.phase = 'restarting'
-  upgrade.waitLeft = Math.round(RESTART_WAIT_MS / 1000)
+  upgrade.waitTotal = Math.round(RESTART_WAIT_MS / 1000)
+  upgrade.waitLeft = upgrade.waitTotal
   waitBackend()
 }
+
+// 核验结论的展示：差在哪一层、该执行哪几条命令。
+// 判定全在后端（它看得见镜像、容器与源码），这里只负责讲清楚。
+const verifyLayerTitle = computed(() => VERIFY_LAYER_TEXT[upgrade.verify?.layer] || '升级没有真正生效')
+const verifyCommands = computed(() => (upgrade.verify?.commands || []).filter(Boolean))
 
 /**
  * 升级完成后刷新页面
@@ -957,46 +993,128 @@ async function reloadAfterUpgrade() {
 }
 
 /**
- * 核对后端此刻**真正在跑的**版本
+ * 让**后端**做权威核验：现在跑的到底是不是目标版本
  *
- * 为什么必须核对：`/api/health` 里的 version 是后端此刻在跑的版本。
- * 「服务回来了」不等于「升级生效了」——
+ * 为什么不再由界面自己比两个字符串：
+ * `/api/health` 里的 version 是后端此刻在跑的版本，
+ * 但「服务回来了」不等于「升级生效了」——
  * 容器可能起来了，跑的还是旧镜像（compose 拿旧源码重建了一遍、
  * 或者镜像标签压根没换成功），这时界面若照旧弹一句「升级完成」，
  * 用户刷新后看到的还是旧版本，而全程没有任何报错。
- * 这正是这次要修的现象。
  *
- * 与 scripts/upgrade.sh 是同一套做法：那边在重启后轮询 /api/health 对账，
- * 这边在界面上做同一件事。
+ * 界面自己比，只比得出「对不上」；而**后端**看得见镜像、容器与源码，
+ * 于是能说清「**是哪一层**没换成功」，并给出对应的命令。
+ * 所以这里只负责把后端的结论讲清楚。
  *
- * @param {object} health /api/health 的响应体（拦截器已经把 data 摘出来了）
- * @returns {{ok: boolean, running: string, target: string, reason: string}}
+ * @param {boolean} repair 为 true 时，若核验不通过就让后端自愈一次
+ * @returns {Promise<'ok'|'failed'|'unreachable'>}
+ *   ok          —— 跑的就是目标版本
+ *   failed      —— 后端答了，但结论是「没生效」
+ *   unreachable —— 连不上后端（它正在被重建），不是「核验不通过」
  */
-function checkRunningVersion(health) {
-  const running = String(health?.version || '')
+async function verifyUpgrade(repair = false) {
   const target = String(upgrade.plan?.target || upgrade.job?.target || '')
-  if (!running) {
-    // 拿不到版本号就不能说「升级成功」——
-    // 「不知道」不等于「一样」，报个含糊的成功比报错更害人。
-    return { ok: false, running, target,
-             reason: '拿不到后端当前的版本号，无法确认升级是否生效' }
+  upgrade.verifying = true
+  try {
+    const res = await Api.updateVerify(target, repair)
+    upgrade.verify = res || null
+    if (!res?.ok) return 'failed'
+    // 后端说是目标版本了 —— 再看一眼 /api/health：
+    // 两者对不上说明中间隔着一层缓存（浏览器、反代、CDN）。
+    // 那时候版本其实已经对了，只是页面拿到的是旧响应，
+    // 提示必须说「刷新一下」，而不是「升级失败」。
+    const health = await fetchHealth(1)
+    if (detectCacheLayer(res, health)) {
+      upgrade.verify = { ...res, layer: VERIFY_LAYER.CACHE }
+      return 'failed'
+    }
+    return 'ok'
+  } catch {
+    // 连不上 = 后端正在被重建（或者已经挂了）。
+    // 这不是「核验不通过」，而是「暂时问不了」。
+    return 'unreachable'
+  } finally {
+    upgrade.verifying = false
   }
-  if (!target) {
-    return { ok: false, running, target,
-             reason: `拿不到目标版本号，无法确认升级是否生效（当前 v${normVersion(running)}）` }
+}
+
+/**
+ * 升级收尾：核验 → 不通过就自愈 → 再核验
+ *
+ * 为什么要自愈：用户点完「一键升级」之后，唯一能做的事就只剩「重启一下试试」。
+ * 而 `docker compose up -d` 在**镜像 ID 没变**时**不会重建容器** ——
+ * 于是「再点一次升级」也修不好。`--force-recreate` 才是那个能真正换掉容器的开关，
+ * 这件事只有后端能做（它才有 docker 与部署目录）。
+ */
+async function confirmUpgrade() {
+  const state = await verifyUpgrade()
+  if (state === 'ok') {
+    upgrade.phase = 'done'
+    upgrade.error = ''
+    ElMessage.success('升级完成，正在刷新页面…')
+    setTimeout(reloadAfterUpgrade, 1500)
+    return
   }
-  if (sameVersion(running, target)) {
-    return { ok: true, running, target, reason: '' }
+  // 缓存问题：版本其实已经对了，只是页面拿到的是旧响应
+  if (upgrade.verify?.layer === VERIFY_LAYER.CACHE) {
+    upgrade.phase = 'failed'
+    upgrade.error = verifyFailureText(upgrade.verify)
+      + '（后端已经是目标版本，只是页面拿到的还是旧响应）'
+    ElMessage.error(upgrade.error)
+    return
   }
-  // 措辞统一用 utils/update.js 里的那一份 ——
-  // 升级弹窗与侧栏的版本核对回答的是同一个问题，
-  // 两处说法不一致，用户会以为系统自相矛盾。
-  return {
-    ok: false, running, target,
-    reason: `服务已恢复，但${versionMismatchText(running, target)} —— `
-          + '升级没有真正生效。请检查 docker compose logs backend '
-          + '与镜像标签是否换成功。',
+  // 让后端自愈：强制换镜像 + 重建容器
+  if (upgrade.verify?.repairable && !upgrade.repairing) {
+    upgrade.repairing = true
+    upgrade.phase = 'restarting'
+    upgrade.waitTotal = Math.round(REPAIR_WAIT_MS / 1000)
+    upgrade.waitLeft = upgrade.waitTotal
+    ElMessage.warning('升级没有真正生效，正在让后端强制换镜像并重建容器……')
+    try {
+      await verifyUpgrade(true)
+      if (upgrade.verify?.repair_started) {
+        await waitRepair()
+        return
+      }
+    } finally {
+      upgrade.repairing = false
+    }
   }
+  // 到这里还没成 → 如实报失败，并把「差在哪一层 + 该执行什么」摆出来
+  upgrade.phase = 'failed'
+  upgrade.error = verifyFailureText(upgrade.verify, upgrade.job?.current || '',
+    String(upgrade.plan?.target || upgrade.job?.target || ''))
+  ElMessage.error(upgrade.error)
+  scrollLog()
+}
+
+/** 自愈之后等容器重建完，再核验一次 */
+async function waitRepair() {
+  const deadline = Date.now() + REPAIR_WAIT_MS
+  // 先给容器一点时间被重建（独立容器先睡 2 秒再动手，compose up 还要一会儿）
+  await new Promise((r) => setTimeout(r, 8000))
+  while (Date.now() < deadline) {
+    const state = await verifyUpgrade()
+    if (state === 'ok') {
+      upgrade.phase = 'done'
+      upgrade.error = ''
+      ElMessage.success('服务已恢复，升级完成，正在刷新页面…')
+      setTimeout(reloadAfterUpgrade, 2000)
+      return
+    }
+    if (state === 'failed') {
+      // 后端能答了，但结论仍是「没生效」→ 自愈没成功，如实报出来
+      break
+    }
+    upgrade.waitLeft = Math.max(0, Math.round((deadline - Date.now()) / 1000))
+    await new Promise((r) => setTimeout(r, 2500))
+  }
+  upgrade.phase = 'failed'
+  upgrade.error = verifyFailureText(upgrade.verify, upgrade.job?.current || '',
+    String(upgrade.plan?.target || upgrade.job?.target || ''))
+    || '自愈之后服务仍然没有恢复到目标版本，请到服务器上执行上面的命令。'
+  ElMessage.error(upgrade.error)
+  scrollLog()
 }
 
 /** 拿一次 /api/health；后端刚起来时可能还在喘，重试几次再放弃 */
@@ -1016,23 +1134,10 @@ async function waitBackend() {
   const deadline = Date.now() + RESTART_WAIT_MS
   while (Date.now() < deadline) {
     try {
-      const health = await Api.upgradeHealth()
+      await Api.upgradeHealth()
       // 后端回来了 —— 但「后端在」不等于「升级成了」。
-      // /api/health 的 body 里带着它此刻真正在跑的版本号，
-      // 拿它跟目标版本对一下：对不上就不能说「升级完成」。
-      const check = checkRunningVersion(health)
-      if (!check.ok) {
-        upgrade.phase = 'failed'
-        upgrade.waitLeft = 0
-        upgrade.error = check.reason
-        ElMessage.error(check.reason)
-        scrollLog()
-        return
-      }
-      upgrade.phase = 'done'
-      upgrade.waitLeft = 0
-      ElMessage.success('服务已恢复，升级完成，正在刷新页面…')
-      setTimeout(reloadAfterUpgrade, 2000)
+      // 交给后端做权威核验（它看得见镜像与容器）。
+      await confirmUpgrade()
       return
     } catch {
       upgrade.waitLeft = Math.max(0, Math.round((deadline - Date.now()) / 1000))
@@ -1048,26 +1153,8 @@ async function finishUpgrade() {
   // 作业报成功也不能直接说「升级完成」——
   // 后端会用自己跑的版本号跟目标对账（见 services/upgrade.py 的 get_job），
   // 但「作业与后端在同一个进程里跑完」的那种场景那次核对不会发生，
-  // 所以这里再核一遍：/api/health 的 version 才是「现在跑的是哪一版」。
-  const health = await fetchHealth()
-  if (!health) {
-    upgrade.phase = 'failed'
-    upgrade.error = '升级作业已完成，但连不上后端，无法确认运行版本。'
-                   + '请刷新页面后再看版本号。'
-    ElMessage.error(upgrade.error)
-    return
-  }
-  const check = checkRunningVersion(health)
-  if (!check.ok) {
-    upgrade.phase = 'failed'
-    upgrade.error = check.reason
-    ElMessage.error(check.reason)
-    scrollLog()
-    return
-  }
-  upgrade.phase = 'done'
-  ElMessage.success('升级完成，正在刷新页面…')
-  setTimeout(reloadAfterUpgrade, 1500)
+  // 所以这里再核一遍：还是由后端来核（它看得见镜像与容器）。
+  await confirmUpgrade()
 }
 
 function copyManual() {
@@ -1800,6 +1887,33 @@ onMounted(load)
 .upgrade-mode {
   margin-left: auto; flex-shrink: 0;
   border-radius: var(--radius-full); font-weight: 500;
+}
+
+/* —— 核验结论：差在哪一层 + 该执行什么 —— */
+.upgrade-verify {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--danger-bg);
+  border: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
+  border-radius: var(--radius-md);
+}
+.upgrade-verify-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: var(--text-sm); font-weight: 600; color: var(--danger-text);
+}
+.upgrade-verify-reason {
+  font-size: var(--text-sm); line-height: 1.6; color: var(--text-secondary);
+}
+.upgrade-verify-cmd-title {
+  font-size: var(--text-xs); color: var(--text-tertiary);
+}
+.upgrade-verify-cmd {
+  margin: 0; padding: var(--space-3);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs); line-height: 1.7; color: var(--text-primary);
+  white-space: pre-wrap; word-break: break-all;
 }
 
 /* —— 障碍清单 —— */

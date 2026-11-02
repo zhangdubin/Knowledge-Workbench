@@ -746,7 +746,54 @@ async def update_job(job_id: str = "",
 
     后端容器被第 4 步重启后，内存里的作业没了，接口会从状态文件恢复 ——
     所以浏览器在「正在重启服务」期间仍然能看到完整的升级日志。
+
+    作业失败时会在返回值里带上 verify（服务端权威核验结论）：
+    哪一层没换成功、该执行哪条命令。前端直接渲染它，
+    不用自己比两个字符串。
     """
     from ..services import upgrade as upg
-    return upg.get_job(job_id)
+    return await upg.get_job_async(job_id)
+
+
+class UpgradeVerifyIn(BaseModel):
+    """服务端权威核验的入参"""
+    target: str = ""      # 目标版本；留空则与当前运行版本比（只能确认「在跑的是哪一版」）
+    repair: bool = False   # 核验不通过时是否自动自愈（强制换镜像 + 重建容器）
+
+
+@router.post("/update/verify")
+async def update_verify(payload: UpgradeVerifyIn, request: Request,
+                         principal: Principal = Depends(require_feature("system_config"))):
+    """服务端权威核验：现在跑的到底是不是目标版本
+
+    为什么要有这个接口：以前是**前端**拿 /api/health 的 version 跟目标比字符串 ——
+    两端各写一份比较逻辑，而前端看不见镜像、看不见容器，
+    比对失败只能给一句「升级没有真正生效，请检查 docker compose logs backend」。
+
+    现在由后端自己回答：它读得到自己容器的镜像 ID、读得到镜像里声明的版本，
+    于是能说清「**哪一层**没换成功」（源码 / 镜像 / 容器 / 缓存），
+    并给出对应的命令。
+
+    repair=true 时，核验不通过会自动自愈一次
+    （强制换镜像 + docker compose up -d --force-recreate 重建容器），
+    然后前端再核验一次。
+
+    返回结构见 services/upgrade.py 的 verify_running_version()。
+    """
+    from ..services import upgrade as upg
+    if payload.repair:
+        out = await upg.repair_running_version(payload.target, who=principal.username)
+    else:
+        # refresh=True：这个接口是「用户点了核验」才调用的，
+        # 必须给当下的结论 —— 复用 10 秒前的缓存会让人以为「什么都没变」，
+        # 而其实刚刚才换过镜像。
+        out = await upg.verify_running_version(payload.target, refresh=True)
+    request.state.audit_detail = {
+        "action": "upgrade_verify",
+        "target": payload.target,
+        "repair": bool(payload.repair),
+        "layer": out.get("layer"),
+        "ok": bool(out.get("ok")),
+    }
+    return out
 

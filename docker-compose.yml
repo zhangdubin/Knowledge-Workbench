@@ -40,6 +40,15 @@ services:
     #    一键升级的两条路径都不受影响：
     #      源码部署：先 docker compose build，再 up -d
     #      离线包：导入镜像打好标签后 up -d --no-build
+    #
+    # 升级之后后端还会给这个镜像再打一个**版本化标签**
+    # （kb-workbench-backend:<版本号>，例：kb-workbench-backend:1.0.0）。
+    # 为什么要有它：latest 是会被下一次构建覆盖的移动靶，
+    # 出问题之后没人说得清「现在跑的到底是哪一版」。
+    # 版本化标签是个不会动的锚点 —— 版本核验接口用它判断
+    # 「镜像到底换没换」，人工排查时也能一眼认出来。
+    # 这里的 image: 仍保持 latest 不变：改了会让现有的
+    # docker compose up -d 语义变掉（用户机器上的老编排文件也还是 latest）。
     image: kb-workbench-backend:latest
     build:
       context: ./backend

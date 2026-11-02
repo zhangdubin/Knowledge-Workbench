@@ -64,6 +64,99 @@ export function versionMismatchText(running, target) {
   return `当前运行版本 v${r}，期望 v${t}`
 }
 
+/**
+ * 服务端核验结论里的「层」。
+ *
+ * 为什么要有层：以前界面只能说「升级没有真正生效，请检查日志」——
+ * 而日志在容器里，用户多半看不到，也看不懂。
+ * 现在后端自己看得到镜像、容器与源码，于是能说清
+ * 「**是哪一层**没换成功」，每一层的处置办法完全不同：
+ *   source    —— 源码没换：目标 tag 里的代码就不是这一版
+ *   image     —— 镜像没换：镜像里装的还是旧版本
+ *   container —— 容器没重建：镜像是对的，容器还在跑旧的
+ *   cache     —— 缓存没刷新：拿到的还是旧响应
+ */
+export const VERIFY_LAYER = {
+  OK: 'ok',
+  SOURCE: 'source',
+  IMAGE: 'image',
+  CONTAINER: 'container',
+  CACHE: 'cache',
+}
+
+/** 每一层的中文说法（给用户看的那一句） */
+export const VERIFY_LAYER_TEXT = {
+  ok: '升级已生效',
+  source: '源码没换（目标 tag 里的代码不是这一版）',
+  image: '镜像没换（镜像里装的还是旧版本）',
+  container: '容器没重建（镜像是对的，容器还在跑旧的）',
+  cache: '缓存没刷新（拿到的还是旧响应）',
+}
+
+/**
+ * 把服务端的核验结论渲染成一句能照着做的话
+ *
+ * 为什么要有这个函数：核验在后端做（它才看得见镜像与容器），
+ * 但话要说给用户听。老后端没有这个接口时退回原来那套说法 ——
+ * 宁可少给点信息，也不能让界面空着。
+ *
+ * @param {object} verify 后端 /api/system/update/verify 的返回
+ * @param {string} running 兜底：当前运行版本
+ * @param {string} target  兜底：目标版本
+ * @returns {string} 空串表示核验通过（没有需要说的话）
+ */
+export function verifyFailureText(verify, running = '', target = '') {
+  if (!verify || typeof verify !== 'object') {
+    // 老后端没有核验接口 → 退回原来的说法
+    if (!running || !target) return ''
+    return '服务已恢复，但'
+      + versionMismatchText(running, target)
+      + ' —— 升级没有真正生效。'
+      + '请检查 docker compose logs backend 与镜像标签是否换成功。'
+  }
+  if (verify.ok) return ''
+  const r = normVersion(verify.running || running)
+  const t = normVersion(verify.target || target)
+  const head = (r && t)
+    ? `服务已恢复，但${versionMismatchText(r, t)} —— 升级没有真正生效。`
+    : '服务已恢复，但拿不到运行版本号 —— 升级可能没有真正生效。'
+  const parts = [head]
+  const layer = String(verify.layer || '')
+  const layerText = VERIFY_LAYER_TEXT[layer]
+  if (layerText && layer !== VERIFY_LAYER.OK) parts.push(layerText + '。')
+  const reason = String(verify.reason || '')
+  if (reason) parts.push(reason + '。')
+  const cmds = Array.isArray(verify.commands)
+    ? verify.commands.filter((c) => typeof c === 'string' && c.trim())
+    : []
+  if (cmds.length) {
+    parts.push('请在服务器上执行：\n' + cmds.map((c) => '  ' + c).join('\n'))
+  } else if (verify.fix) {
+    parts.push('下一步：' + verify.fix)
+  }
+  return parts.join('')
+}
+
+/**
+ * 判断「拿到的是不是缓存里的旧响应」
+ *
+ * 为什么要单独判：后端核验说「跑的是目标版本」，
+ * 而 /api/health 报的还是另一版 —— 那两者之间隔着一层缓存
+ * （浏览器、反代、CDN）。这时候版本其实已经对了，
+ * 用户看到的还是旧号，提示必须说「刷新一下」而不是「升级失败」。
+ *
+ * @param {object} verify 服务端核验结论
+ * @param {object} health /api/health 的响应体
+ * @returns {string} 层的名字；不是缓存问题时返回空串
+ */
+export function detectCacheLayer(verify, health) {
+  if (!verify || !verify.ok) return ''
+  const hv = normVersion(health?.version || '')
+  const vv = normVersion(verify.running || '')
+  if (hv && vv && hv !== vv) return VERIFY_LAYER.CACHE
+  return ''
+}
+
 /** 升级脚本从哪个版本起才随仓库提供 */
 export const UPGRADE_SCRIPT_SINCE = [0, 4, 0]
 

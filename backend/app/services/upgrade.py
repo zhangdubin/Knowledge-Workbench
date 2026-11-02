@@ -324,10 +324,16 @@ def _version_mismatch_message(running: str, target: str) -> str:
 
     要回答三件事：现在跑的是哪一版、目标是哪一版、接下来查什么。
     只说「升级失败」等于把排查的活儿全推给用户。
+
+    具体是「**哪一层**」没换成功（源码 / 镜像 / 容器 / 缓存），
+    由 verify_running_version() 判定 —— 那儿能看见镜像与容器，
+    这里看不见，所以这里给的是兜底的话 + 一个明确的下一步入口。
     """
     return (f"服务已重启，但运行的仍是 v{_norm_version(running)}"
             f"（目标 v{_norm_version(target)}）—— 升级没有真正生效。"
-            "请检查 docker compose logs backend 与镜像标签是否换成功。")
+            "请点「重新核验」看是哪一层没换成功，并照着它给出的命令处理；"
+            "也可以先执行 docker compose logs backend "
+            "与 docker image inspect 确认镜像标签是否换成功。")
 
 
 def _declared_version(config_text: str) -> str:
@@ -403,6 +409,48 @@ def _compose_project_name(text: str, fallback: str) -> str:
         if m:
             return m.group(1).strip().strip('"\'')
     return fallback
+
+
+def _scan_compose_container_names(text: str) -> dict[str, str]:
+    """逐行扫出 services 段里各服务写死的 container_name
+
+    为什么需要它：自愈时要用 `docker compose up -d --force-recreate`
+    换掉后端容器。但如果那个容器**不是 compose 建的**
+    （用户手工 docker run 起的、或者项目名改过），
+    compose 会因为「容器名已被占用」而失败 ——
+    于是自愈看起来「开始了」，其实什么都没换。
+    知道容器名之后，可以在失败时把它删掉再试一次。
+    """
+    out: dict[str, str] = {}
+    in_services = False
+    svc_indent: int | None = None
+    current = ""
+    for raw in text.splitlines():
+        line = re.sub(r"\s+#.*$", "", raw).rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0:
+            in_services = stripped.rstrip(":") == "services"
+            svc_indent = None
+            current = ""
+            continue
+        if not in_services:
+            continue
+        m = re.match(r"^([A-Za-z0-9_.-]+)\s*:\s*(.*)$", stripped)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        if svc_indent is None:
+            svc_indent = indent
+        if indent <= svc_indent:
+            current = key
+            out.setdefault(current, "")
+            continue
+        if current and key == "container_name" and val:
+            out[current] = val.strip().strip('"\'')
+    return out
 
 
 def _scan_compose_images(text: str) -> dict[str, str]:
@@ -522,6 +570,300 @@ async def _host_arch(docker: str | None) -> tuple[str, str]:
         if rc == 0 and raw:
             return _norm_arch(raw), raw
     return "", ""
+
+
+# ==================== 服务端权威核验 ====================
+#
+# 为什么要有这一节：
+# 以前「跑的是不是新版本」是**前端**拿 /api/health 的 version 跟目标比字符串。
+# 两个问题：
+#   1. 两端各写一份比较逻辑（v 前缀、字段个数），迟早有一处漏；
+#   2. 前端看不见镜像、看不见容器，比对失败只能给一句
+#      「升级没有真正生效，请检查 docker compose logs backend」——
+#      把排查的活儿全推给用户。
+#
+# 现在由后端自己回答：它读得到自己容器的镜像 ID、读得到镜像里声明的版本、
+# 读得到部署目录里源码声明的版本，于是能说清「**哪一层**没换成功」，
+# 并给出对应的命令 —— 前端不再自己比两个字符串。
+
+# 核验结论里的「层」。分层不是为了好看：
+# 不同的层要不同的处置办法 —— 一句「升级没生效」只能让用户自己猜。
+LAYER_OK = "ok"                   # 全部对得上
+LAYER_SOURCE = "source"           # 源码没换：tag 里的代码就不是目标版本
+LAYER_IMAGE = "image"             # 镜像没换：镜像里声明的版本不对
+LAYER_CONTAINER = "container"     # 容器没重建：镜像是对的，容器还在跑旧的
+LAYER_CACHE = "cache"             # 缓存没刷新：拿到的是旧响应
+
+# 核验结果的缓存时间（秒）。核验要起一个临时容器读镜像里的 config.py，
+# 前端在「等待服务恢复」期间每 2 秒问一次 —— 不缓存的话就是每 2 秒起一个容器。
+VERIFY_CACHE_TTL = 10.0
+_verify_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _parse_loaded_images(out: str) -> list[str]:
+    """从 `docker load` 的输出里认出导入了哪些镜像
+
+    docker load 的输出措辞各版本不同：
+      老版本：Loaded image: kb-workbench-backend:arm64
+      新版本（镜像没有标签名时）：Loaded image ID: sha256:xxxx
+
+    只认第一种的话，第二种情况下认出来的列表是空的 ——
+    于是新镜像**根本没被打上标签**，compose up 起来的还是旧镜像，
+    而升级流程一路绿灯，最后报「升级完成，刷新后版本没变」。
+    这正是这次要修的那个现象，所以两种措辞都要认。
+    """
+    return re.findall(r"Loaded image(?:\s+ID)?:\s*(\S+)", out or "")
+
+
+def _versioned_ref(ref: str, version: str) -> str:
+    """给镜像引用套一个版本化标签
+
+    kb-workbench-backend:latest → kb-workbench-backend:1.0.0
+
+    为什么要有版本化标签：编排文件里写死的是 :latest，
+    而 :latest 是个**会被下一次构建覆盖的移动靶** ——
+    出问题之后没人说得清「现在跑的到底是哪一版」。
+    再打一个版本化标签，核验时就有了一个不会动的锚点：
+    「1.0.0 这个标签指向的镜像，声明的版本是不是 1.0.0」。
+    """
+    repo, _tag = _split_ref(ref)
+    v = _norm_version(version)
+    return f"{repo}:{v}" if v else ""
+
+
+async def _image_id(docker: str, ref: str) -> str:
+    """某个镜像引用当前指向的镜像 ID（取不到就返回空串）
+
+    「指向哪个镜像」和「镜像里声明的版本」是两件事：
+    前者是一次 inspect 的事，后者要起个容器读文件 ——
+    所以判层的时候先用便宜的那一个，只有需要时再花贵的那个。
+    """
+    if not ref or not docker:
+        return ""
+    rc, out = await _run([docker, "image", "inspect", "-f", "{{.Id}}", ref], timeout=30)
+    return out.strip() if rc == 0 else ""
+
+
+async def _self_image_info(docker: str) -> dict[str, Any]:
+    """当前进程所在容器的镜像信息
+
+    image_id 是「这个容器实际在跑的镜像」的 ID，
+    image_ref 是容器启动时用的镜像名（通常是 :latest）。
+    两者分开记，因为它们**可以不一致** ——
+    那正是「容器没重建」的确切证据：
+    标签已经指向新镜像了，容器却还在跑旧镜像。
+    """
+    info = await _self_container_info(docker)
+    if not info:
+        return {}
+    cfg = info.get("Config") or {}
+    return {
+        "container_id": str(info.get("Id") or ""),
+        "image_id": str(info.get("Image") or ""),
+        "image_ref": str(cfg.get("Image") or ""),
+    }
+
+
+def _backend_ref(refs: dict[str, str]) -> str:
+    """从编排文件解析出的镜像引用里挑出「后端服务」那个
+
+    服务名可能不叫 backend（用户改过），镜像名里带 backend 的更可靠；
+    都认不出来就退回约定名 —— 与 install.sh 的做法保持一致。
+    """
+    for name, ref in refs.items():
+        if name == "backend" and ref:
+            return ref
+    for ref in refs.values():
+        if ref and "backend" in ref:
+            return ref
+    for ref in refs.values():
+        if ref:
+            return ref
+    return "kb-workbench-backend:latest"
+
+
+def _verdict(running: str, target: str, image_declared: str = "",
+             image_id_running: str = "", image_id_tag: str = "",
+             source_declared: str = "") -> tuple[str, str]:
+    """判定「差在哪一层」
+
+    返回 (layer, reason)。这是纯函数：把各种已知的现场摆进去，
+    它负责给出唯一的结论 —— 于是可以用脚本把每种情形都走一遍。
+
+    判定顺序有讲究：从「最具体」往「最笼统」排。
+    反过来会把「镜像是对的、只是容器没重建」误判成「镜像没换」，
+    而这两者的处置命令完全不同（一个要 build，一个只要 up -d --force-recreate）。
+    """
+    want = _norm_version(target)
+    got = _norm_version(running)
+    if not want:
+        return LAYER_IMAGE, "没有目标版本，无法核验升级是否生效"
+    if not got:
+        return LAYER_IMAGE, "拿不到当前运行的版本号，无法核验升级是否生效"
+    if got == want:
+        return LAYER_OK, f"当前运行版本 v{got}，与目标一致"
+    # 镜像里就是目标版本 → 镜像换对了，是容器没跟上
+    if image_declared and _norm_version(image_declared) == want:
+        return (LAYER_CONTAINER,
+                f"镜像里已经是 v{want}，但正在运行的容器还是 v{got} —— "
+                "容器没有重建（或重建完又被换回了旧镜像）")
+    # 标签指向的镜像与容器在跑的不是同一个 → 容器没跟上新镜像
+    if image_id_tag and image_id_running and image_id_tag != image_id_running:
+        return (LAYER_CONTAINER,
+                f"镜像标签已经指向另一个镜像（{image_id_tag[:19]}），"
+                f"但正在运行的容器跑的是（{image_id_running[:19]}）—— "
+                "容器没有重建")
+    # 部署目录里的源码就不是目标版本 → 源码没换
+    if source_declared and _norm_version(source_declared) != want:
+        return (LAYER_SOURCE,
+                f"部署目录里的源码声明的是 v{_norm_version(source_declared)}，"
+                f"不是 v{want} —— 源码没有切到目标版本")
+    return (LAYER_IMAGE,
+            f"镜像里声明的版本是 v{_norm_version(image_declared) or got}，"
+            f"不是 v{want} —— 镜像没有换成目标版本")
+
+
+def _fix_commands(layer: str, root: str, target: str, ref: str) -> list[str]:
+    """每一层对应的处置命令（可以直接复制到宿主机上执行）
+
+    为什么要给到命令这一级：只说「升级没生效」，用户能做的事只有重试；
+    而重试在「容器没重建」这一层是**必然无效**的
+    —— compose up -d 看到镜像 ID 没变就不会重建容器。
+    """
+    tag = target or "<目标版本>"
+    cd = f"cd {root} && " if root else ""
+    if layer == LAYER_SOURCE:
+        return [
+            f"{cd}git fetch origin --tags --force && git checkout {tag}",
+            f"{cd}docker compose build",
+            f"{cd}docker compose up -d --force-recreate --remove-orphans",
+        ]
+    if layer == LAYER_IMAGE:
+        return [
+            f"{cd}docker compose build",
+            f"{cd}docker compose up -d --force-recreate --remove-orphans",
+        ]
+    if layer == LAYER_CONTAINER:
+        return [
+            f"{cd}docker compose up -d --force-recreate --remove-orphans",
+        ]
+    if layer == LAYER_CACHE:
+        return [
+            "curl -s -H 'Cache-Control: no-cache' "
+            "http://127.0.0.1:8001/api/health",
+        ]
+    if ref:
+        return [f"docker image inspect {ref}"]
+    return []
+
+
+async def _compose_refs(root: Path | None) -> tuple[dict[str, str], str]:
+    """编排文件里各服务引用的镜像（顺带把项目名一起带出来）"""
+    if root is None:
+        return {}, ""
+    cf = _compose_file(root)
+    if cf is None:
+        return {}, ""
+    try:
+        text = cf.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}, ""
+    project = _compose_project_name(text, root.name)
+    return _compose_service_images(text, project), project
+
+
+async def verify_running_version(target: str = "", refresh: bool = False) -> dict[str, Any]:
+    """服务端权威核验：现在跑的是不是目标版本
+
+    返回结构固定，前端按字段渲染，不要去解析文案：
+
+      ok                       —— 跑的就是目标版本
+      running                  —— 当前运行进程声明的版本
+      target / target_version  —— 目标版本（原始值 / 归一后的）
+      image_ref                —— 编排文件里后端服务引用的镜像
+      image_id                 —— 当前容器正在跑的镜像 ID
+      image_id_tag             —— 那个标签当前指向的镜像 ID
+      image_declared_version   —— 镜像里 backend/app/config.py 声明的版本
+      source_declared_version  —— 部署目录里源码声明的版本
+      layer                    —— 差在哪一层（ok/source/image/container/cache）
+      reason                   —— 人话解释
+      fix                      —— 下一步该做什么
+      commands                 —— 可以直接复制执行的命令
+
+    查不到镜像信息时（镜像里没装 docker CLI、没有 docker.sock）
+    照样返回结论，只是 layer 退化成「image」并说明「查不了」——
+    「查不了」不能被说成「一样」，但也不该让接口整个失败。
+    """
+    want = _norm_version(target)
+    running = str(settings.app_version or "")
+    cache_key = f"{want}|{_norm_version(running)}"
+    if not refresh:
+        hit = _verify_cache.get(cache_key)
+        if hit and (time.monotonic() - hit[0]) < VERIFY_CACHE_TTL:
+            return dict(hit[1])
+
+    root, _has_git, _src = _find_root()
+    refs, _project = await _compose_refs(root)
+    ref = _backend_ref(refs)
+
+    docker = shutil.which("docker") or ""
+    self_info = await _self_image_info(docker) if docker else {}
+    image_id_running = str(self_info.get("image_id") or "")
+    container_id = str(self_info.get("container_id") or "")
+    image_ref_in_use = str(self_info.get("image_ref") or "")
+
+    image_id_tag = await _image_id(docker, ref) if docker else ""
+
+    # 镜像里声明的版本：起一个临时容器读 config.py。
+    # 读不到就返回空串 —— 「查不了」不等于「版本不对」。
+    image_declared = ""
+    if docker:
+        image_declared = await _image_declared_version(docker, ref)
+
+    # 部署目录里源码声明的版本：判「源码没换」这一层用。
+    source_declared = ""
+    if root is not None:
+        try:
+            source_declared = _declared_version(
+                (root / "backend" / "app" / "config.py").read_text(
+                    encoding="utf-8", errors="replace"))
+        except OSError:
+            source_declared = ""
+
+    layer, reason = _verdict(running, target, image_declared,
+                              image_id_running, image_id_tag, source_declared)
+    if not docker and layer != LAYER_OK:
+        reason += "（本机后端镜像里没有 docker 命令，无法进一步区分是哪一层）"
+
+    commands = _fix_commands(layer, str(root or ""), target, ref)
+    if layer == LAYER_OK:
+        # 已经对了就别再给命令 —— 给一堆命令只会让人以为还有事要办
+        commands = []
+        fix = "升级已经生效，无需处理"
+    else:
+        fix = "；".join(commands) if commands else "请到服务器上查看升级日志"
+    out: dict[str, Any] = {
+        "ok": layer == LAYER_OK,
+        "running": running,
+        "target": target,
+        "target_version": want,
+        "image_ref": ref,
+        "image_ref_in_use": image_ref_in_use,
+        "image_id": image_id_running,
+        "image_id_tag": image_id_tag,
+        "container_id": container_id,
+        "image_declared_version": image_declared,
+        "source_declared_version": source_declared,
+        "docker_available": bool(docker),
+        "layer": layer,
+        "reason": reason,
+        "fix": fix,
+        "commands": commands,
+        "repairable": layer in (LAYER_SOURCE, LAYER_IMAGE, LAYER_CONTAINER),
+        "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    _verify_cache[cache_key] = (time.monotonic(), dict(out))
+    return out
 
 
 # ==================== GitHub Release 资产 ====================
@@ -884,6 +1226,22 @@ def get_job(job_id: str = "") -> dict[str, Any]:
     if job is not None:
         return {"ok": True, "job": job.snapshot(), "restored": False}
     return {"ok": True, "job": None, "restored": False}
+
+
+async def get_job_async(job_id: str = "") -> dict[str, Any]:
+    """作业状态 + 实时日志（异步版：失败时顺带做一次服务端权威核验）
+
+    为什么要有异步版：失败时要说清「**哪一层**没换成功」，
+    而那要读镜像、读容器 —— 都是异步的 docker 调用。
+    同步的 get_job() 保留着（老脚本与老调用方还在用）：
+    状态与日志完全一致，只是拿不到分层结论。
+    """
+    res = get_job(job_id)
+    job = res.get("job")
+    if isinstance(job, dict) and job.get("status") == ST_FAILED and job.get("target"):
+        verdict = await verify_running_version(str(job.get("target") or ""))
+        res = {**res, "job": {**job, "verify": verdict}}
+    return res
 
 
 # ==================== 可行性判定 ====================
@@ -1396,6 +1754,55 @@ async def _self_container_info(docker: str) -> dict[str, Any]:
         return {}
 
 
+async def _run_in_helper_container(root: Path, script: str,
+                                    log_path: str = ".upgrade-restart.log") -> tuple[bool, str]:
+    """在宿主机上起一个**独立容器**执行一段 shell 脚本
+
+    为什么必须独立：本容器就是 compose up 要重建的那个。
+    容器一停，容器里的所有进程（包括 compose 客户端）一起被杀 ——
+    compose 刚把新容器创建出来、还没 start，客户端就被腰斩了。
+    实测现象：旧容器 Exited(0)、新容器卡在 Created（从没启动过），
+    服务就此起不来，状态永远停在「重启中」。
+
+    独立容器跑在宿主机上，不在本容器的进程树里，本容器被停掉也影响不到它，
+    它照样能把 compose up 跑完。
+
+    用的镜像是**当前正在跑的这个容器的镜像 ID**（不是 :latest 标签）：
+    此刻 :latest 已经指向新镜像了，而新镜像未必带 docker/compose；
+    老镜像一定带（能执行升级就说明它带）。
+
+    返回 (是否起得来, 容器名)。起不来时调用方要自己兜底。
+    """
+    docker = shutil.which("docker") or "docker"
+    info = await _self_container_info(docker)
+    image_id = str(info.get("Image") or "")
+    if not image_id:
+        return False, ""
+
+    cpath = str(root)                      # 容器眼里的安装目录
+    hpath = ""                             # 宿主机上的安装目录
+    for m in (info.get("Mounts") or []):
+        if m.get("Destination") == cpath:
+            hpath = str(m.get("Source") or "")
+            break
+    if not hpath:
+        return False, ""
+
+    name = f"kb-upgrade-restart-{uuid.uuid4().hex[:6]}"
+    full = (f"sleep 2; cd {shlex.quote(cpath)} && ({script}) "
+            f"> {shlex.quote(cpath)}/{log_path} 2>&1")
+    cmd = [docker, "run", "-d", "--rm", "--name", name,
+           "-v", "/var/run/docker.sock:/var/run/docker.sock",
+           "-v", f"{hpath}:{cpath}",
+           "-w", cpath,
+           image_id,
+           "sh", "-c", full]
+    rc, out = await _run(cmd, timeout=120)
+    if rc != 0:
+        return False, ""
+    return True, name
+
+
 async def _start_restart_helper(job: UpgradeJob, plan: dict[str, Any],
                                 root: Path, compose: list[str],
                                 extra: list[str] | None = None) -> bool:
@@ -1420,41 +1827,159 @@ async def _start_restart_helper(job: UpgradeJob, plan: dict[str, Any],
 
     返回 False 表示起不来（调用方退回「在本容器里跑」的旧办法）。
     """
-    docker = shutil.which("docker") or "docker"
-    info = await _self_container_info(docker)
-    image_id = str(info.get("Image") or "")
-    if not image_id:
-        return False
-
-    cpath = str(root)                      # 容器眼里的安装目录
-    hpath = ""                             # 宿主机上的安装目录
-    for m in (info.get("Mounts") or []):
-        if m.get("Destination") == cpath:
-            hpath = str(m.get("Source") or "")
-            break
-    if not hpath:
-        return False
-
-    name = f"kb-upgrade-restart-{uuid.uuid4().hex[:6]}"
     inner = " ".join([*compose, "up", "-d", "--remove-orphans", *(extra or [])])
-    # 睡 2 秒再动手：给后端一点时间把「重启中」写进状态文件、
-    # 把响应返回给前端。前端这时候已经在轮询了。
-    script = (f"sleep 2; cd {shlex.quote(cpath)} && {inner} "
-              f"> {shlex.quote(cpath)}/.upgrade-restart.log 2>&1")
-    cmd = [docker, "run", "-d", "--rm", "--name", name,
-           "-v", "/var/run/docker.sock:/var/run/docker.sock",
-           "-v", f"{hpath}:{cpath}",
-           "-w", cpath,
-           image_id,
-           "sh", "-c", script]
+    ok, name = await _run_in_helper_container(root, inner)
+    if not ok:
+        job.log("  临时容器起不来（多半是镜像里没有 docker 命令或没有 docker.sock）")
+        return False
     job.log(f"起一个临时容器执行重启（{name}）—— "
             f"它独立于本容器，本容器被停掉也不影响它把 compose 跑完")
-    rc, out = await _run(cmd, timeout=120)
-    if rc != 0:
-        job.log(f"  临时容器起不来：{(out or '').strip()[:200]}")
-        return False
-    job.log(f"  临时容器已启动，日志见 {cpath}/.upgrade-restart.log")
+    job.log(f"  临时容器已启动，日志见 {root}/.upgrade-restart.log")
     return True
+
+
+async def _find_image_with_version(docker: str, candidates: list[str],
+                                    want: str) -> str:
+    """在候选镜像里找出「声明的版本 == 目标版本」的那一个
+
+    为什么要找而不是直接用「最新的那个」：latest 指向哪个镜像是**上次构建**的事，
+    它可能比目标版本新，也可能比目标版本旧。
+    自愈时必须确认拿到的那个镜像里装的确实是目标版本，
+    否则就是「换了个容器，还是不对」。
+    """
+    want = _norm_version(want)
+    for ref in candidates:
+        if not ref:
+            continue
+        if not await _image_id(docker, ref):
+            continue
+        declared = await _image_declared_version(docker, ref)
+        if declared and _norm_version(declared) == want:
+            return ref
+    return ""
+
+
+async def repair_running_version(target: str, who: str = "") -> dict[str, Any]:
+    """自愈：核验不通过时，强制换镜像并重建容器
+
+    为什么要自愈：用户点完「一键升级」之后，唯一能做的事就只剩「重启一下试试」。
+    而「docker compose up -d」在**镜像 ID 没变**时**不会重建容器** ——
+    于是「再点一次升级」也修不好（跑的还是同一个镜像）。
+    「--force-recreate」才是那个能真正换掉容器的开关。
+
+    自愈分三步，按需要执行：
+      1. 找一个声明了目标版本的镜像（版本化标签 / latest / 当前容器在跑的那个）；
+      2. 把它打到编排文件真正引用的那个标签上（顺便打一个版本化标签）；
+      3. 「docker compose up -d --force-recreate」重建容器。
+
+    找不到「声明了目标版本的镜像」时（说明源码本身就不对），
+    退回到「切 tag + 重新构建」—— 那是源码没换那一层的处置办法。
+
+    为什么要用独立容器执行：本容器就是第 3 步要重建的那个，
+    容器一停，里面的进程一起被杀（详见 _run_in_helper_container）。
+    所以本函数**先返回、稍后再动手**（独立容器里先 sleep 2 秒），
+    保证前端能收到「已开始自愈」的答复。
+    """
+    verdict = await verify_running_version(target, refresh=True)
+    if verdict.get("ok"):
+        return {**verdict, "repair_started": False,
+                "note": "核验已通过，无需自愈"}
+
+    want = _norm_version(target)
+    docker = shutil.which("docker") or ""
+    compose, _label = await _detect_compose_cmd()
+    root, has_git, _src = _find_root()
+    layer = str(verdict.get("layer") or LAYER_IMAGE)
+
+    commands = list(verdict.get("commands") or [])
+    base: dict[str, Any] = {
+        **verdict,
+        "repair_started": False,
+        "commands": commands,
+        "note": "",
+    }
+    if not docker or not compose or root is None:
+        base["note"] = ("无法自动自愈："
+                        + ("后端镜像里没有 docker 命令；" if not docker else "")
+                        + ("找不到 compose 命令；" if not compose else "")
+                        + ("找不到部署目录。" if root is None else "")
+                        + "请在宿主机上按下面的命令手工处理。")
+        return base
+
+    refs, _project = await _compose_refs(root)
+    ref = _backend_ref(refs)
+    repo, _tag = _split_ref(ref)
+    versioned = _versioned_ref(ref, want)
+
+    # 找一个「里面确实是目标版本」的镜像
+    running_image_id = str(verdict.get("image_id") or "")
+    source_ref = await _find_image_with_version(
+        docker, [versioned, ref, running_image_id], want)
+
+    steps: list[str] = []
+    if source_ref and source_ref != ref:
+        steps.append(f"docker tag {source_ref} {ref}")
+    if source_ref and versioned and versioned != ref:
+        steps.append(f"docker tag {source_ref} {versioned}")
+
+    need_build = False
+    if not source_ref:
+        # 找不到目标版本的镜像 → 源码多半也不对，得重新构建
+        need_build = True
+        if has_git and shutil.which("git"):
+            steps.append(f"git -c safe.directory={root} fetch origin --tags --force")
+            steps.append(f"git -c safe.directory={root} checkout {target}")
+        else:
+            base["note"] = ("找不到声明了目标版本的镜像，而本机又没有 git "
+                            "（源码部署的机器）—— 无法自动重建。"
+                            "请到宿主机上下载新版离线包重新安装，或执行下面的命令。")
+            return base
+
+    if need_build:
+        steps.append(" ".join([*compose, "build"]))
+
+    up_cmd = " ".join([*compose, "up", "-d", "--force-recreate", "--remove-orphans"])
+
+    # compose up 有时会因为「容器名已被占用」失败：
+    # 那个占名的容器**不是 compose 建的**（用户手工 docker run 起的、
+    # 或者项目名改过），compose 认不出它、也不肯接管它。
+    # 这时候先把占名的容器删掉再试一次 —— 它本来就要被重建掉。
+    compose_text = ""
+    cf = _compose_file(root)
+    if cf is not None:
+        try:
+            compose_text = cf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            compose_text = ""
+    names = [v for v in _scan_compose_container_names(compose_text).values() if v]
+    if names:
+        rm = "; ".join([f"docker rm -f {n} || true" for n in names])
+        steps.append(f"{up_cmd} || {{ {rm}; {up_cmd}; }}")
+    else:
+        steps.append(up_cmd)
+    script = "set -e; " + "; ".join([s for s in steps if s])
+
+    ok, name = await _run_in_helper_container(root, script, ".upgrade-repair.log")
+    if not ok:
+        base["note"] = ("起不了用于自愈的临时容器"
+                        "（多半是后端镜像里没有 docker 命令或没有挂 docker.sock）"
+                        "—— 请在宿主机上按下面的命令手工处理。")
+        return base
+
+    base["repair_started"] = True
+    base["helper_container"] = name
+    base["note"] = (f"已开始强制换镜像并重建容器（临时容器 {name}）—— "
+                    "服务会短暂中断（约 10–30 秒），"
+                    "恢复后请再核验一次。")
+    base["repair_log"] = f"{root}/.upgrade-repair.log"
+    try:
+        await audit_svc.log_event(
+            who or "", "upgrade_repair_started", resource="system_upgrade",
+            method="POST", path="/api/system/update/verify",
+            detail={"target": target, "layer": layer, "helper": name})
+    except Exception:
+        pass
+    return base
 
 
 async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
@@ -1516,12 +2041,6 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
         # 所以这里先记下旧 ID，出错时把标签指回去。
         old_ids: dict[str, str] = {}
 
-        async def _image_id(repo: str, tag: str) -> str:
-            """取某个标签当前指向的镜像 ID（取不到就返回空）"""
-            rc, out = await _run([docker, "image", "inspect", "-f", "{{.Id}}",
-                                  f"{repo}:{tag}"], timeout=30)
-            return out.strip() if rc == 0 else ""
-
         # 编排文件里各服务真正引用的镜像 —— 标签必须打到这些名字上。
         #
         # 为什么非知道不可：镜像包里装的是**架构标签**的镜像
@@ -1562,7 +2081,7 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
         # 记下升级前每个标签指向的镜像（回滚与事后核对都要用）
         for ref in target_refs:
             repo_name, tag = _split_ref(ref)
-            img_id = await _image_id(repo_name, tag)
+            img_id = await _image_id(docker, ref)
             if img_id:
                 old_ids[ref] = img_id
 
@@ -1581,7 +2100,10 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
         try:
             out = await _stage(job, "load", [docker, "load", "-i", str(tar_path)],
                                 root, timeout=1800)
-            loaded = re.findall(r"Loaded image:\s*(\S+)", out)
+            # 认导入的镜像（两种输出措辞都要认，见 _parse_loaded_images）
+            loaded = _parse_loaded_images(out)
+            job.log(f"docker load 报告导入 {len(loaded)} 个镜像"
+                    + (f"：{'、'.join(loaded[:6])}" if loaded else "（没认出来标签名）"))
 
             # 新镜像在哪个标签下：镜像包里通常是架构标签（:amd64 / :arm64），
             # 而 compose 引用的是 :latest —— 这一步就是把两者对上。
@@ -1597,33 +2119,68 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
                 if t in ("amd64", "arm64"):
                     source_by_repo[repo_name] = ref
 
+            want = _norm_version(target)
+
+            async def _pick_source(repo_name: str, want_version: str = "") -> str:
+                """为某个仓库挑出「该用的那个镜像」
+
+                优先级：
+                  1. 镜像里声明的版本 == 目标版本的那个 —— **版本才是身份**，
+                     标签名只是包装（镜像包里是架构标签，发布时残留的可能是旧版）
+                  2. docker load 输出里认出来的那个
+                  3. 约定的架构标签（跟 install.sh 的做法保持一致）
+                """
+                cands: list[str] = []
+                if want_version:
+                    cands.append(f"{repo_name}:{_norm_version(want_version)}")
+                if repo_name in source_by_repo:
+                    cands.append(source_by_repo[repo_name])
+                if arch:
+                    cands.append(f"{repo_name}:{arch}")
+                for cand in cands:
+                    if not cand:
+                        continue
+                    if not await _image_id(docker, cand):
+                        continue
+                    if want_version:
+                        declared = await _image_declared_version(docker, cand)
+                        if not declared or _norm_version(declared) != _norm_version(want_version):
+                            job.log(f"  {cand} 里声明的版本是 "
+                                    f"{declared or '（读不到）'}，"
+                                    f"不是 {_norm_version(want_version)}，跳过")
+                            continue
+                    return cand
+                return ""
+
             tagged = False
+            backend_ref = _backend_ref(expected_refs)
             for ref in target_refs:
                 repo_name, _tag = _split_ref(ref)
-                src = source_by_repo.get(repo_name, "")
-                if not src and arch:
-                    # docker load 的输出没认出来（不同版本措辞可能不同）：
-                    # 退回到按约定的架构标签找，跟 install.sh 的做法保持一致
-                    src = f"{repo_name}:{arch}"
+                is_backend = ref == backend_ref
+                # 后端镜像必须**按版本认人**：源镜像再新，标签没换上去，
+                # compose 起来的还是旧的 —— 而那正是「版本没变」的成因。
+                src = await _pick_source(repo_name, want if is_backend else "")
                 if not src:
-                    job.log(f"⚠️ 镜像包里没有 {repo_name}，"
-                            f"{ref} 仍指向升级前的镜像 —— 相关服务可能还是旧版")
+                    job.log(f"⚠️ 镜像包里没有可用的 {repo_name}"
+                            f"（或它的版本不是 {_norm_version(target)}）—— "
+                            f"{ref} 仍指向升级前的镜像，相关服务可能还是旧版")
                     continue
                 if src == ref:
                     job.log(f"镜像包里的 {ref} 就是编排文件引用的镜像，无需改标签")
                     tagged = True
-                    continue
-                # 源镜像必须真的存在 —— 拿一个不存在的镜像去 tag 只会报错，
-                # 把整次升级拖垮（而它本来只意味着「这个服务用不上新镜像」）。
-                # 跳过它 + 后面那次核对，会把话说清楚：哪个服务还是旧版。
-                if not await _image_id(*_split_ref(src)):
-                    job.log(f"⚠️ 源镜像 {src} 不存在，跳过给 {ref} 打标签 —— "
-                            f"相关服务可能还是旧版")
-                    continue
-                job.log(f"$ docker tag {src} {ref}")
-                await _stage(job, "load", [docker, "tag", src, ref],
-                             root, timeout=120)
-                tagged = True
+                else:
+                    job.log(f"$ docker tag {src} {ref}")
+                    await _stage(job, "load", [docker, "tag", src, ref],
+                                 root, timeout=120)
+                    tagged = True
+                if is_backend:
+                    # 版本化标签：给镜像一个不会随下一次构建漂移的锚点。
+                    # 核验时靠它判断「镜像到底换没换」，人工排查时也一眼能认。
+                    versioned = _versioned_ref(ref, want)
+                    if versioned and versioned != ref:
+                        job.log(f"$ docker tag {src} {versioned}")
+                        await _stage(job, "load", [docker, "tag", src, versioned],
+                                     root, timeout=120)
             if not tagged:
                 job.log("⚠️ 没有找到可用的新镜像标签，"
                         "这次升级很可能不会生效 —— 请检查镜像包内容")
@@ -1644,7 +2201,7 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
             # 但把它悄悄咽下去，就是「谎报成功」，那才是真正要修的毛病。
             for ref in target_refs:
                 repo_name, tag = _split_ref(ref)
-                new_id = await _image_id(repo_name, tag)
+                new_id = await _image_id(docker, ref)
                 old_id = old_ids.get(ref, "")
                 if new_id and old_id and new_id == old_id:
                     job.log(f"⚠️ {ref} 仍是升级前的镜像（{new_id[:19]}）"
@@ -1664,7 +2221,7 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
             #
             # 这条检查是 0.7.1 的教训：发布流程里镜像没跟代码对账，
             # 结果升级包带着旧版本发出去，升级「成功」但版本没变。
-            await _verify_loaded_image_version(job, docker, target, source_by_repo)
+            await _verify_loaded_image_version(job, docker, target, backend_ref)
         except Exception:
             await _rollback_tags()
             raise
@@ -1685,28 +2242,48 @@ async def _run_offline_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
     if not await _start_restart_helper(job, plan, root, compose, extra=["--no-build"]):
         # 起不了临时容器只能退回在本容器里跑（多半会失败，但总得试）
         job.log("  临时容器起不来，退回在本容器里执行 compose up")
-        await _stage(job, "restart", [*compose, "up", "-d", "--no-build"],
-                     root, timeout=900)
-
-
 async def _image_declared_version(docker: str, image_ref: str) -> str:
     """读出镜像里 backend/app/config.py 声明的版本号
+
+    ⚠️ 参数顺序：镜像名必须放在**命令参数之前**。
+    写成「docker run --rm --entrypoint grep -h "app_version: str" <镜像> <路径>」
+    的话，docker 会把 -h 当成**自己的**选项（打印帮助后以 1 退出）——
+    结果永远是「读不到」，而读不到又被当成「查不了 ≠ 版本不对」，
+    于是所有镜像版本核对都被静默跳过了：
+    装着旧版本的镜像照样被拉起来，升级报「成功」，版本却没变。
+    这正是这次要修的那个现象，所以这里必须写成
+    「docker run --rm --entrypoint grep <镜像> -h ... <路径>」。
 
     读不到就返回空字符串 —— 读不到不等于版本不对，
     那是「查不了」，由调用方决定要不要当成失败。
     """
-    rc, out = await _run([docker, "run", "--rm", "--entrypoint",
-                           "grep", "-h", "app_version: str", image_ref,
+    rc, out = await _run([docker, "run", "--rm", "--entrypoint", "grep",
+                           image_ref, "-h", "app_version: str",
                            "/app/app/config.py"], timeout=180)
     if rc != 0:
-        return ""
-    m = re.search(r"app_version:\s*str\s*=\s*[\"']([^\"']+)[\"']", out)
+        # 镜像里没有 grep（有些精简镜像没装）→ 退回到 cat，正则照样能解析
+        rc, out = await _run([docker, "run", "--rm", "--entrypoint", "cat",
+                              image_ref, "/app/app/config.py"], timeout=180)
+        if rc != 0:
+            return ""
+        m = re.search(r"""app_version\s*:\s*str\s*=\s*["']([^"']+)["']""", out)
+        return m.group(1).strip() if m else ""
+    m = re.search(r"""app_version:\s*str\s*=\s*["']([^"']+)["']""", out)
+    return m.group(1).strip() if m else ""
     return m.group(1).strip() if m else ""
 
 
 async def _verify_loaded_image_version(job: UpgradeJob, docker: str, target: str,
-                                       source_by_repo: dict[str, str]) -> None:
-    """核对导入的镜像里声明的版本与目标版本一致
+                                       backend_ref: str) -> None:
+    """核对「编排文件真正引用的那个镜像」里声明的版本与目标版本一致
+
+    为什么核对的是**标签**而不是镜像包里那个源镜像：
+    compose up 用的是标签指向的镜像 —— 源镜像再新，
+    标签没换上去，起来的还是旧的。
+    以前这里核对的是「docker load 输出里认出来的那个镜像」，
+    而那个认不出来的时候（输出措辞变了）就**整个核对被跳过** ——
+    于是新镜像没换上也没人知道，一路绿灯到「升级完成，版本没变」。
+    所以改成核对标签：标签是 compose 真正用的东西，认不出来的概率小得多。
 
     不一致就**直接失败**（并由调用方回退标签）：
     用一个装着旧版本的镜像去「升级」，服务是能起来的，
@@ -1719,26 +2296,23 @@ async def _verify_loaded_image_version(job: UpgradeJob, docker: str, target: str
     want = _norm_version(target)
     if not want:
         return
-    for repo_name, ref in source_by_repo.items():
-        if not repo_name.startswith("kb-workbench-backend"):
-            continue
-        got = await _image_declared_version(docker, ref)
-        if not got:
-            job.log(f"读不出 {ref} 里声明的版本，跳过这次核对"
-                    f"（查不了 ≠ 版本不对）")
-            continue
-        got = _norm_version(got)
-        job.log(f"镜像 {ref} 里声明的版本是 {got}，目标版本是 {want}")
-        if got != want:
-            raise RuntimeError(
-                f"镜像包里装的是 {got}，不是 {want} —— 这个镜像包不能用。"
-                f"多半是发布时打包进了本机残留的旧镜像。"
-                f"请重新下载该版本的镜像包，或在宿主机上执行："
-                f"bash scripts/build-offline-images.sh --tools-only && "
-                f"bash scripts/make-offline-package.sh"
-            )
-
-
+    got = await _image_declared_version(docker, backend_ref)
+    if not got:
+        job.log(f"读不出 {backend_ref} 里声明的版本，跳过这次核对"
+                f"（查不了 ≠ 版本不对）")
+        return
+    got = _norm_version(got)
+    job.log(f"镜像 {backend_ref} 里声明的版本是 {got}，目标版本是 {want}")
+    if got != want:
+        raise RuntimeError(
+            f"镜像 {backend_ref} 里装的是 {got}，不是 {want} —— "
+            f"这个镜像包（或标签）不能用。"
+            f"多半是发布时打包进了本机残留的旧镜像，"
+            f"或者导入后标签没有换成功。"
+            f"请重新下载该版本的镜像包，或在宿主机上执行："
+            f"bash scripts/build-offline-images.sh --tools-only && "
+            f"bash scripts/make-offline-package.sh"
+        )
 async def _check_checked_out_version(job: UpgradeJob, root: Path, target: str) -> None:
     """核对 checkout 出来的代码里声明的版本与目标 tag 一致
 
@@ -1768,6 +2342,45 @@ async def _check_checked_out_version(job: UpgradeJob, root: Path, target: str) -
         job.log(f"❌ {msg}")
         raise RuntimeError(msg)
     job.log(f"✓ 目标 tag {target} 里声明的版本是 {declared}，与目标一致")
+
+
+async def _verify_built_image_version(job: UpgradeJob, root: Path,
+                                       target: str) -> None:
+    """核对刚构建出来的镜像里声明的版本 == 目标版本
+
+    不一致就**直接失败**（在重启之前）：服务还一直在线，
+    用户没有付出任何代价；重启完再宣布失败，代价已经付过了。
+
+    查不到版本时不判失败（镜像结构不一样、没装 grep 等）——
+    那是「查不了」，不是「版本不对」。
+    """
+    docker = shutil.which("docker") or "docker"
+    refs, _project = await _compose_refs(root)
+    ref = _backend_ref(refs)
+    got = await _image_declared_version(docker, ref)
+    want = _norm_version(target)
+    if not got:
+        job.log(f"⚠️ 读不出 {ref} 里声明的版本，跳过这次核对"
+                f"（查不了 ≠ 版本不对）")
+        return
+    job.log(f"构建产物 {ref} 里声明的版本是 {_norm_version(got)}，"
+            f"目标版本是 {want}")
+    if _norm_version(got) != want:
+        msg = (f"构建出来的镜像 {ref} 里装的是 {_norm_version(got)}，"
+               f"不是 {want} —— 构建用的不是刚 checkout 的那份源码，"
+               f"升级不会生效。请检查编排文件里 build.context 指向的目录。")
+        job.set_step("build", "failed")
+        job.log(f"❌ {msg}")
+        raise RuntimeError(msg)
+
+    # 版本化标签：给镜像一个不会随下一次构建漂移的锚点。
+    # 核验时靠它判断「镜像到底换没换」，人工排查时也一眼能认。
+    versioned = _versioned_ref(ref, want)
+    if versioned and versioned != ref:
+        job.log(f"$ docker tag {ref} {versioned}")
+        rc, _ = await _run([docker, "tag", ref, versioned], timeout=120)
+        if rc != 0:
+            job.log(f"⚠️ 打版本化标签 {versioned} 失败（不影响升级本身）")
 
 
 async def _run_git_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
@@ -1802,6 +2415,16 @@ async def _run_git_job(job: UpgradeJob, plan: dict[str, Any]) -> None:
     await _check_checked_out_version(job, root, job.target)
 
     await _stage(job, "build", [*compose, "build"], root, timeout=3600)
+
+    # ---- 核对**构建产物**里声明的版本 ----
+    #
+    # 为什么源码核对还不够：源码对了，不代表**构建出来的镜像**是对的。
+    # 构建上下文可能不是刚 checkout 的那份源码（编排文件在别的目录、
+    # context 指向别处），于是 build 出来的还是旧镜像 ——
+    # 而 build 这一步会「成功」退出，日志里看不出任何异常。
+    # 这是「显示升级完成，刷新后版本没变」最隐蔽的一种成因，
+    # 所以必须在重启之前把构建产物也核对一遍。
+    await _verify_built_image_version(job, root, job.target)
 
     # ---- 第 4 步：会把自己杀掉 ----
     # 先把状态置成 restarting 并落盘，再执行命令：命令一执行，

@@ -170,9 +170,12 @@ async def graph_for_notes(
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(current_principal),
 ):
-    """笔记全局图谱：所有笔记 + 双链关联"""
+    """笔记全局图谱：所有笔记 + 双链关联 + 笔记连业务记录的关联"""
     ensure_model(principal, "note", "read")
-    return await graph_svc.get_notes_graph(db, tag, limit)
+    # 必须把身份传进去：知识图谱里「笔记 ↔ 业务记录」那一侧
+    # 要按模型读权限裁 —— 没有身份就裁不了，
+    # 后端只能选择「不画业务记录那一侧」（宁可少画也不漏标题）。
+    return await graph_svc.get_notes_graph(db, tag, limit, principal=principal)
 
 
 @stats_router.get("/graph/document/{document_id}")

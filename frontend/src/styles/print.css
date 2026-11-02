@@ -1,0 +1,272 @@
+/* ==========================================================================
+   打印样式（全局唯一一份）
+   ---------------------------------------------------------------------------
+   为什么必须放全局：
+     @media print 是全局作用域的 —— A 页面写一条规则，B 页面也会被它影响。
+     每个页面各写一份，最后就是互相污染：
+     为了让记录表的表头留下来，某页把 thead 设成 table-header-group，
+     结果图谱页的说明表格也跟着变了；想改回来只能全页扫一遍。
+     所以这里只留一份入口，各页面只负责「标注区域」。
+
+   标注约定（页面里只用这三个 attribute）：
+     data-print-hide   打印时不要（按钮、筛选条、分页器……）
+     data-print-only   只在打印时出现（打印页眉、图谱的节点清单……）
+     data-print-root   这一块是「要打印的正文」，用来判断页面是不是空的
+
+   另外约定一个全局类名：
+     .print-title-bar   打印页眉（页面名 + 打印时间），只在打印时出现
+   ========================================================================== */
+
+/* 屏幕上看不到「只在打印时出现」的东西。
+   为什么写在 @media print 外面：
+     这条必须在普通浏览时也生效（不然打印专用的页眉会一直挂在页面上），
+     而 @media print 里的 display 会把它覆盖回来 —— 打印时再打开。 */
+[data-print-only] { display: none !important; }
+
+@media print {
+  /* ---------- 纸张 ---------- */
+  @page { margin: 14mm 12mm; }
+
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #111 !important;
+  }
+
+  /* ---------- 页面骨架：侧边导航、顶栏、抽屉、弹窗 ---------- */
+  /* Element Plus 的布局是 flex + 固定高度（body 100vh），
+     直接打印会被裁成一屏 —— 所以先把它摊平成普通的块级文档流，
+     浏览器才能按内容高度分页。 */
+  .layout, .el-container {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+  .el-main {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+  }
+  .sidebar,
+  .topbar,
+  .mobile-drawer,
+  .el-drawer,
+  .el-dialog,
+  .el-overlay,
+  .el-message,
+  .el-loading-mask,
+  .el-backtop,
+  .el-popper {
+    display: none !important;
+  }
+
+  /* ---------- 正文配色：深色主题打印出来是黑字黑底 ---------- */
+  /* 深色模式下一半文字接近白色，印在白纸上等于没印。
+     这里把正文区域的文字统一压成深色，背景清空。 */
+  .el-main,
+  .el-main * {
+    color: #111 !important;
+    text-shadow: none !important;
+  }
+  .el-main { background: #fff !important; }
+  .el-main .card,
+  .el-main .el-card,
+  .el-main .panel {
+    background: #fff !important;
+    box-shadow: none !important;
+    border: 1px solid #ccc !important;
+  }
+  /* 标题前的色块：底色去掉，不然白图标印在白纸上 */
+  .el-main .title-icon { background: #ececec !important; color: #333 !important; }
+  .el-main .badge {
+    background: #f0f0f0 !important;
+    color: #222 !important;
+    border: 1px solid #bbb !important;
+  }
+
+  /* ---------- 交互控件不上纸 ---------- */
+  /* 按钮、下拉、输入框、分页器、标签页头 —— 这些是「操作」，不是「内容」。
+     唯一的例外是页面自己标了 data-print-only 的区域。 */
+  .page-header .actions,
+  .toolbar,
+  .notes-toolbar,
+  .notes-tagbar,
+  .nd-topbar,
+  .nd-topbar-actions,
+  .nd-switch,
+  .upload-card,
+  .notes-composer-wrap,
+  .nd-editor,
+  .el-pagination,
+  .el-tabs__header,
+  .el-radio-group,
+  .el-checkbox-group,
+  .el-segmented,
+  button,
+  input,
+  textarea,
+  select,
+  .el-button,
+  .el-input,
+  .el-select,
+  .el-textarea,
+  .el-dropdown,
+  [data-print-hide] {
+    display: none !important;
+  }
+
+  /* ---------- 只在打印时出现的区域 ---------- */
+  [data-print-only] { display: block !important; }
+
+  /* 打印页眉：页面名 + 打印时间 + 一条分隔线 */
+  .print-title-bar {
+    display: flex !important;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding-bottom: 6px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid #999;
+    font-size: 12pt;
+    font-weight: 600;
+  }
+  .print-title-bar .print-title-bar-time {
+    font-weight: 400;
+    font-size: 9pt;
+    color: #555;
+  }
+  .print-title-bar .print-title-bar-note {
+    font-weight: 400;
+    font-size: 9pt;
+    color: #555;
+  }
+
+  /* ---------- 表格 ---------- */
+  /* thead 变成 table-header-group，浏览器才会在每一页重复表头。
+     tr 不许被切成两半 —— 半行跨页在纸上很难读。 */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 10pt;
+  }
+  thead { display: table-header-group !important; }
+  tfoot { display: table-row-group !important; }
+  tr { break-inside: avoid !important; page-break-inside: avoid !important; }
+  th, td {
+    border: 1px solid #999 !important;
+    padding: 4px 6px !important;
+    font-size: 10pt;
+    word-break: break-word;
+    vertical-align: top;
+  }
+  th { background: #f0f0f0 !important; font-weight: 600; }
+
+  /* Element Plus 的 el-table：表头与表体是两个 table，
+     而且表体被塞在一个可滚动容器里 —— 不解开的话打印出来只有一屏。
+     表头重复由前端脚本在打印前把表头搬进表体的 thead（见 utils/print.js）。 */
+  .el-table { background: #fff !important; }
+  .el-table__inner-wrapper::before,
+  .el-table__inner-wrapper::after { display: none !important; }
+  .el-table__header-wrapper,
+  .el-table__body-wrapper,
+  .el-table__body-wrapper .el-scrollbar__wrap {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+  .el-table__body-wrapper .el-scrollbar__bar { display: none !important; }
+  .el-table__body-wrapper .el-scrollbar__view { overflow: visible !important; }
+  /* 固定列在 el-table 里是另外渲染的一层浮表，打印会重影 —— 藏掉 */
+  .el-table__fixed,
+  .el-table__fixed-right,
+  .el-table__fixed-patch,
+  .el-table__column--selection { display: none !important; }
+  /* 单元格默认是单行省略，打印要看到全文 */
+  .el-table .cell {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    line-height: 1.5;
+  }
+
+  /* ---------- 链接补地址 ---------- */
+  /* 纸上只有文字，看不出链接指向哪里；
+     页内锚点（#xxx）不需要补地址，所以排除掉。 */
+  .el-main a[href]:not([href^='#']):after {
+    content: ' (' attr(href) ')';
+    font-size: 9pt;
+    color: #666;
+    word-break: break-all;
+  }
+  .el-main a { color: #111 !important; text-decoration: underline; }
+
+  /* ---------- 代码块与长文本 ---------- */
+  pre, code { white-space: pre-wrap !important; word-break: break-word; }
+  pre { border: 1px solid #ccc !important; padding: 6px !important; background: #fafafa !important; }
+  .el-main img { max-width: 100% !important; height: auto !important; }
+
+  /* ---------- 分页 ---------- */
+  /* 标题后面别立刻分页（标题单独占一页很难看）；
+     小块内容尽量不跨页。 */
+  h1, h2, h3, h4 { break-after: avoid !important; page-break-after: avoid !important; }
+  .note-row,
+  .tip,
+  .print-node-item,
+  .print-block {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+  .print-block {
+    border: 1px solid #ccc !important;
+    padding: 8px 10px !important;
+    margin-bottom: 8px !important;
+  }
+  .print-block-title { font-weight: 600; margin-bottom: 4px; }
+  .print-node-list {
+    list-style: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    column-count: 2;
+    column-gap: 18px;
+    font-size: 10pt;
+  }
+  .print-node-list li { break-inside: avoid; padding: 1px 0; }
+  .print-node-type { color: #666; }
+  .print-empty-note {
+    padding: 10px;
+    border: 1px dashed #999;
+    color: #555;
+    font-size: 10pt;
+  }
+
+  /* ---------- 图谱画布 ---------- */
+  /* canvas / SVG 画出来的交互图打印出来是一片空白或一堆线，
+     所以图谱页在纸上给「节点清单」，画布本身不上纸。 */
+  .gc-canvas,
+  .graph-canvas,
+  .dg-stage,
+  canvas { display: none !important; }
+  /* 图例和「怎么读这张图」是给屏幕看的：
+     纸上没有画布，配色图例没有对应的东西，
+     「滚轮缩放 · 拖拽平移」这种操作提示更没有意义。 */
+  .gc-legend,
+  .gc-toolbar,
+  .gc-tips,
+  .gc-trunc,
+  .gc-zoom-hint,
+  .graph-legend,
+  .gt-legend,
+  .tips { display: none !important; }
+
+  /* ---------- 表格里的「操作」列 ---------- */
+  /* 操作列的格子里全是按钮，按钮不上纸之后这一列只剩一个空标题，
+     看着像漏印了东西 —— 整列藏掉。
+     用 :has() 判断「最后一列里确实有按钮」，
+     这样以后有表格的最后一列是正经内容时，不会被误藏。 */
+  .el-table:has(.el-table__body-wrapper td:last-child button) .el-table__header-wrapper th:last-child,
+  .el-table:has(.el-table__body-wrapper td:last-child button) .el-table__body-wrapper td:last-child {
+    display: none !important;
+  }
+}

@@ -1,5 +1,12 @@
 <template>
-  <div class="page">
+  <!-- data-print-root：这一块是要打印的正文。
+       data-print-empty：一个节点都没有时为 true —— 打印脚本会先说一声，
+       而不是默默打出一张白纸 -->
+  <div
+    class="page"
+    data-print-root
+    :data-print-empty="printEmpty ? 'true' : 'false'"
+  >
     <PageTitle
       title="关联图谱"
       subtitle="跨模型的关系网络：关联关系、外键引用、字段挂载的文件全部连成一张网"
@@ -38,7 +45,17 @@
       <el-button :loading="loading" @click="load">
         <el-icon><Refresh /></el-icon>刷新
       </el-button>
+      <!-- 打印：图标 + 文字（只有一个图标的按钮出了纸面就没人认得） -->
+      <el-button data-print-trigger @click="onPrint">
+        <el-icon><Printer /></el-icon>打印
+      </el-button>
     </PageTitle>
+
+    <!-- 打印页眉：屏幕上不显示，纸上要看得清「打印的是什么、什么时候打的」 -->
+    <div class="print-title-bar" data-print-only>
+      <span>关联图谱 · {{ graph.nodes.length }} 个节点 / {{ graph.edges.length }} 条连线</span>
+      <span class="print-title-bar-time" data-print-time></span>
+    </div>
 
     <!-- 概览 -->
     <div class="stat-grid">
@@ -85,6 +102,32 @@
       @recenter="recenterOn"
     />
 
+    <!--
+      打印用的图谱清单：
+      交互图画在 canvas 上，印出来是一张白纸（或者一堆断掉的线），
+      所以纸上改给「节点清单 + 连线清单」——
+      至少「有哪些东西、谁连着谁」在纸上看得见。
+      画布本身在 print.css 里被藏掉了。
+    -->
+    <div class="print-block" data-print-only>
+      <div class="print-block-title">节点清单（共 {{ graph.nodes.length }} 个）</div>
+      <ul v-if="graph.nodes.length" class="print-node-list">
+        <li v-for="n in graph.nodes" :key="n.id" class="print-node-item">
+          {{ n.label }}<span v-if="n.type_name" class="print-node-type">（{{ n.type_name }}）</span>
+        </li>
+      </ul>
+      <div v-else class="print-empty-note">当前视图没有节点。</div>
+    </div>
+    <div class="print-block" data-print-only>
+      <div class="print-block-title">连线清单（共 {{ graph.edges.length }} 条）</div>
+      <ul v-if="graph.edges.length" class="print-node-list">
+        <li v-for="(e, i) in graph.edges" :key="i" class="print-node-item">
+          {{ nodeLabel(e.source) }} — {{ e.relation || '关联' }} → {{ nodeLabel(e.target) }}
+        </li>
+      </ul>
+      <div v-else class="print-empty-note">当前视图没有连线。</div>
+    </div>
+
     <div class="card tips">
       <div class="card-title">
         <span class="card-title-text"><el-icon class="title-ico"><InfoFilled /></el-icon>怎么读这张图</span>
@@ -129,6 +172,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Api } from '../api'
 import PageTitle from '../components/PageTitle.vue'
+import { printPage } from '../utils/print'
 import GraphCanvas from '../components/GraphCanvas.vue'
 
 const route = useRoute()
@@ -147,6 +191,24 @@ const loading = ref(false)
 const graph = ref({ nodes: [], edges: [], truncated: false })
 
 const kindCount = computed(() => new Set(graph.value.nodes.map(n => n.type_name)).size)
+
+// ===== 打印 =====
+// 打印用的节点名索引：连线清单里要用「节点 id → 名字」
+const nodeLabelMap = computed(() => {
+  const m = new Map()
+  for (const n of graph.value.nodes) m.set(n.id, n.label)
+  return m
+})
+function nodeLabel(id) {
+  return nodeLabelMap.value.get(id) || String(id)
+}
+
+// 一个节点都没有的时候，纸上只有一块空白 —— 先说一声
+const printEmpty = computed(() => !graph.value.nodes.length)
+
+function onPrint() {
+  printPage()
+}
 
 const isolated = computed(() => {
   const linked = new Set()

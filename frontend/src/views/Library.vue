@@ -17,7 +17,18 @@
       <el-button type="primary" @click="fileInput?.click()">
         <el-icon><UploadFilled /></el-icon>上传文件
       </el-button>
+      <!-- 打印：图标 + 文字，别只有图标 ——
+           只剩一个图标的按钮，出了纸面就没人知道它是干什么的了 -->
+      <el-button data-print-trigger @click="onPrint">
+        <el-icon><Printer /></el-icon>打印
+      </el-button>
     </PageTitle>
+
+    <!-- 打印页眉：屏幕上不显示，纸上要看得清「这是什么、什么时候打的」 -->
+    <div class="print-title-bar" data-print-only>
+      <span>数据中心 · {{ activeTabName }}</span>
+      <span class="print-title-bar-time" data-print-time></span>
+    </div>
 
     <!-- 上传区 -->
     <div class="upload-card">
@@ -117,7 +128,15 @@
     </div>
 
     <!-- 主内容 -->
-    <el-tabs v-model="activeTab" class="main-tabs">
+    <!-- data-print-root：这一块是要打印的正文（打印脚本靠它判断页面是不是空的）。
+         data-print-empty：当前视图没有内容时为 true —— 打印脚本会先说一声，
+         而不是默默打出一张白纸 -->
+    <el-tabs
+      v-model="activeTab"
+      class="main-tabs"
+      data-print-root
+      :data-print-empty="printEmpty ? 'true' : 'false'"
+    >
       <!-- ============ 附件库 ============ -->
       <el-tab-pane name="files">
         <template #label>
@@ -877,6 +896,7 @@ import {
 } from '@element-plus/icons-vue'
 import { Api, fileUrls, previewModeOf } from '../api'
 import { fileAccent } from '../utils/accents'
+import { printPage } from '../utils/print'
 import { appAccent } from '../utils/icons'
 import './pages.css'
 import { formatTime, formatSize } from '../utils/format'
@@ -927,6 +947,26 @@ const keywordHits = ref(null)
 const searchInfo = ref(null)
 
 const activeTab = ref('files')
+
+// ===== 打印 =====
+// 打印页眉上要写的当前视图名
+const activeTabName = computed(() => ({
+  files: '附件库',
+  json: 'JSON 试验场',
+  recent: '最近活动',
+}[activeTab.value] || '数据中心'))
+
+// 当前视图有没有可打印的内容：
+// 空的就不该打 —— 纸上白茫茫一张，用户只会以为程序坏了
+const printEmpty = computed(() => {
+  if (activeTab.value === 'files') return !filteredFiles.value.length
+  if (activeTab.value === 'recent') return !recent.value.length
+  return false
+})
+
+function onPrint() {
+  printPage()
+}
 
 const metaDialogOpen = ref(false)
 const metaFile = ref(null)

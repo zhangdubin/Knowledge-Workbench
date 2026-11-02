@@ -1,5 +1,12 @@
 <template>
-  <div class="page">
+  <!-- data-print-root：这一块是要打印的正文。
+       data-print-empty：一篇笔记都没有时为 true —— 打印脚本会先说一声，
+       而不是默默打出一张白纸 -->
+  <div
+    class="page"
+    data-print-root
+    :data-print-empty="printEmpty ? 'true' : 'false'"
+  >
     <PageTitle
       title="知识图谱"
       subtitle="所有笔记与它们之间的双向链接。按标签着色，一眼看出知识聚成了哪几团"
@@ -15,7 +22,17 @@
       <el-button :loading="loading" @click="load">
         <el-icon><Refresh /></el-icon>刷新
       </el-button>
+      <!-- 打印：图标 + 文字（只有一个图标的按钮出了纸面就没人认得） -->
+      <el-button data-print-trigger @click="onPrint">
+        <el-icon><Printer /></el-icon>打印
+      </el-button>
     </PageTitle>
+
+    <!-- 打印页眉：屏幕上不显示，纸上要看得清「打印的是什么、什么时候打的」 -->
+    <div class="print-title-bar" data-print-only>
+      <span>知识图谱 · {{ graph.nodes.length }} 篇笔记 / {{ graph.edges.length }} 条双向链接</span>
+      <span class="print-title-bar-time" data-print-time></span>
+    </div>
 
     <div class="stat-grid">
       <div class="stat-card">
@@ -61,6 +78,32 @@
       @recenter="recenterOn"
     />
 
+    <!--
+      打印用的图谱清单：
+      交互图画在 canvas 上，印出来是一张白纸（或者一堆断掉的线），
+      所以纸上改给「笔记清单 + 链接清单」——
+      至少「有哪些笔记、谁链着谁」在纸上看得见。
+      画布本身在 print.css 里被藏掉了。
+    -->
+    <div class="print-block" data-print-only>
+      <div class="print-block-title">笔记清单（共 {{ graph.nodes.length }} 篇）</div>
+      <ul v-if="graph.nodes.length" class="print-node-list">
+        <li v-for="n in graph.nodes" :key="n.id" class="print-node-item">
+          {{ n.label }}<span v-if="(n.tags || []).length" class="print-node-type">（{{ (n.tags || []).map(t => '#' + t).join(' ') }}）</span>
+        </li>
+      </ul>
+      <div v-else class="print-empty-note">当前视图没有笔记。</div>
+    </div>
+    <div class="print-block" data-print-only>
+      <div class="print-block-title">链接清单（共 {{ graph.edges.length }} 条）</div>
+      <ul v-if="graph.edges.length" class="print-node-list">
+        <li v-for="(e, i) in graph.edges" :key="i" class="print-node-item">
+          {{ nodeLabel(e.source) }} — {{ e.relation || '链接' }} → {{ nodeLabel(e.target) }}
+        </li>
+      </ul>
+      <div v-else class="print-empty-note">当前视图没有链接。</div>
+    </div>
+
     <div class="card tips">
       <div class="card-title">
         <span class="card-title-text"><el-icon class="title-ico"><InfoFilled /></el-icon>怎么读这张图</span>
@@ -99,6 +142,7 @@ import { useRouter } from 'vue-router'
 import api, { Api } from '../api'
 import { createSearchRequest } from '../utils/searchRequest'
 import PageTitle from '../components/PageTitle.vue'
+import { printPage } from '../utils/print'
 import GraphCanvas from '../components/GraphCanvas.vue'
 
 const router = useRouter()
@@ -108,6 +152,24 @@ const colorBy = ref('tag')
 const tags = ref([])
 const loading = ref(false)
 const graph = ref({ nodes: [], edges: [], truncated: false })
+
+// ===== 打印 =====
+// 打印用的节点名索引：链接清单里要用「节点 id → 名字」
+const nodeLabelMap = computed(() => {
+  const m = new Map()
+  for (const n of graph.value.nodes) m.set(n.id, n.label)
+  return m
+})
+function nodeLabel(id) {
+  return nodeLabelMap.value.get(id) || String(id)
+}
+
+// 一篇笔记都没有的时候，纸上只有一块空白 —— 先说一声
+const printEmpty = computed(() => !graph.value.nodes.length)
+
+function onPrint() {
+  printPage()
+}
 
 const tagCount = computed(() => {
   const s = new Set()

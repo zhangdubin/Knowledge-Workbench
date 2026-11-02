@@ -55,13 +55,31 @@
               <el-button size="small" type="danger" plain>删除</el-button>
             </template>
           </el-popconfirm>
+          <!-- 打印：图标 + 文字（只有一个图标的按钮出了纸面就没人认得） -->
+          <el-button size="small" data-print-trigger @click="onPrint">
+            <el-icon><Printer /></el-icon>打印
+          </el-button>
         </template>
       </div>
     </div>
 
-    <div v-if="record" class="nd-layout">
+    <!-- data-print-root：这一块是要打印的正文。
+         data-print-empty：笔记没有正文时为 true —— 打印脚本会先说一声，
+         而不是默默打出一张白纸 -->
+    <div
+      v-if="record"
+      class="nd-layout"
+      data-print-root
+      :data-print-empty="printEmpty ? 'true' : 'false'"
+    >
       <!-- 主区 -->
       <main class="nd-main">
+        <!-- 打印页眉：屏幕上不显示，纸上要看得清「打印的是什么、什么时候打的」 -->
+        <div class="print-title-bar" data-print-only>
+          <span>笔记 · {{ title }}</span>
+          <span class="print-title-bar-time" data-print-time></span>
+        </div>
+
         <!-- 标题 + 标签 + 元信息（阅读态的页头） -->
         <header v-if="!editing" class="nd-header">
           <h1 class="nd-title">{{ title }}</h1>
@@ -183,6 +201,7 @@
                   <a class="nd-link" @click="goToNote(o.target_record_id)">{{ o.title }}</a>
                   <el-tag v-if="o.placeholder" size="small" type="info" effect="plain">占位</el-tag>
                   <span class="nd-link-sub">原文本 [[{{ o.link_title }}]]</span>
+                  <span v-if="o.count > 1" class="nd-link-sub">· 正文里出现 {{ o.count }} 次</span>
                 </div>
               </div>
               <div v-else class="nd-empty">
@@ -202,6 +221,7 @@
                     <el-icon class="nd-link-dir"><Back /></el-icon>
                     <a class="nd-link" @click="goToNote(b.source_record_id)">{{ b.title }}</a>
                     <span class="nd-link-sub">引用了 [[{{ b.link_title }}]]</span>
+                    <span v-if="b.count > 1" class="nd-link-sub">· 出现 {{ b.count }} 次</span>
                   </div>
                   <div class="nd-link-snippet">{{ b.snippet }}</div>
                 </div>
@@ -219,6 +239,19 @@
           <div class="nd-panel-title">
             <el-icon class="nd-panel-ico"><Collection /></el-icon>关联的业务记录
             <span v-if="relatedRecords.length" class="badge badge-ghost">{{ relatedRecords.length }}</span>
+            <!-- 笔记这边也要能主动加：
+                 以前只能从业务记录那边「关联知识 / 沉淀为笔记」反向挂过来，
+                 站在笔记的视角就变成了「只能看不能加」——
+                 用户想从这条笔记出发去挂记录时，根本没有入口。 -->
+            <el-button
+              size="small"
+              plain
+              class="nd-panel-act"
+              :loading="linking"
+              @click="openLinkDialog"
+            >
+              <el-icon><Plus /></el-icon>关联业务记录
+            </el-button>
           </div>
           <div v-if="relatedRecords.length" class="nd-related-list">
             <div
@@ -234,13 +267,23 @@
                 <div class="nd-related-label">{{ r.label }}</div>
                 <div class="nd-related-sub">{{ r.entity_type_name }} · {{ r.relation_name }}</div>
               </div>
+              <el-button
+                size="small"
+                text
+                class="nd-related-unlink"
+                :loading="unlinkingId === r.record_id"
+                @click.stop="unlinkRecord(r)"
+              >
+                取消关联
+              </el-button>
               <el-icon class="nd-related-go"><ArrowRight /></el-icon>
             </div>
           </div>
           <div v-else class="nd-empty">
-            <div class="nd-empty-title">还没有业务记录引用这条笔记</div>
+            <div class="nd-empty-title">还没有关联业务记录</div>
             <div class="nd-empty-desc">
-              在任意记录的详情里点「关联笔记」或「沉淀为笔记」，即可在此双向呈现。
+              点右上角「关联业务记录」把已有记录挂到这条笔记上；
+              也可以在任意记录的详情里点「关联笔记」或「沉淀为笔记」，两边都会看到。
             </div>
           </div>
         </section>
@@ -316,6 +359,57 @@
       <span>加载中…</span>
     </div>
 
+
+    <!-- 关联业务记录：搜到就挂上，挂完列表立刻更新 -->
+    <el-dialog v-model="linkDialog" title="关联业务记录" width="560px" append-to-body>
+      <div class="nd-link-form">
+        <el-select
+          v-model="linkForm.typeId"
+          class="nd-link-type"
+          placeholder="选择数据模型"
+          @change="onLinkTypeChange"
+        >
+          <el-option
+            v-for="t in linkableTypes"
+            :key="t.id"
+            :label="t.name"
+            :value="t.id"
+          />
+        </el-select>
+        <el-input
+          v-model="linkForm.keyword"
+          class="nd-link-search"
+          placeholder="搜索记录（按名称/标题）"
+          clearable
+          @input="searchLinkCandidates"
+          @clear="searchLinkCandidates"
+        />
+      </div>
+
+      <div class="nd-link-candidates">
+        <div v-if="linkLoading" class="nd-link-hint">正在找记录…</div>
+        <div v-else-if="linkError" class="nd-link-hint is-error">{{ linkError }}</div>
+        <div v-else-if="!linkCandidates.length" class="nd-link-hint">
+          {{ linkForm.keyword ? '没搜到匹配的记录' : '这个模型下还没有记录' }}
+        </div>
+        <button
+          v-for="c in linkCandidates"
+          :key="c.id"
+          type="button"
+          class="nd-link-candidate"
+          :disabled="linking"
+          @click="linkRecord(c)"
+        >
+          <span class="nd-link-candidate-label">{{ recordLabel(c) }}</span>
+          <span class="nd-link-candidate-id">#{{ c.id }}</span>
+          <el-icon><Plus /></el-icon>
+        </button>
+      </div>
+
+      <template #footer>
+        <el-button @click="linkDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
     <!-- AI 助手弹窗 -->
     <AIAssistantDialog
       v-model="aiDialogOpen"
@@ -326,20 +420,95 @@
   </div>
 </template>
 
+<script>
+/**
+ * 纯函数区：双链解析、去重、记录显示名。
+ *
+ * 为什么单独开一个普通 <script> 块：
+ *   这几段逻辑决定「双链到底对不对」，值得被单测钉住；
+ *   而 <script setup> 里的代码依赖 Vue 运行时，node 直接跑不起来。
+ *   普通 <script> 块没有 import，纯函数独立可测 ——
+ *   frontend/tests/note-links.test.mjs 会把这一块抽出来 eval 验证。
+ */
+
+/**
+ * 双链列表去重。
+ *
+ * 为什么必须去重：后端 sync-links 是**按正文里出现的次数**建关系的 ——
+ * 同一篇笔记里 [[数据模型设计]] 写两遍，就会落两条关系。
+ * 前端直接照单渲染的话：
+ *   · 列表里同一条出现两次（用户看到「重复列」）；
+ *   · v-for 的 key 也撞了（Vue 会警告，DOM 复用后串行）。
+ * 所以这里按目标/来源 id 合并，并把出现次数记下来（count）。
+ */
+export function dedupeLinks(list, keyField) {
+  const out = []
+  const index = new Map()
+  for (const item of list || []) {
+    const key = item ? item[keyField] : undefined
+    if (key === undefined || key === null) continue
+    if (index.has(key)) {
+      index.get(key).count += 1
+      continue
+    }
+    const copy = Object.assign({}, item, { count: 1 })
+    index.set(key, copy)
+    out.push(copy)
+  }
+  return out
+}
+
+/**
+ * [[标题]] → 目标笔记 id。
+ *
+ * 优先用后端给的**正链表**：它知道每个 [[标题]] 实际落在哪条笔记上，
+ * 包括「占位笔记」（正文里写了还没建过的标题，后端会先建一个空壳）。
+ * 只有正链表里没有的（新写还没保存的链接）才回退到标题索引。
+ *
+ * 为什么不能只靠标题索引：
+ *   · 索引只取前 500 条笔记，笔记多了以后真实存在的链接会被当成「不存在」；
+ *   · 笔记改名后，标题索引里没有旧标题了，但正链表还指着那条笔记 ——
+ *     这时点旧双链应该跳到那篇（改过名的）笔记，而不是报「没有这篇」。
+ */
+export function resolveWikilinkTarget(text, outgoing, titleIndex) {
+  const key = String(text == null ? '' : text).trim().toLowerCase()
+  if (!key) return null
+  for (const o of outgoing || []) {
+    const t = String((o && o.link_title) || '').trim().toLowerCase()
+    if (t && t === key) return o.target_record_id
+  }
+  const hit = (titleIndex || {})[key]
+  return hit === undefined || hit === null ? null : hit
+}
+
+/** 这个 [[标题]] 有没有对应的笔记（用来弱化显示「还没写过的链接」） */
+export function wikilinkExists(text, outgoing, titleIndex) {
+  return resolveWikilinkTarget(text, outgoing, titleIndex) != null
+}
+
+/** 业务记录的显示名：各模型字段不统一，按常见字段依次兜底 */
+export function recordLabel(rec) {
+  const d = (rec && rec.data) || {}
+  const id = (rec && rec.id) || 0
+  return d.name || d.title || d.code || d.label || ('#' + id)
+}
+
+</script>
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowLeft, ArrowRight, Back, Brush, Check, Collection, Connection, DataBoard,
   Document, Edit, EditPen, FolderOpened, InfoFilled, Loading, MagicStick, Memo,
-  Notebook, PriceTag, Right, Share, Top,
+  Notebook, Plus, PriceTag, Right, Share, Top,
 } from '@element-plus/icons-vue'
 import { Api } from '../api'
 import { formatTime } from '../utils/format'
 import { entityIcon } from '../utils/icons'
 import { parseJson, summarize } from '../utils/jsonview'
 import { noteTitle, relativeTime, renderNoteHtml } from '../utils/notes'
+import { printPage } from '../utils/print'
 import NoteEditor from '../components/NoteEditor.vue'
 import JsonViewer from '../components/JsonViewer.vue'
 import AIAssistantDialog from '../components/AIAssistantDialog.vue'
@@ -360,6 +529,16 @@ const backlinks = ref([])
 const parentTitle = ref('')
 const relatedRecords = ref([])
 
+// 关联业务记录（笔记这边主动发起的那一侧）
+const linkDialog = ref(false)
+const linkForm = reactive({ typeId: null, keyword: '' })
+const linkCandidates = ref([])
+const linkableTypes = ref([])
+const linkLoading = ref(false)
+const linkError = ref('')
+const linking = ref(false)
+const unlinkingId = ref(0)
+
 // 阅读态的视图切换：阅读 / 源码 / JSON
 const view = ref('reading')
 const linkTab = ref('outgoing')
@@ -374,6 +553,14 @@ const readingRef = ref(null)
 const contentLength = computed(() => (record.value?.data?.content || '').length)
 const title = computed(() => noteTitle(record.value, noteId.value))
 const tags = computed(() => record.value?.data?.tags || [])
+
+// ===== 打印 =====
+// 空笔记打出来就是一张白纸 —— 先说一声，用户自己决定要不要换一篇
+const printEmpty = computed(() => !contentLength.value)
+
+function onPrint() {
+  printPage()
+}
 
 // 分组（接口没上线时 groupsAvailable=false，分组相关的 UI 全部隐藏）
 const { groups, available: groupsAvailable, load: loadGroups, groupOf } = useNoteGroups()
@@ -409,8 +596,10 @@ function relativeOf(field) {
 
 async function load() {
   record.value = await Api.getRecord(noteId.value)
-  outgoing.value = await Api.getNoteOutgoing(noteId.value)
-  backlinks.value = await Api.getNoteBacklinks(noteId.value)
+  // 正链/反链都要去重：后端按正文里 [[X]] 出现的次数建关系，
+  // 同一个目标写两遍就会落两条关系 —— 列表重复、v-for 的 key 还撞车。
+  outgoing.value = dedupeLinks(await Api.getNoteOutgoing(noteId.value), 'target_record_id')
+  backlinks.value = dedupeLinks(await Api.getNoteBacklinks(noteId.value), 'source_record_id')
   await loadRelatedRecords()
   if (record.value?.data?.parent) {
     try {
@@ -450,6 +639,110 @@ async function loadRelatedRecords() {
     relatedRecords.value = r.records || []
   } catch (e) {
     relatedRecords.value = []
+  }
+}
+
+// ============ 关联业务记录（笔记侧发起） ============
+
+/**
+ * 打开「关联业务记录」弹窗。
+ *
+ * 为什么要单独做一个入口：
+ *   之前这个面板只能看 —— 数据全是业务侧「关联知识 / 沉淀为笔记」反向挂过来的。
+ *   站在笔记的视角，用户想把手上的业务记录挂到这条笔记上时没有入口，
+ *   只能先去业务记录那边操作一遍，来回跑。
+ */
+async function openLinkDialog() {
+  linkDialog.value = true
+  linkError.value = ''
+  linkCandidates.value = []
+  try {
+    if (!linkableTypes.value.length) {
+      const list = await Api.listEntityTypes()
+      // 笔记之间的关联走 [[双链]]（后端会直接拒绝），这里只列业务模型
+      linkableTypes.value = (list || []).filter((t) => t && t.key !== 'note')
+    }
+  } catch (e) {
+    linkError.value = '读不到数据模型清单：' + (e?.message || e)
+    return
+  }
+  if (!linkForm.typeId && linkableTypes.value.length) {
+    linkForm.typeId = linkableTypes.value[0].id
+  }
+  if (!linkableTypes.value.length) {
+    linkError.value = '当前没有可关联的业务模型（笔记之间请用 [[双链]]）'
+    return
+  }
+  await searchLinkCandidates()
+}
+
+function onLinkTypeChange() {
+  linkForm.keyword = ''
+  searchLinkCandidates()
+}
+
+async function searchLinkCandidates() {
+  if (!linkForm.typeId) {
+    linkCandidates.value = []
+    return
+  }
+  linkLoading.value = true
+  linkError.value = ''
+  try {
+    const res = await Api.listRecords(linkForm.typeId, {
+      page: 1,
+      page_size: 20,
+      keyword: linkForm.keyword || undefined,
+    })
+    linkCandidates.value = res?.items || []
+  } catch (e) {
+    linkCandidates.value = []
+    const d = e?.response?.data
+    // 没权限/模型不存在时后端会 403/404 —— 说人话，别把状态码甩给用户
+    linkError.value = (d && (d.detail || d.message)) || e?.message || '读取记录失败'
+  } finally {
+    linkLoading.value = false
+  }
+}
+
+/** 关联：后端是幂等的，重复点不会产生两条关系 */
+async function linkRecord(rec) {
+  linking.value = true
+  try {
+    await Api.linkKnowledge(rec.id, noteId.value)
+    ElMessage.success('已关联')
+    // 列表立刻更新 —— 用户点了就该看得见，不然后台刷一遍页面才知道成没成
+    await loadRelatedRecords()
+    linkCandidates.value = linkCandidates.value.filter((c) => c.id !== rec.id)
+  } catch (e) {
+    const d = e?.response?.data
+    ElMessage.error('关联失败：' + ((d && (d.detail || d.message)) || e?.message || '未知错误'))
+  } finally {
+    linking.value = false
+  }
+}
+
+/** 取消关联 */
+async function unlinkRecord(r) {
+  try {
+    await ElMessageBox.confirm(
+      `取消关联「${r.label || ('#' + r.record_id)}」？`,
+      '取消关联',
+      { type: 'warning', confirmButtonText: '取消关联', cancelButtonText: '算了' },
+    )
+  } catch {
+    return
+  }
+  unlinkingId.value = r.record_id
+  try {
+    await Api.unlinkKnowledge(r.record_id, noteId.value)
+    ElMessage.success('已取消关联')
+    await loadRelatedRecords()
+  } catch (e) {
+    const d = e?.response?.data
+    ElMessage.error('取消关联失败：' + ((d && (d.detail || d.message)) || e?.message || '未知错误'))
+  } finally {
+    unlinkingId.value = 0
   }
 }
 
@@ -539,23 +832,28 @@ function onBodyClick(e) {
   const a = e.target?.closest?.('a.note-wikilink')
   if (!a) return
   e.preventDefault()
-  const key = (a.dataset?.wikilink || '').trim().toLowerCase()
-  const id = titleIndex.value[key]
+  // 先问后端的正链表（它知道每个 [[标题]] 落在哪篇笔记上），
+  // 再回退到标题索引 —— 只用索引会漏掉「改名后旧双链」和「占位笔记」。
+  const id = resolveWikilinkTarget(a.dataset?.wikilink, outgoing.value, titleIndex.value)
   if (id) {
     goToNote(id)
     return
   }
-  ElMessage.info(`知识库里还没有「${a.dataset?.wikilink}」这篇笔记`)
+  ElMessage.info(`知识库里还没有「${a.dataset?.wikilink}」这篇笔记，写好正文保存后会自动建立`)
 }
 
 // 未解析的双链弱化显示（Obsidian 里「还没写过的链接」是灰的）
-watch([renderedContent, titleIndex], async () => {
+watch([renderedContent, titleIndex, outgoing], async () => {
   await nextTick()
   const root = readingRef.value
   if (!root) return
   root.querySelectorAll('a.note-wikilink').forEach(a => {
-    const key = (a.dataset?.wikilink || '').trim().toLowerCase()
-    a.classList.toggle('is-missing', !titleIndex.value[key])
+    // 判断口径和点击口径必须一致：
+    // 否则会出现「看着是灰的（说不存在），点进去却能跳」的矛盾。
+    a.classList.toggle(
+      'is-missing',
+      !wikilinkExists(a.dataset?.wikilink, outgoing.value, titleIndex.value),
+    )
   })
 })
 
@@ -912,6 +1210,65 @@ html.dark .nd-tag { color: var(--primary-light); }
 .nd-related-sub { font-size: var(--text-xs); color: var(--text-tertiary); margin-top: 2px; }
 .nd-related-go { color: var(--text-tertiary); flex-shrink: 0; }
 .nd-related-item:hover .nd-related-go { color: var(--primary); }
+
+/* 面板标题右侧的动作按钮（关联业务记录） */
+.nd-panel-act { margin-left: auto; }
+
+/* 关联记录条目上的「取消关联」 */
+.nd-related-unlink {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+/* 平时藏起来，鼠标移上去才露出来 —— 列表干净，但要用时一定找得到 */
+.nd-related-item:hover .nd-related-unlink { opacity: 1; }
+.nd-related-unlink:focus-visible { opacity: 1; }
+
+/* 关联业务记录弹窗 */
+.nd-link-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.nd-link-type { width: 180px; flex-shrink: 0; }
+.nd-link-search { flex: 1; min-width: 0; }
+.nd-link-candidates {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+}
+.nd-link-hint {
+  padding: 14px 8px;
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.nd-link-hint.is-error { color: var(--danger); }
+.nd-link-candidate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+.nd-link-candidate:hover { background: var(--primary-bg); }
+.nd-link-candidate:disabled { opacity: 0.5; cursor: not-allowed; }
+.nd-link-candidate-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nd-link-candidate-id { color: var(--text-tertiary); font-size: var(--text-xs); }
+.nd-link-candidate .el-icon { color: var(--primary); flex-shrink: 0; }
+
 
 /* 侧栏 */
 .nd-card {

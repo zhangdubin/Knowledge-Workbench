@@ -1415,22 +1415,6 @@ def _title_matches(heading: str, doc_label: str) -> bool:
     return h in candidates
 
 
-async def _alive_note_ids(db: AsyncSession) -> set[int] | None:
-    """还活着的笔记 id；库里没有笔记模型时返回 None（没东西要过滤）"""
-    type_id = (await db.execute(
-        select(EntityType.id).where(EntityType.key == "note")
-    )).scalar()
-    if not type_id:
-        return None
-    rows = (await db.execute(
-        select(EntityRecord.id).where(
-            EntityRecord.entity_type_id == type_id,
-            EntityRecord.deleted_at.is_(None),
-        )
-    )).all()
-    return {int(r[0]) for r in rows}
-
-
 async def build_graph(db: AsyncSession, principal: Principal) -> dict:
     """关联脉络图：文件的骨架 + 文件的挂载 + 记录之间的关联
 
@@ -1458,7 +1442,10 @@ async def build_graph(db: AsyncSession, principal: Principal) -> dict:
     # 记录侧脉络：业务关联（记录 ↔ 记录 / 文件）与笔记双链
     biz = await graph_svc.get_global_graph(
         db, limit=GRAPH_NODE_LIMIT, principal=principal)
-    notes = await graph_svc.get_notes_graph(db, limit=GRAPH_NODE_LIMIT)
+    # 身份要传下去：笔记连到业务记录的那条边，
+    # 业务记录那一侧得按模型读权限裁 —— 裁不了就别画（见 graph.get_notes_graph）
+    notes = await graph_svc.get_notes_graph(db, limit=GRAPH_NODE_LIMIT,
+                                            principal=principal)
 
     nodes_by_id: dict[str, dict] = {}
     edges_by_id: dict[str, dict] = {}
@@ -1481,14 +1468,10 @@ async def build_graph(db: AsyncSession, principal: Principal) -> dict:
         })
 
     # 回收站里的笔记不进图。
-    # graph.get_notes_graph 没有排除软删除的记录（老问题）：
-    # 「已经删掉」的东西还带着标题站在图上，等于删除没生效。
-    alive_notes = await _alive_note_ids(db)
-    if alive_notes is not None:
-        for nid in [nid for nid, n in nodes_by_id.items()
-                    if n.get("kind") == "record" and n.get("type") == "note"
-                    and int(n.get("ref_id") or 0) not in alive_notes]:
-            nodes_by_id.pop(nid, None)
+    #
+    # 现在不用在这里额外查一遍：graph.get_notes_graph 与 get_global_graph
+    # 都已经在源头排除了软删除的笔记（「已经删掉」的东西还带着标题站在图上，
+    # 等于删除没生效）。这里再查一次是白花一次数据库往返。
 
     # 挂载边：文件 → 挂在它上面的记录
     #

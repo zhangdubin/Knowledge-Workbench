@@ -377,16 +377,33 @@ async function main() {
   // ---------- 5) 依次跑 specify → design → implement ----------
   for (const stage of ['specify', 'design', 'implement']) {
     console.log('▶  跑 ' + stage)
-    const runRes = await api('POST', '/api/dev/projects/' + pid + '/stages/' + stage + '/run', { extra: '', force: false })
-    if (runRes.status === 409) {
-      fail(stage + ' 阶段能起作业', '闸门没放行：HTTP 409 ' + JSON.stringify(runRes.body).slice(0, 200))
-      continue
+    // 重启容错：后端在验证过程中被重启是常事（有人在重新发版）。
+    // 这时作业会被标成 failed「服务重启中断」——
+    // 用户遇到这事的正确反应就是「重跑这一步」，脚本也照做，
+    // 不然一次环境抖动就把整条验证判死。
+    let res = null
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const runRes = await api('POST', '/api/dev/projects/' + pid + '/stages/' + stage + '/run',
+        { extra: '', force: attempt > 1 })
+      if (runRes.status === 409) {
+        fail(stage + ' 阶段能起作业', '闸门没放行：HTTP 409 ' + JSON.stringify(runRes.body).slice(0, 200))
+        res = null
+        break
+      }
+      if (runRes.status !== 200 || !runRes.body || !runRes.body.job) {
+        fail(stage + ' 阶段能起作业', 'HTTP ' + runRes.status + ' ' + JSON.stringify(runRes.body).slice(0, 300))
+        res = null
+        break
+      }
+      res = await pollJob(runRes.body.job.id)
+      const st = res.final && res.final.status
+      if (st !== 'failed' && st !== 'error') break
+      const err = String((res.final && res.final.error) || '')
+      if (!/服务重启中断|中断/.test(err)) break
+      console.log('  ! 作业被服务重启打断（第 ' + attempt + ' 次），重跑这一步')
+      await sleep(2000)
     }
-    if (runRes.status !== 200 || !runRes.body || !runRes.body.job) {
-      fail(stage + ' 阶段能起作业', 'HTTP ' + runRes.status + ' ' + JSON.stringify(runRes.body).slice(0, 300))
-      continue
-    }
-    const res = await pollJob(runRes.body.job.id)
+    if (!res) continue
     checkJobProgress(stage, res)
     if (res.final && (res.final.status === 'failed' || res.final.status === 'error')) {
       fail(stage + ' 跑成功', '作业失败：' + (res.final.error || ''))

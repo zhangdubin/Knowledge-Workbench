@@ -6,6 +6,7 @@
         v-if="groupsAvailable"
         :model-value="groupId"
         class="notes-groups"
+        data-print-hide
         :all-count="allCount"
         :ungrouped-count="ungroupedCount"
         :open="drawerOpen"
@@ -21,7 +22,14 @@
         @click="drawerOpen = false"
       ></div>
 
-      <div class="notes-main">
+      <!-- data-print-root：这一块是要打印的正文。
+           data-print-empty：没有笔记时为 true —— 打印脚本会先说一声，
+           而不是默默打出一张白纸 -->
+      <div
+        class="notes-main"
+        data-print-root
+        :data-print-empty="printEmpty ? 'true' : 'false'"
+      >
         <!-- 页头 + 工具栏合成一块「头部卡片」：
              原来标题、搜索、视图切换是三条各自独立的带子，
              看着像三段不相干的东西拼在一起。 -->
@@ -50,7 +58,17 @@
                 <el-icon><Plus /></el-icon>新建笔记
                 <kbd class="notes-kbd">⌘N</kbd>
               </el-button>
+              <!-- 打印：图标 + 文字（只有一个图标的按钮出了纸面就没人认得） -->
+              <el-button size="small" data-print-trigger @click="onPrint">
+                <el-icon><Printer /></el-icon>打印
+              </el-button>
             </div>
+          </div>
+
+          <!-- 打印页眉：屏幕上不显示，纸上要看得清「打印的是什么、什么时候打的」 -->
+          <div class="print-title-bar" data-print-only>
+            <span>知识库 · {{ targetGroupName || '全部笔记' }}</span>
+            <span class="print-title-bar-time" data-print-time></span>
           </div>
 
           <!-- 工具栏：搜索 + 视图 -->
@@ -278,6 +296,7 @@ import {
 import { Api } from '../api'
 import { formatTime } from '../utils/format'
 import { firstLineTitle, noteSnippet, noteTitle, relativeTime } from '../utils/notes'
+import { printPage } from '../utils/print'
 import NoteEditor from '../components/NoteEditor.vue'
 import NoteGroupSidebar from '../components/note/NoteGroupSidebar.vue'
 import NoteGroupSelect from '../components/note/NoteGroupSelect.vue'
@@ -338,6 +357,14 @@ const filtered = computed(() => {
   return list
 })
 const visibleItems = computed(() => filtered.value)
+
+// ===== 打印 =====
+// 没有笔记可打的时候别打白纸：先说一声，用户自己决定要不要换个筛选条件
+const printEmpty = computed(() => !visibleItems.value.length)
+
+function onPrint() {
+  printPage()
+}
 
 const filterHint = computed(() => {
   const bits = []

@@ -95,6 +95,74 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning("启动清理养料库任务失败：%s", e)
 
+    # 开发流水线的阶段状态也要回收。
+    #
+    # 为什么单独收：上面的清理只管 dna_job（作业）。
+    # 流水线把阶段状态存在 dev_project.plan_json 里，
+    # 作业被标成 failed 了，阶段却还停在 running ——
+    # 左栏永远显示「进行中」，用户既看不到失败原因也不知道要重跑。
+    # 这是实测踩到的：重启后 project 2 的 design、project 5 的 implement 一直 running。
+    try:
+        import copy
+        import json
+
+        from sqlalchemy import select
+
+        from .models import DevProject
+
+        async with SessionLocal() as _db:
+            _projects = (await _db.execute(
+                select(DevProject).where(DevProject.plan_json.is_not(None))
+            )).scalars().all()
+            _changed = 0
+            for _p in _projects:
+                try:
+                    # 先深拷贝一份再改 —— JSON 列的坑：
+                    # 拿到什么对象就原地改什么对象，ORM 会认为「前后值相等」，
+                    # 这次修改根本不会发 UPDATE。
+                    # （踩过一次：日志说「回收 6 个项目」，库里一个字没变。）
+                    _raw = _p.plan_json if isinstance(_p.plan_json, dict) else json.loads(_p.plan_json or "{}")
+                    _pj = copy.deepcopy(_raw)
+                except Exception:
+                    continue
+                _pl = _pj.get("pipeline") if isinstance(_pj, dict) else None
+                if not isinstance(_pl, dict):
+                    continue
+                _stages = _pl.get("stages")
+                if not isinstance(_stages, dict):
+                    continue
+                _touched = False
+                for _key, _st in _stages.items():
+                    if not isinstance(_st, dict):
+                        continue
+                    if _st.get("status") != "running":
+                        continue
+                    _st["status"] = "failed"
+                    _st["error"] = "服务重启中断"
+                    _st["how_to_fix"] = ["重新跑这一步；上次是在服务重启时中断的，不是内容有问题"]
+                    _touched = True
+                if not _touched:
+                    continue
+                # current_stage 要重新指到第一个没做完的阶段，否则左栏会指错地方
+                _order = ("clarify", "specify", "design", "implement")
+                _cur = None
+                for _k in _order:
+                    _s = _stages.get(_k) or {}
+                    if _s.get("status") != "done":
+                        _cur = _k
+                        break
+                _pl["current_stage"] = _cur
+                _pj["pipeline"] = _pl
+                # 赋的是**拷贝出来的新对象**，而 ORM 里的原对象从没被动过 ——
+                # 前后值不等，UPDATE 才会真的发出去。
+                _p.plan_json = _pj
+                _changed += 1
+            if _changed:
+                await _db.commit()
+                log.info("回收重启前未跑完的流水线阶段：%s 个项目", _changed)
+    except Exception as e:
+        log.warning("启动回收流水线阶段失败：%s", e)
+
     try:
         yield
     finally:

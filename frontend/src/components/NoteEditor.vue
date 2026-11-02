@@ -148,7 +148,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Notebook } from '@element-plus/icons-vue'
 import { Api } from '../api'
 import TagInput from './TagInput.vue'
@@ -224,14 +224,39 @@ const inlineTags = computed(() =>
  * 而下面还压着一个同样 180px 的高亮覆盖层，两层**各滚各的**，
  * 于是「滑动没反应」：文字框动了，高亮层没动，看着像卡住了。
  *
+ * ⚠️ 高度**只能有一个来源**：CSS 变量 --composer-body-h。
+ *
+ * 之前 autoGrow 同时干了两件事：设变量，又给 textarea 写 inline height。
+ * textarea 是 position:absolute; inset:0，inline height 会盖掉 inset 的 bottom，
+ * 于是文字框比容器高出一截（实测长笔记直接掉到框外 39px），
+ * 而高亮覆盖层还是容器的尺寸 —— 两层永远差 1~2px，高亮全是错位的。
+ *
  * 现在：
- *   1. 内容超过阈值时，编辑区跟着长高（到上限为止）
- *   2. 覆盖层与文字框滚动位置始终同步
+ *   1. 只改变量；textarea 与 overlay 都靠 inset:0 填满容器 → 逐像素一致
+ *   2. 上限按可视区算（innerHeight - 120），超出部分在框内滚动，长笔记能滚着看完
+ *   3. 覆盖层与文字框滚动位置始终同步
  */
-const MAX_AUTO_HEIGHT = 620   // 再高就该在页面里滚了，编辑器内部不再无限长
 
 /** 编辑区实际高度（px） */
 const bodyHeight = ref(0)
+
+/** 两种模式的起始高度 */
+function baseHeight() {
+  return props.mode === 'full' ? 420 : 180
+}
+
+/**
+ * 高度上限：不超过可视区高度。
+ *
+ * 为什么不是写死的 620：620 是某块屏幕上的一个魔数，换个窗口就露馅 ——
+ * 长笔记最多只能显示 620px，剩下的字用户根本够不着（既不能滚出去，
+ * 框里也放不下）。这里按「窗口高度 - 120」算，
+ * 剩下的内容在框内滚动，鼠标滚轮就能看全。
+ */
+function maxAutoHeight() {
+  const viewport = (typeof window !== 'undefined' ? window.innerHeight : 900) - 120
+  return Math.max(baseHeight(), viewport)
+}
 
 function autoGrow() {
   const ta = bodyRef.value
@@ -239,12 +264,17 @@ function autoGrow() {
   const cs = getComputedStyle(ta)
   const padY = parseFloat(cs.paddingTop || '0') + parseFloat(cs.paddingBottom || '0')
   const borderY = parseFloat(cs.borderTopWidth || '0') + parseFloat(cs.borderBottomWidth || '0')
+  // 量内容高度时先把高度归零：
+  // 高度由容器决定之后，scrollHeight 取的是 max(内容高, 可见高)，
+  // 不归零就永远量到容器高度 —— 删字之后框不会缩回去（一直卡在最大高度）。
+  // 归零只发生在同一个任务里，浏览器来不及重绘，看不到闪烁。
+  const inline = ta.style.height
+  ta.style.height = '0px'
   // scrollHeight 含内边距，减掉自身已有的 padding/border 才是内容高度
   const content = ta.scrollHeight - padY - borderY
-  const base = props.mode === 'full' ? 420 : 180
-  const next = Math.min(Math.max(base, content), MAX_AUTO_HEIGHT)
+  ta.style.height = inline
+  const next = Math.min(Math.max(baseHeight(), content), maxAutoHeight())
   bodyHeight.value = next
-  ta.style.height = `${next}px`
   syncScroll()
 }
 
@@ -428,12 +458,22 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;')
 }
 
+/** 窗口尺寸变了，高度上限也要跟着变（换个小窗口，长笔记不能又露不全） */
+function onWindowResize() {
+  autoGrow()
+}
+
 onMounted(async () => {
   await loadTitleIndex()
   // 初始高度按内容算（长笔记一打开就是够高的，不用先滚动才知道下面还有）
   nextTick(autoGrow)
+  window.addEventListener('resize', onWindowResize)
   // 打开即聚焦标题：Obsidian 的「随手记」手感全靠这一点
   if (props.mode === 'quick') nextTick(() => titleRef.value?.focus())
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', onWindowResize)
 })
 </script>
 
@@ -490,6 +530,13 @@ onMounted(async () => {
    而下面还压着同样高度的高亮层，两层各滚各的，看着就像「滑动没反应」。 */
 .composer-body {
   position: relative;
+  /* 改成弹性列：
+     里面除了编辑区还有一行「引用养料库」工具条（38px）。
+     之前是普通块级布局，工具条把编辑区整体往下推，
+     而编辑区又是 height:100% —— 于是它的底边掉到容器底边外面 37px，
+     字真的掉出框外。改成 flex 后，编辑区自动占「剩下的高度」，绝不多一像素。 */
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
@@ -527,9 +574,14 @@ onMounted(async () => {
 
 .composer-editor-wrap {
   position: relative;
-  height: 100%;
-  min-height: inherit;
-  /* 高度跟着 .composer-body 走 */
+  /* 编辑区占满「工具条之外」的高度：
+     flex: 1 + min-height:0 让它自动吃掉剩余空间，
+     绝不会因为工具条把编辑区顶到容器外面去。
+     （原来写的是 height:100% + min-height:inherit ——
+       工具条在流里把编辑区整体下推 38px，height:100% 又让它比容器还高，
+       底边直接掉出框外 37px。） */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .composer-editor,
 .composer-overlay {
@@ -620,7 +672,11 @@ html.dark :deep(.ed-callout-tag) { color: var(--primary-light); }
 
 .composer-preview {
   padding: 12px 16px;
-  max-height: 620px;
+  /* 预览跟编辑区用同一个高度来源（--composer-body-h），
+     不再写死 620px —— 写死的上限和编辑区对不上，
+     同一篇笔记在两个视图里高度不一样，看着像内容在跳。 */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 .composer-preview-empty {

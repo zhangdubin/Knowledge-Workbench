@@ -17,7 +17,17 @@
       <el-button type="primary" :disabled="!canManage" @click="openCreate">
         <el-icon><Plus /></el-icon>新建记录
       </el-button>
+      <!-- 打印：图标 + 文字（只有一个图标的按钮出了纸面就没人认得） -->
+      <el-button data-print-trigger @click="onPrint">
+        <el-icon><Printer /></el-icon>打印
+      </el-button>
     </PageTitle>
+
+    <!-- 打印页眉：屏幕上不显示，纸上要看得清「打印的是什么、什么时候打的」 -->
+    <div class="print-title-bar" data-print-only>
+      <span>记录 · {{ entityType?.name || '记录' }}</span>
+      <span class="print-title-bar-time" data-print-time></span>
+    </div>
 
     <!--
       工具条：搜索 + 筛选 + 列显示 + 视图切换
@@ -58,7 +68,15 @@
     </div>
 
     <!-- 列表：与「应用独立页」共用同一套记录表格 -->
-    <div class="card" style="padding:0;overflow:hidden">
+    <!-- data-print-root：这一块是要打印的正文。
+         data-print-empty：没有记录时为 true —— 打印脚本会先说一声，
+         而不是默默打出一张白纸 -->
+    <div
+      class="card"
+      style="padding:0;overflow:hidden"
+      data-print-root
+      :data-print-empty="printEmpty ? 'true' : 'false'"
+    >
       <template v-if="data.items?.length">
         <RecordTable
           v-if="viewMode === 'table'"
@@ -158,6 +176,7 @@ import RecordToolbar from '../components/record/RecordToolbar.vue'
 import RecordImportDialog from '../components/record/RecordImportDialog.vue'
 import { useRecordFields, useRecordView } from '../components/record/useRecordFields'
 import { recordDisplayName, defaultColumnKeys } from '../utils/recordFields'
+import { printPage } from '../utils/print'
 
 const route = useRoute()
 const router = useRouter()
@@ -167,6 +186,14 @@ const typeId = computed(() => parseInt(route.params.typeId))
 const entityType = ref(null)
 const allTypes = ref([])
 const data = ref({ items: [], total: 0 })
+
+// ===== 打印 =====
+// 一条记录都没有的时候，打出来就是一张白纸 —— 先说清楚，别让用户以为程序坏了
+const printEmpty = computed(() => !(data.value.items || []).length)
+
+function onPrint() {
+  printPage()
+}
 const loading = ref(false)
 const keyword = ref('')
 const page = ref(1)

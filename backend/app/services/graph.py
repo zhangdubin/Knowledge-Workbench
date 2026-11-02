@@ -46,6 +46,19 @@ def _record_node(rec: EntityRecord, et: EntityType | None) -> dict:
     }
 
 
+def _note_node(rec: EntityRecord, et: EntityType | None) -> dict:
+    """笔记节点：type_name 固定写「笔记」。
+
+    为什么固定：业务记录节点显示的是模型名（「项目管理」「客户」），
+    笔记若显示成别的名字，用户分不清「这一条是笔记、不是一条业务记录」——
+    而「笔记和业务记录之间是有关系的」正是要让人看见的东西。
+    """
+    node = _record_node(rec, et)
+    node["type_name"] = "笔记"
+    node["icon"] = "📝"
+    return node
+
+
 def _doc_node(doc: Document) -> dict:
     return {
         "id": did_node_id(doc.id),
@@ -389,6 +402,13 @@ async def get_global_graph(db: AsyncSession, limit: int = 300,
     这是「一屏看清业务网」的视图，节点上限卡在 limit。
     笔记（note）及其双链属于「知识图谱」，不在这里混入 —— 否则两个图谱
     职责重叠，全局视图会被笔记的双链占满，业务关联反而看不清。
+
+    但有一类笔记例外：**因业务关系被引用到的那篇笔记**
+    （「关联知识」关系：项目管理 → 笔记）。
+    那种笔记是业务关系的一端，不是「散落的笔记」——
+    用户在图上找的正是「这个项目跟哪篇笔记有关」，
+    早先把它连边带节点一起跳过，于是那条边整个消失，
+    看上去就只剩「数据中心里面某个文件」。
     """
     col = _Collector(limit=limit * 2)
     all_ets = {t.id: t for t in (await db.execute(select(EntityType))).scalars().all()}
@@ -433,10 +453,15 @@ async def get_global_graph(db: AsyncSession, limit: int = 300,
                 EntityRecord.deleted_at.is_(None),
             )
         )).scalars().all():
-            # 对端也不应该是笔记：业务关联的「另一端」只能是业务记录或文件
+            et = all_ets.get(rec.entity_type_id)
             if note_type_id is not None and rec.entity_type_id == note_type_id:
+                # 因业务关系被引用到的笔记要进来：
+                # 它是这条关系的另一端，不进来这条边就画不出来。
+                # 只补「被引用到的」这一类，不把全部笔记塞进来 ——
+                # 那是知识图谱的职责（当初把两个图谱分开就是为了这个）。
+                col.node(_note_node(rec, et))
                 continue
-            col.node(_record_node(rec, all_ets.get(rec.entity_type_id)))
+            col.node(_record_node(rec, et))
 
     for rr, rd in rows:
         src = rid_node_id(rr.source_record_id) if rr.source_record_id else did_node_id(rr.source_document_id)
@@ -563,8 +588,24 @@ async def get_stats(db: AsyncSession, principal=None) -> dict:
     }
 
 
-async def get_notes_graph(db: AsyncSession, tag: str | None = None, limit: int = 300) -> dict:
-    """笔记全局图谱：所有 Note 记录 + 双链"""
+async def get_notes_graph(db: AsyncSession, tag: str | None = None,
+                          limit: int = 300, principal=None) -> dict:
+    """笔记全局图谱：所有 Note 记录 + 双链 + 笔记连到业务记录的关联
+
+    为什么也要画「笔记 ↔ 业务记录」：
+        笔记常常是围着某个项目、客户、文献写的。
+        只画双链的话这些笔记在图上是孤立的 —— 用户看到一堆散点，
+        看不出「这篇笔记关联了哪个项目」。
+        用户原话就是「关联图谱没体现出关联关系」。
+
+    回收站里的笔记不进图：
+        「已经删掉」的东西还带着标题站在图上，等于删除没生效。
+
+    权限：
+        业务记录那一侧按模型读权限裁（和别的图谱同一套 access 口径）。
+        没有身份时（principal 为空）**不画**业务记录那一侧 ——
+        画了又没法裁，等于把读不到的记录标题漏出去。
+    """
     et = (await db.execute(
         select(EntityType).where(EntityType.key == "note")
     )).scalar_one_or_none()
@@ -572,23 +613,24 @@ async def get_notes_graph(db: AsyncSession, tag: str | None = None, limit: int =
         return {"nodes": [], "edges": [], "truncated": False}
 
     records = (await db.execute(
-        select(EntityRecord).where(EntityRecord.entity_type_id == et.id)
-        .order_by(EntityRecord.updated_at.desc()).limit(limit)
+        select(EntityRecord).where(
+            EntityRecord.entity_type_id == et.id,
+            EntityRecord.deleted_at.is_(None),
+        ).order_by(EntityRecord.updated_at.desc()).limit(limit)
     )).scalars().all()
 
     col = _Collector(limit=limit + 50)
     rec_ids = set()
     for r in records:
+        data_of = r.data or {}
         if tag:
-            tags = r.data.get("tags") or []
+            tags = data_of.get("tags") or []
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",") if t.strip()]
             if tag not in tags:
                 continue
-        node = _record_node(r, et)
-        node["type_name"] = "笔记"
-        node["icon"] = "📝"
-        node["tags"] = list(r.data.get("tags") or [])
+        node = _note_node(r, et)
+        node["tags"] = list(data_of.get("tags") or [])
         col.node(node)
         rec_ids.add(r.id)
 
@@ -606,6 +648,45 @@ async def get_notes_graph(db: AsyncSession, tag: str | None = None, limit: int =
             col.edge(f"rr-{rr.id}", rid_node_id(rr.source_record_id),
                      rid_node_id(rr.target_record_id), rd.name, "wikilink")
 
+    if rec_ids and principal is not None:
+        # 笔记连到业务记录的边（「关联知识」关系）
+        #
+        # 为什么只在有身份时画：业务记录节点要按模型读权限裁，
+        # 没有身份就裁不了 —— 宁可少画，也不能把读不到的记录标题漏出去。
+        biz_rows = (await db.execute(
+            select(RelationRecord, RelationDef)
+            .join(RelationDef, RelationDef.id == RelationRecord.relation_def_id)
+            .where(
+                (RelationRecord.source_record_id.in_(rec_ids)
+                 | RelationRecord.target_record_id.in_(rec_ids)),
+                RelationDef.key != "note_wikilink",
+            )
+        )).all()
+        peer_ids: set[int] = set()
+        for rr, _rd in biz_rows:
+            for rid in (rr.source_record_id, rr.target_record_id):
+                if rid:
+                    peer_ids.add(rid)
+        peer_ids -= rec_ids
+        ets = {t.id: t for t in (await db.execute(select(EntityType))).scalars().all()}
+        for rec in (await db.execute(
+            select(EntityRecord).where(
+                EntityRecord.id.in_(peer_ids),
+                EntityRecord.deleted_at.is_(None),
+            )
+        )).scalars().all():
+            pet = ets.get(rec.entity_type_id)
+            if pet is not None and pet.key == "note":
+                col.node(_note_node(rec, pet))
+            else:
+                col.node(_record_node(rec, pet))
+        for rr, rd in biz_rows:
+            src = rid_node_id(rr.source_record_id) if rr.source_record_id else ""
+            tgt = rid_node_id(rr.target_record_id) if rr.target_record_id else ""
+            if not src or not tgt:
+                continue
+            col.edge(f"rr-{rr.id}", src, tgt, rd.name, "relation")
+
     data = col.out()
-    # 笔记图谱默认只画双链，reference 字段（父笔记）单独标注成另一种边更清晰
-    return data
+    # 权限裁剪统一走 access 那条路（记录按模型读权限），不在这里另写一套
+    return await filter_graph_by_access(db, principal, data)

@@ -222,10 +222,17 @@
  * 养料 DNA 的「DNA 双螺旋图谱」
  *
  * 视觉隐喻：把资料摊成一条测序轨道
- *   左链 = 知识链（基因 gene + 文件 document + 章节 section）—— 知识与骨架
- *   右链 = 证据链（记录 record）—— 挂在骨架上的东西
+ *   左链 = 知识链（基因 gene + 养料库 library）—— 知识本身
+ *   右链 = 证据链（文件 document + 章节 section + 记录 record）—— 知识从哪儿来、落在哪儿
  *   中间的碱基对 = 跨链的边（encode / attach）
  *   同链的边（structure / relation）是这一侧的横档
+ *
+ * 为什么文件在证据链（用户提的，这次改了）：
+ *   文件不是知识，知识是从它身上提炼出来的基因。
+ *   文件摆在知识链里，等于宣称「这些文件是知识」，名不副实；
+ *   而且文件本来就在数据中心里，它是产物/材料。
+ *   改完还有个额外好处：54 条「编码自」全部跨链，
+ *   两链之间才真的连成梯子（以前只有记录那半边是碱基对）。
  *
  * 布局为什么不用力导向（这是上一版最大的坑）：
  *   力导向的节点会飘 —— 实测被甩到 y=2300，而画布才 458 高，
@@ -529,11 +536,16 @@ const nodes = computed(() => {
   if (filter.value === 'all') {
     out = all.filter((n) => n.kind !== 'gene' || geneIds.value.has(n.id))
   } else if (filter.value === 'knowledge') {
+    // 知识链 = 基因（+ 养料库这种知识的组织单位）。
+    // 文件与章节归证据链 —— 文件不是知识，是知识从哪儿来的。
     out = all.filter(
-      (n) => n.kind === 'gene' || n.kind === 'document' || n.kind === 'section' || n.kind === 'library'
+      (n) => n.kind === 'gene' || n.kind === 'library'
     ).filter((n) => n.kind !== 'gene' || geneIds.value.has(n.id))
   } else {
-    out = all.filter((n) => n.kind === 'record')
+    // 证据链 = 数据中心文件 + 它们的章节 + 业务记录。
+    out = all.filter(
+      (n) => n.kind === 'record' || n.kind === 'document' || n.kind === 'section'
+    )
   }
   // 图例关掉的类别不画
   out = out.filter((n) => !offNodeKinds.value.has(n.kind))
@@ -703,20 +715,16 @@ function computeLayout() {
     }
   }
 
-  // ---- 左链的文件顺序 ----
-  let docOrder = docs.slice().sort((a, b) => {
-    const w = (b.meta?.words || 0) - (a.meta?.words || 0)
-    if (w) return w
-    return String(a.id).localeCompare(String(b.id), 'zh')
-  })
-  if (seed.value % 2 === 1) docOrder = docOrder.slice().reverse()
-
-  // ---- 右链：记录。先用关系子图做一次 DFS，让互相关联的记录挨着 ----
+  // ---- 右链的初始顺序 ----
+  // 记录之间先用关系子图做一次 DFS，让互相关联的记录挨着；
+  // 文件按字数排在前面（字多的信息量大，先看）。
+  // 「换个布局」按钮靠 seed 换起点；重心迭代里也掺一点初始位置 ——
+  // 纯重心迭代会收敛到同一个解，那样按钮就白按了。
   const deg = (id) => (relAdj.get(id) || []).length
   const recSeed = recs.slice().sort(
     (a, b) => deg(b.id) - deg(a.id) || String(a.id).localeCompare(String(b.id)))
   const visited = new Set()
-  let recOrder = []
+  const seedOrder = []
   const startAt = seed.value % Math.max(1, recSeed.length)
   const rotated = recSeed.slice(startAt).concat(recSeed.slice(0, startAt))
   for (const r of rotated) {
@@ -726,110 +734,106 @@ function computeLayout() {
       const id = queue.shift()
       if (visited.has(id)) continue
       visited.add(id)
-      recOrder.push(byId.get(id))
+      const node = byId.get(id)
+      if (node) seedOrder.push(node)
       for (const nb of relAdj.get(id) || []) if (!visited.has(nb)) queue.push(nb)
     }
   }
-  for (const r of recs) if (!visited.has(r.id)) recOrder.push(r)
+  for (const r of recs) if (!visited.has(r.id)) seedOrder.push(r)
+  const docSeed = docs.slice().sort((a, b) => {
+    const w = (b.meta?.words || 0) - (a.meta?.words || 0)
+    if (w) return w
+    return String(a.id).localeCompare(String(b.id), 'zh')
+  })
+  if (seed.value % 2 === 1) docSeed.reverse()
+  let rightItems = [...docSeed, ...seedOrder]
+
+  // ---- 两条链的分工 ----
+  // 左链 = 知识：基因（以及养料库这种「知识的组织单位」）。
+  // 右链 = 证据：数据中心文件、它们的章节、业务记录。
+  //
+  // 为什么文件要挪到右链（用户提的）：
+  //   文件不是知识 —— 知识是从它身上提炼出来的基因。
+  //   把文件摆在知识链里，等于宣称「这些文件是知识」，名不副实；
+  //   而且文件本来就在数据中心里，它是**产物/材料**，属于证据那一侧。
+  //   更要紧的是：画边的规则里本来就写着
+  //   「基因 → 出处：跨链的是碱基对，同链的是短横档」——
+  //   文件在左链时，「编码自文件」被画成短横档，碱基对只剩记录那半边，
+  //   双螺旋少了一半。文件挪到右链后，54 条「编码自」全部跨链，
+  //   两链之间才真的连成梯子。
+  //
+  // 章节跟着文件走：章节是文件的结构，不是独立的知识；
+  // 拆到两条链上会让「文件 → 章节」横跨双链，语义就乱了。
 
   // ---- 重心法微调：让「挂载关系」的两端在 y 上尽量对齐 ----
-  // 用归一化位置（0~1）而不是行号，两条链长度不同时对齐才不会歪。
-  for (let it = 0; it < 10; it++) {
-    const docU = new Map(docOrder.map((d, i) => [d.id, i / Math.max(1, docOrder.length)]))
-    const recU = new Map(recOrder.map((r, i) => [r.id, i / Math.max(1, recOrder.length)]))
-    const rScore = new Map()
-    for (const r of recOrder) {
-      const a = (recDocs.get(r.id) || []).map((id) => docU.get(id)).filter((v) => v !== undefined)
-      const b = (relAdj.get(r.id) || []).map((id) => recU.get(id)).filter((v) => v !== undefined)
+  // 文件与记录本来就有挂载关系（字段：附件、所属项目、关联数据中心），
+  // 混在一条链里才能让「文件挨着用到它的记录」，一眼看出谁挂在谁身上。
+  // 用归一化位置（0~1）而不是行号，链长度变化时对齐才不会歪。
+  const initU = new Map(rightItems.map((n, i) => [n.id, i / Math.max(1, rightItems.length)]))
+  for (let it = 0; it < 12; it++) {
+    const u = new Map(rightItems.map((n, i) => [n.id, i / Math.max(1, rightItems.length)]))
+    const score = new Map()
+    for (const n of rightItems) {
       const parts = []
+      const mounted = (n.kind === 'document' ? docRecs.get(n.id) : recDocs.get(n.id)) || []
+      const a = mounted.map((id) => u.get(id)).filter((v) => v !== undefined)
       if (a.length) parts.push([0.68, a.reduce((x, y) => x + y, 0) / a.length])
-      if (b.length) parts.push([0.32, b.reduce((x, y) => x + y, 0) / b.length])
-      rScore.set(
-        r.id,
-        parts.length
-          ? parts.reduce((s, p) => s + p[0] * p[1], 0) / parts.reduce((s, p) => s + p[0], 0)
-          : recU.get(r.id)
-      )
+      if (n.kind === 'record') {
+        const b = (relAdj.get(n.id) || []).map((id) => u.get(id)).filter((v) => v !== undefined)
+        if (b.length) parts.push([0.32, b.reduce((x, y) => x + y, 0) / b.length])
+      }
+      const base = parts.length
+        ? parts.reduce((s, p) => s + p[0] * p[1], 0) / parts.reduce((s, p) => s + p[0], 0)
+        : (u.get(n.id) ?? 0.5)
+      // 掺 0.25 的初始位置：不然纯重心迭代每次都收敛到同一个解
+      score.set(n.id, base * 0.75 + (initU.get(n.id) ?? 0.5) * 0.25)
     }
-    recOrder = recOrder.slice().sort(
-      (a, b) => (rScore.get(a.id) - rScore.get(b.id)) || String(a.id).localeCompare(String(b.id)))
-
-    const recU2 = new Map(recOrder.map((r, i) => [r.id, i / Math.max(1, recOrder.length)]))
-    const dScore = new Map()
-    for (const d of docOrder) {
-      const a = (docRecs.get(d.id) || []).map((id) => recU2.get(id)).filter((v) => v !== undefined)
-      dScore.set(d.id, a.length ? a.reduce((x, y) => x + y, 0) / a.length : docU.get(d.id))
-    }
-    docOrder = docOrder.slice().sort(
-      (a, b) => (dScore.get(a.id) - dScore.get(b.id)) || String(a.id).localeCompare(String(b.id)))
+    rightItems = rightItems.slice().sort(
+      (a, b) => (score.get(a.id) - score.get(b.id)) || String(a.id).localeCompare(String(b.id)))
   }
 
-  // ---- 摊平成左链的行：养料库 → （每份文件：它的基因 → 文件 → 章节） ----
-  // 基因紧挨着它的出处，encode 边就成了短短一档，不会把结构压住。
-  const leftRows = []
-  const libGenes = []
-  for (const lib of libs) {
-    for (const gid of genesOf.get(lib.id) || []) libGenes.push(gid)
-  }
-  const usedGenes = new Set()
-  const takeGenes = (targetId) => {
-    const out = []
-    for (const gid of genesOf.get(targetId) || []) {
-      if (usedGenes.has(gid)) continue
-      usedGenes.add(gid)
-      out.push(gid)
-    }
-    return out
-  }
-
-  for (const gid of libGenes) {
-    const g = byId.get(gid)
-    if (g) leftRows.push(g)
-  }
-  for (const lib of libs) leftRows.push(lib)
-
-  for (const d of docOrder) {
-    for (const gid of takeGenes(d.id)) {
-      const g = byId.get(gid)
-      if (g) leftRows.push(g)
-    }
-    leftRows.push(d)
-    for (const sid of secOfDoc.get(d.id) || []) {
-      const s = byId.get(sid)
-      if (s) leftRows.push(s)
+  // ---- 右链的行：文件（带自己的章节）与记录 ----
+  const rightRows = []
+  const placedRight = new Set()
+  for (const n of rightItems) {
+    rightRows.push(n)
+    placedRight.add(n.id)
+    if (n.kind === 'document') {
+      for (const sid of secOfDoc.get(n.id) || []) {
+        const s = byId.get(sid)
+        if (s) { rightRows.push(s); placedRight.add(s.id) }
+      }
     }
   }
-  // 出处是记录、或没有出处的基因：也要留在左链（知识在左、出处在右，
-  // encode 边跨过去就是碱基对），插到与出处高度相近的位置。
-  const orphans = []
-  for (const g of visibleGenes.value) {
-    if (usedGenes.has(g.id)) continue
-    usedGenes.add(g.id)
-    orphans.push(g)
-  }
-  const recIndexOf = new Map(recOrder.map((r, i) => [r.id, i]))
-  orphans.sort((a, b) => {
-    const ia = recIndexOf.get(geneTarget.get(a.id)) ?? 99999
-    const ib = recIndexOf.get(geneTarget.get(b.id)) ?? 99999
-    return ia - ib
-  })
-  for (const g of orphans) {
-    const ri = recIndexOf.get(geneTarget.get(g.id))
-    const targetU = ri === undefined ? 1 : (ri + 0.5) / Math.max(1, recOrder.length)
-    let at = leftRows.length
-    for (let i = 0; i < leftRows.length; i++) {
-      if ((i + 0.5) / Math.max(1, leftRows.length) >= targetU) { at = i; break }
-    }
-    leftRows.splice(at, 0, g)
-  }
-  // 没挂到任何文件下的章节也补进去
-  const inLeft = new Set(leftRows.map((n) => n.id))
+  // 没挂到任何文件下的章节：也得有个位置（跟文件走才说得通）
   for (const n of list) {
-    if (n.kind === 'section' && !inLeft.has(n.id)) {
-      leftRows.push(n)
-      inLeft.add(n.id)
+    if (n.kind === 'section' && !placedRight.has(n.id)) {
+      rightRows.push(n)
+      placedRight.add(n.id)
     }
   }
+
+  // ---- 左链的行：知识（基因） ----
+  //
+  // 基因按「它来自右边哪一项」排位 —— 这样基因与它的出处上下对齐，
+  // 碱基对就是一根**横档**，而不是斜的、绕来绕去的曲线。
+  const uRight = new Map(rightItems.map((n, i) => [n.id, i / Math.max(1, rightItems.length)]))
+  const leftEntries = []
+  for (const g of visibleGenes.value) {
+    const src = geneTarget.get(g.id)
+    const u = src !== undefined && uRight.has(src) ? uRight.get(src) : 0.5
+    leftEntries.push({ u, node: g })
+  }
+  // 养料库是知识的组织单位，留在左链；位置取它那些基因的中点
+  for (const lib of libs) {
+    const mine = leftEntries.filter((e) => (genesOf.get(lib.id) || []).includes(e.node.id))
+    const u = mine.length
+      ? mine.reduce((s, e) => s + e.u, 0) / mine.length
+      : 0.5
+    leftEntries.push({ u, node: lib })
+  }
+  leftEntries.sort((a, b) => a.u - b.u || String(a.node.id).localeCompare(String(b.node.id)))
+  const leftRows = leftEntries.map((e) => e.node)
 
   // ---- 编号（碱基编号） ----
   // 只写进 meta（普通对象），不碰响应式的节点本身 —— 详见 nodeMeta 的注释
@@ -849,16 +853,14 @@ function computeLayout() {
       meta[n.id] = { base: 'L', code: '库' }
     }
   }
-  for (const r of recOrder) {
-    meta[r.id] = { base: 'E', code: '' }
+  for (const n of rightRows) {
+    if (n.kind === 'record') meta[n.id] = { base: 'E', code: '' }
   }
   // 章节继承所属文件的颜色：看颜色就知道这段骨架挂在哪份文件下面
   for (const [secId, docId] of secParent) {
     if (meta[secId] && meta[docId]) meta[secId].base = meta[docId].base
   }
   nodeMeta.value = meta
-
-  const rightRows = recOrder
 
   // ---- 坐标 ----
   const leftLen = Math.max(leftRows.length, 1)
@@ -967,7 +969,12 @@ const { isFullscreen, toggle: toggleFullscreen } = useGraphFullscreen(onFullscre
  * ------------------------------------------------------------------ */
 
 function chainOf(n) {
-  return n && n.kind === 'record' ? 'r' : 'l'
+  // 两条链的分工（跟 computeLayout 里排行的是同一套）：
+  //   知识链 = 基因 + 养料库；证据链 = 文件 + 章节 + 记录。
+  // 文件归证据链：文件不是知识，是知识从哪儿来 —— 用户提的这条。
+  if (!n) return 'l'
+  if (n.kind === 'document' || n.kind === 'section' || n.kind === 'record') return 'r'
+  return 'l'
 }
 
 const hiSet = computed(() => {

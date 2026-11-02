@@ -11,7 +11,9 @@
     cd kb-workbench && python3 scripts/test-ai-truncation.py
 
 在容器里跑（容器里才有 fastapi/sqlalchemy 这些依赖）：
-    docker exec -w /app kb-backend python /app/../scripts/test-ai-truncation.py
+    docker run --rm -v "$PWD:/repo" --entrypoint python kb-workbench-backend \
+      /repo/scripts/test-ai-truncation.py
+    docker exec -w /app kb-backend python /repo/scripts/test-ai-truncation.py
 
 用 pytest 也能收集（如果环境里有 pytest）：
     pytest scripts/test-ai-truncation.py -v
@@ -22,8 +24,31 @@ import sys
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "backend"))
+# 把「app 包所在的目录」加进 sys.path。
+#
+# 为什么不是一个固定路径：同一个脚本有好几种跑法 ——
+# 仓库根目录下跑（ROOT/backend）、容器里把仓库挂到 /repo（/repo/backend）、
+# 容器里代码装在 /app（/app 本身就是 app 包的父目录）。
+# 写死一种，另外两种就报 ModuleNotFoundError: No module named 'app'，
+# 而这种错跟测试本身毫无关系，最容易把人带偏。
+def _add_app_path() -> None:
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent.parent / "backend",   # 仓库根目录布局
+        here.parent.parent,               # 仓库被整体挂进来时
+        Path("/app"),                      # 容器里代码装在 /app
+        Path("/repo/backend"),             # 容器里仓库挂在 /repo
+    ]
+    for c in candidates:
+        if (c / "app" / "services").is_dir():
+            sys.path.insert(0, str(c))
+            return
+    raise SystemExit(
+        "找不到 app 包：请在仓库根目录下跑，"
+        "或用 docker run -v \"$PWD:/repo\" ... /repo/scripts/test-ai-truncation.py")
+
+
+_add_app_path()
 
 from app.services import ai as ai_svc              # noqa: E402
 from app.services import ai_config as cfg_svc     # noqa: E402

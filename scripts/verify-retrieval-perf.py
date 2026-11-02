@@ -25,6 +25,26 @@ import sys
 import tempfile
 import time
 
+DOCKER_CMD = 'docker run --rm -v "$PWD/backend/app:/app/app:ro" -v "$PWD/scripts:/scripts:ro" --entrypoint python kb-workbench-backend:latest /scripts/verify-retrieval-perf.py'
+
+# 环境自检：脚本要跑在后端的运行环境里（Python 3.10+ / SQLAlchemy 2.x）。
+#
+# 为什么必须先自检：缺依赖时裸报错是
+# "No module named 'async_sessionmaker'" 或 "unsupported operand type(s) for |"，
+# 这种错跟脚本在验什么毫无关系，最容易把人带偏 —— 以为是功能挂了。
+# 所以先把话说清楚：环境不对，请去容器里跑。
+if sys.version_info < (3, 10):
+    raise SystemExit(
+        "需要 Python 3.10+（当前 %d.%d）。请在容器里跑：\n    %s"
+        % (sys.version_info[0], sys.version_info[1], DOCKER_CMD))
+try:
+    import sqlalchemy  # noqa: F401
+    from sqlalchemy.ext.asyncio import async_sessionmaker  # noqa: F401
+except Exception as _e:
+    raise SystemExit(
+        "需要 SQLAlchemy 2.x（当前报错：%s）。请在容器里跑：\n    %s"
+        % (_e, DOCKER_CMD))
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND = os.environ.get("KB_BACKEND_DIR") or os.path.join(REPO, "backend")
 if not os.path.isdir(os.path.join(BACKEND, "app")) and os.path.isdir("/app/app"):

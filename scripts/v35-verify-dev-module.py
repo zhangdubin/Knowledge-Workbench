@@ -28,6 +28,26 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+DOCKER_CMD = 'docker run --rm -i -v "$PWD/backend/app:/app/app:ro" --entrypoint python kb-workbench-backend - < scripts/v35-verify-dev-module.py'
+
+# 环境自检：脚本要跑在后端的运行环境里（Python 3.10+ / SQLAlchemy 2.x）。
+#
+# 为什么必须先自检：缺依赖时裸报错是
+# "No module named 'async_sessionmaker'" 或 "unsupported operand type(s) for |"，
+# 这种错跟脚本在验什么毫无关系，最容易把人带偏 —— 以为是功能挂了。
+# 所以先把话说清楚：环境不对，请去容器里跑。
+if sys.version_info < (3, 10):
+    raise SystemExit(
+        "需要 Python 3.10+（当前 %d.%d）。请在容器里跑：\n    %s"
+        % (sys.version_info[0], sys.version_info[1], DOCKER_CMD))
+try:
+    import sqlalchemy  # noqa: F401
+    from sqlalchemy.ext.asyncio import async_sessionmaker  # noqa: F401
+except Exception as _e:
+    raise SystemExit(
+        "需要 SQLAlchemy 2.x（当前报错：%s）。请在容器里跑：\n    %s"
+        % (_e, DOCKER_CMD))
+
 # 允许在仓库里直接 python3 scripts/v35-verify-dev-module.py 跑（依赖装在容器里时用不到）
 _HERE = globals().get("__file__") and os.path.dirname(os.path.abspath(__file__)) or ""
 _BACKEND = os.path.join(os.path.dirname(_HERE), "backend") if _HERE else ""

@@ -24,6 +24,25 @@ import sys
 import unittest
 from pathlib import Path
 
+DOCKER_CMD = 'docker run --rm -v "$PWD:/repo" --entrypoint python kb-workbench-backend /repo/scripts/test-ai-truncation.py'
+
+# 环境自检：脚本要跑在后端的运行环境里（Python 3.10+ / SQLAlchemy 2.x）。
+#
+# 为什么必须先自检：缺依赖时裸报错是
+# "unsupported operand type(s) for |"（3.9 不认 PEP 604 的类型写法）
+# 或 "No module named 'app'"，跟脚本在验什么毫无关系，最容易把人带偏。
+if sys.version_info < (3, 10):
+    raise SystemExit(
+        "需要 Python 3.10+（当前 %d.%d）。请在容器里跑：\n    %s"
+        % (sys.version_info[0], sys.version_info[1], DOCKER_CMD))
+try:
+    import sqlalchemy  # noqa: F401
+    from sqlalchemy.ext.asyncio import async_sessionmaker  # noqa: F401
+except Exception as _e:
+    raise SystemExit(
+        "需要 SQLAlchemy 2.x（当前报错：%s）。请在容器里跑：\n    %s"
+        % (_e, DOCKER_CMD))
+
 # 把「app 包所在的目录」加进 sys.path。
 #
 # 为什么不是一个固定路径：同一个脚本有好几种跑法 ——

@@ -29,7 +29,12 @@ class ConfigIn(BaseModel):
     api_key: str = ""
     model: str = ""
     temperature: float = 0.7
-    max_tokens: int = 1024
+    # 回答长度上限：默认 4096（1024 太小，写两句就被切断）
+    max_tokens: int = 4096
+    # 被截断时自动加大长度重试
+    auto_retry_on_truncation: bool = True
+    # 自动重试时长度上限能涨到的天花板
+    max_tokens_ceiling: int = 32768
     enabled: bool = False
     system_prompt: str = ""
     # True 清空 chat Key；传 "embed_api_key" 清空 embedding Key
@@ -89,11 +94,15 @@ class AskIn(BaseModel):
     # 钉住的养料库基因：不钉的话也会自动挑相关的基因，
     # 钉住的是「明确要用这一条」
     gene_ids: list[int] | None = None
+    # 续写：把已经写出来（被截断）的答案回灌，让模型从断点接着写
+    continuation: str = ""
 
 
 class AgentIn(BaseModel):
     question: str
     history: list[dict] | None = None
+    # 续写：把已经写出来（被截断）的内容回灌，让模型从断点接着写
+    continuation: str = ""
 
 
 class AgentConfirmIn(BaseModel):
@@ -107,6 +116,8 @@ class AgentConfirmIn(BaseModel):
     tool: str
     args: dict = {}
     digest: list[str] | None = None
+    # 续写（与 AgentIn 同义）：确认执行后如果回答又被截断，可以接着写
+    continuation: str = ""
 
 
 @router.post("/agent", dependencies=_AI)
@@ -121,7 +132,9 @@ async def agent(
     （status=awaiting_confirmation），用户确认后走 /agent/confirm。
     工具一律按当前登录主体的模型级权限过滤。
     """
-    return await agent_svc.run_agent(db, payload.question, principal, payload.history)
+    return await agent_svc.run_agent(db, payload.question, principal,
+                                   payload.history,
+                                   continuation=payload.continuation or "")
 
 
 @router.post("/agent/confirm", dependencies=_AI)
@@ -133,6 +146,7 @@ async def agent_confirm(
     """执行用户已确认的 AI 写操作，并把结果交给模型收尾"""
     return await agent_svc.run_agent(
         db, payload.question, principal, payload.history,
+        continuation=payload.continuation or "",
         confirmed={
             "tool": payload.tool,
             "args": payload.args or {},
@@ -275,7 +289,9 @@ async def ask(payload: AskIn, db: AsyncSession = Depends(get_db),
             off = await dna_library.answer_offline(db, payload.question, limit=5)
             return {"answer": off["text"], "context_count": len(off["citations"]),
                     "sources": off["citations"], "offline": True,
-                    "genes": off["genes"]}
+                    "genes": off["genes"],
+                    # 离线直答是把原文端出来，不存在长度截断
+                    "truncated": False, "finish_reason": "offline"}
     except Exception:
         pass
 
@@ -309,7 +325,11 @@ async def ask(payload: AskIn, db: AsyncSession = Depends(get_db),
             f"【{no} · 基因#{g['id']}】{g['title']}（{g['kind_label']}）\n{g['content']}")
         g["citation"] = no
 
-    answer = await ai_svc.ask(payload.question, context, genes=genes)
+    # 用 ask_meta 拿结构化信息：正文 + 是否被截断 + finish_reason。
+    # 以前只拿一段字符串，前端根本不知道「模型写了一半」。
+    meta = await ai_svc.ask_meta(payload.question, context, genes=genes,
+                                  continuation=payload.continuation or "")
+    answer = meta.get("content") or ""
     # 模型写的是「上下文第几块」，要还原成基因自己的编号 ——
     # 不还原的话，答案里的【基因#5】会被当成 5 号基因，而实际上是 25 号。
     aliases = {g["citation"]: g["id"] for g in genes if g.get("citation")}
@@ -330,7 +350,12 @@ async def ask(payload: AskIn, db: AsyncSession = Depends(get_db),
         log.warning("知识缺口记录失败：%s", e)
 
     return {"answer": answer, "context_count": len(context),
-            "sources": sources, "genes": genes}
+            "sources": sources, "genes": genes,
+            # 截断信息：前端据此提示「回答被截断」并给「继续写」入口
+            "truncated": bool(meta.get("truncated")),
+            "finish_reason": meta.get("finish_reason"),
+            "max_tokens": meta.get("max_tokens"),
+            "retried": bool(meta.get("retried"))}
 
 
 async def _collect_genes(db, principal, question: str,

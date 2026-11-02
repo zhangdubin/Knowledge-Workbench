@@ -26,7 +26,13 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import ai_config as cfg_svc
-from .ai import scrub_reasoning
+from .ai import (
+    scrub_reasoning,
+    scrub_reasoning_ex,
+    is_length_finish,
+    continuation_tail,
+    MAX_LENGTH_RETRIES,
+)
 from ..models import EntityType, FieldDefinition, EntityRecord
 
 log = logging.getLogger("kb.agent")
@@ -34,6 +40,17 @@ log = logging.getLogger("kb.agent")
 MAX_ROUNDS = 6
 MAX_TOOL_ITEMS = 20          # 工具结果最多带多少条明细回给模型
 MAX_DATA_KEYS = 60           # 单次写入最多多少字段，防超大 payload
+
+# 工具结果给「界面看」的长度上限：超过就标注被截断，
+# 并给界面留「查看完整 / 下载 JSON」的入口 —— 不能静默 slice。
+TOOL_RESULT_DISPLAY_MAX = 20000
+# 工具结果给「模型看」的长度上限：模型上下文比界面紧张，
+# 超了要截断并明确告诉模型「这里被截断了」，免得它当成查全了。
+TOOL_RESULT_MODEL_MAX = 8000
+# 历史对话回灌给模型时的长度预算
+HISTORY_MAX_TURNS = 8
+HISTORY_PER_MESSAGE_MAX = 6000
+HISTORY_TOTAL_MAX = 16000
 
 
 # ============ 工具定义（OpenAI function calling 规范）============
@@ -770,61 +787,176 @@ search_documents / search_genes）会立即执行，规则：
 """
 
 
-async def _chat_once(messages: list[dict], *, with_tools: bool = True) -> dict:
-    """单次对话：返回 {content, tool_calls}。真实 API 不可用时返回错误标记。
+async def _chat_once(messages: list[dict], *, with_tools: bool = True,
+                     max_tokens: int | None = None) -> dict:
+    """单次对话：返回 {content, tool_calls, finish_reason, truncated, ...}
 
     with_tools=False 时不给工具 —— 模型只能回一句话。
     用来做「最后一轮强制作答」：模型调工具调个没完的时候，
     摘掉工具它就没得选了。
+
+    被长度上限切断时会自动加大 max_tokens 重试（通用机制）：
+    以前这里完全不看 finish_reason，模型写到一半被砍断也照样
+    当成完整回答返回，用户看到的就是「回复到一半没了」。
     """
     cfg = cfg_svc.get_full_config()
     if not (cfg.get("enabled") and cfg.get("api_key") and cfg.get("base_url")):
         return {"error": "not_configured"}
+    base_tokens = int(max_tokens or cfg_svc.get_max_tokens(cfg))
+    ceiling = cfg_svc.get_max_tokens_ceiling(cfg)
+    retry_on = cfg_svc.auto_retry_enabled(cfg)
     payload = {
         "model": cfg.get("model") or "gpt-3.5-turbo",
         "messages": messages,
         "temperature": cfg.get("temperature", 0.3),
-        "max_tokens": cfg.get("max_tokens", 1024),
+        "max_tokens": base_tokens,
     }
     if with_tools:
         payload["tools"] = TOOL_SPECS
-    try:
-        async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
-            r = await client.post(
-                cfg["base_url"],
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {(cfg.get('api_key') or '').strip()}",
-                    "Content-Type": "application/json",
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-    except Exception as e:
-        detail = ""
-        if isinstance(e, httpx.HTTPStatusError):
-            from .ai import STATUS_HINT
-            detail = f"{e.response.status_code} {STATUS_HINT.get(e.response.status_code, '')}"
-        log.warning("agent 调用失败：%s %s", detail or type(e).__name__, e)
-        return {"error": f"AI 接口调用失败：{detail or type(e).__name__}"}
-
-    msg = data["choices"][0]["message"]
-    tool_calls = msg.get("tool_calls") or []
-    def _tc_args(fn: dict) -> str:
-        # OpenAI 规范是 arguments；MiniMax 等厂商返回 args，两者都收
-        return fn.get("arguments") or fn.get("args") or "{}"
-    return {
-        # MiniMax 等推理模型会把思考链混进 content，进 UI 前剥掉
-        "content": scrub_reasoning(msg.get("content") or ""),
-        "tool_calls": [
-            {
-                "id": tc["id"],
-                "name": tc["function"]["name"],
-                "args": json.loads(_tc_args(tc["function"])),
-            }
-            for tc in tool_calls
-        ],
+    headers = {
+        "Authorization": f"Bearer {(cfg.get('api_key') or '').strip()}",
+        "Content-Type": "application/json",
     }
+    attempt = 0
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
+                r = await client.post(
+                    cfg["base_url"],
+                    json=payload,
+                    headers=headers,
+                )
+                r.raise_for_status()
+                data = r.json()
+        except Exception as e:
+            detail = ""
+            if isinstance(e, httpx.HTTPStatusError):
+                from .ai import STATUS_HINT
+                detail = f"{e.response.status_code} {STATUS_HINT.get(e.response.status_code, '')}"
+            log.warning("agent 调用失败：%s %s", detail or type(e).__name__, e)
+            return {"error": f"AI 接口调用失败：{detail or type(e).__name__}"}
+
+        choice = (data.get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        finish_reason = choice.get("finish_reason")
+        content, _rinfo = scrub_reasoning_ex(msg.get("content") or "")
+        tool_calls = msg.get("tool_calls") or []
+
+        truncated = is_length_finish(finish_reason)
+        # 「没写完」有两种：被长度上限切断；正文被思考块吃光、什么都不剩。
+        empty = (not content.strip()) and (not tool_calls)
+        need_more = (truncated or empty) and retry_on
+        if (need_more and attempt < MAX_LENGTH_RETRIES
+                and payload["max_tokens"] < ceiling):
+            payload["max_tokens"] = min(payload["max_tokens"] * 2, ceiling)
+            attempt += 1
+            log.warning(
+                "agent 回答未完成（finish_reason=%s，空内容=%s），加大 max_tokens 到 %s 重试",
+                finish_reason, empty, payload["max_tokens"])
+            continue
+
+        def _tc_args(fn: dict) -> str:
+            # OpenAI 规范是 arguments；MiniMax 等厂商返回 args，两者都收
+            return fn.get("arguments") or fn.get("args") or "{}"
+
+        calls = []
+        for tc in tool_calls:
+            fn = tc.get("function") or {}
+            try:
+                args = json.loads(_tc_args(fn) or "{}")
+            except Exception:
+                # 模型偶尔会吐出半截 JSON；参数解析不了就当空参数，
+                # 总比整轮对话 500 掉强。
+                args = {}
+            if not isinstance(args, dict):
+                args = {}
+            calls.append({
+                "id": tc.get("id") or "",
+                "name": fn.get("name") or "",
+                "args": args,
+            })
+        return {
+            # MiniMax 等推理模型会把思考链混进 content，进 UI 前剥掉
+            "content": content,
+            "tool_calls": calls,
+            "finish_reason": finish_reason,
+            "truncated": truncated,
+            "retried": attempt > 0,
+            "max_tokens": payload["max_tokens"],
+        }
+
+
+def build_history(history: list[dict] | None,
+                  max_turns: int = HISTORY_MAX_TURNS,
+                  per_message: int = HISTORY_PER_MESSAGE_MAX,
+                  total: int = HISTORY_TOTAL_MAX) -> list[tuple[str, str]]:
+    """把前端传来的历史整理成「可回灌给模型」的对话
+
+    为什么不再简单粗暴地 [:4000]：
+    上一轮回答被截断时，[:4000] 砍掉的正好是「写到一半的后半段」，
+    模型看不到自己刚写到哪 —— 续写就会重复或者跳段。
+    所以超长时保留「头 + 尾」，尾巴是断点所在，最不能丢。
+    """
+    out: list[tuple[str, str]] = []
+    used = 0
+    for h in (history or [])[-max_turns:]:
+        role = h.get("role")
+        content = (h.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content:
+            continue
+        if len(content) > per_message:
+            half = per_message // 2
+            content = content[:half] + "\n…（中间省略）…\n" + content[-half:]
+        if used + len(content) > total and out:
+            break
+        out.append((role, content))
+        used += len(content)
+    return out
+
+
+def tool_trace_entry(name: str, args: dict, result) -> dict:
+    """工具结果进轨迹（给界面看）
+
+    以前超长结果直接被换成 {"note": "结果过长已截断"}，
+    界面上就只剩这句话 —— 用户既看不到结果、也不知道结果被截了。
+    现在：结果照发（带上限），并明确标出是否被截断、总长度多少，
+    界面据此给「查看完整 / 下载 JSON」的入口。
+    """
+    try:
+        body = json.dumps(result, ensure_ascii=False, default=str)
+    except Exception:
+        body = str(result)
+    truncated = len(body) > TOOL_RESULT_DISPLAY_MAX
+    shown = result
+    if truncated:
+        shown = {
+            "note": (f"结果过长（{len(body)} 字符），"
+                     f"以下只保留前 {TOOL_RESULT_DISPLAY_MAX} 字符"),
+            "preview": body[:TOOL_RESULT_DISPLAY_MAX],
+        }
+    return {
+        "name": name,
+        "args": args,
+        "result": shown,
+        "result_truncated": truncated,
+        "result_chars": len(body),
+    }
+
+
+def tool_result_for_model(result):
+    """工具结果回灌给模型时的版本（超长要截断并说明）"""
+    try:
+        body = json.dumps(result, ensure_ascii=False, default=str)
+    except Exception:
+        body = str(result)
+    if len(body) <= TOOL_RESULT_MODEL_MAX:
+        return result
+    return {
+        "note": (f"结果过长（{len(body)} 字符），"
+                 f"以下只保留前 {TOOL_RESULT_MODEL_MAX} 字符"),
+        "preview": body[:TOOL_RESULT_MODEL_MAX],
+    }
+
 
 
 def _call_key(name: str, args: dict) -> str:
@@ -884,28 +1016,43 @@ async def run_agent(
     *,
     confirmed: dict | None = None,
     allow_write: bool | None = None,
+    continuation: str = "",
 ) -> dict:
     """Agent 主循环：question → (工具调用×N) → 最终回答
 
     confirmed 非空时表示「用户已确认执行某个写操作」：先执行它、
     把结果作为已知事实喂给模型，再让模型继续用只读工具收尾。
 
-    返回 {status, answer, tool_calls, pending, rounds, error}
+    返回 {status, answer, tool_calls, pending, rounds, error,
+           truncated, finish_reason, max_tokens}
     - status='done' 正常回答；status='awaiting_confirmation' 有写操作待确认
+    - truncated=True：这段回答被长度上限切断了，前端要提示并给「继续写」入口
+    - continuation 非空：按「续写」处理，把已写内容回灌并要求接着写
     """
     question = (question or "").strip()
     if not question:
-        return {"status": "done", "answer": "问题为空", "tool_calls": [], "rounds": 0}
+        return {"status": "done", "answer": "问题为空", "tool_calls": [],
+                "rounds": 0, "truncated": False}
 
     if allow_write is None:
         allow_write = bool(cfg_svc.get_full_config().get("agent_write", True))
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for h in (history or [])[-8:]:          # 带上最近几轮，支持追问
-        role = h.get("role")
-        if role in ("user", "assistant") and h.get("content"):
-            messages.append({"role": role, "content": str(h["content"])[:4000]})
+    # 带上最近几轮，支持追问；超长的历史保留头尾（断点所在最不能丢）
+    for role, content in build_history(history):
+        messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": question})
+    if continuation:
+        # 续写：把已写出的内容当成模型自己刚说过的话回灌，
+        # 并明确要求从断点接着写 —— 不带上下文续写，模型会从头再答一遍，
+        # 用户看到的就是「刚才那段又来一遍」。
+        messages.append({"role": "assistant",
+                         "content": continuation_tail(continuation)})
+        messages.append({"role": "user", "content": (
+            "【继续写作】上面那段回答因为长度上限被截断了。"
+            "请从它最后一句被切断的地方接着往下写，"
+            "不要重复已经写过的内容，也不要重新开头。"
+        )})
 
     trace: list[dict] = []
     done_keys: set[str] = set()
@@ -963,17 +1110,31 @@ async def run_agent(
                     "answer": "还没有配置 AI 服务。请到「AI 设置」页填入接口地址与 Key，"
                               "之后我就能直接查询系统数据、按你的要求记账改数据了。",
                     "tool_calls": [], "rounds": 0, "error": "not_configured",
+                    "truncated": False,
                 }
             return {
                 "status": "done", "answer": resp["error"], "tool_calls": trace,
-                "rounds": round_no, "error": resp["error"],
+                "rounds": round_no, "error": resp["error"], "truncated": False,
             }
 
         calls = resp["tool_calls"]
         if not calls:
+            answer = (resp.get("content") or "").strip()
+            truncated = bool(resp.get("truncated"))
+            if not answer:
+                # 模型一个字都没给：多半是长度上限卡在了思考阶段，
+                # 或者回答被截得只剩思考块（剥掉思考块就空了）。
+                # 直接说清楚，别让用户对着空白气泡猜。
+                answer = ("模型这次没有给出文字回答，可能是「回答长度上限」不够，"
+                          "可在 AI 设置里调大后重试。")
+                truncated = True
             return {
-                "status": "done", "answer": resp["content"],
+                "status": "done", "answer": answer,
                 "tool_calls": trace, "rounds": round_no,
+                "truncated": truncated,
+                "finish_reason": resp.get("finish_reason"),
+                "max_tokens": resp.get("max_tokens"),
+                "retried": bool(resp.get("retried")),
             }
 
         messages.append({
@@ -1050,12 +1211,11 @@ async def run_agent(
             except Exception as e:
                 log.warning("agent 工具 %s 执行失败：%s", c["name"], e)
                 result = {"error": f"工具执行出错：{e}"}
-            trace.append({
-                "name": c["name"], "args": c["args"],
-                "result": result if len(json.dumps(result, ensure_ascii=False, default=str)) < 4000
-                          else {"note": "结果过长已截断"},
-            })
-            messages.append(_tool_msg(c["id"], result))
+            # 轨迹里保留完整结果（带上限）+ 明确的截断标记，
+            # 界面据此给「查看完整 / 下载 JSON」的入口；
+            # 回灌给模型的那份单独限长，别把上下文撑爆。
+            trace.append(tool_trace_entry(c["name"], c["args"], result))
+            messages.append(_tool_msg(c["id"], tool_result_for_model(result)))
 
         if pending_call:
             lead = (resp["content"] or "").strip()
@@ -1065,6 +1225,8 @@ async def run_agent(
                 "pending": pending_call,
                 "tool_calls": trace,
                 "rounds": round_no,
+                "truncated": bool(resp.get("truncated")),
+                "finish_reason": resp.get("finish_reason"),
             }
 
     # ---- 轮次用完：摘掉工具，强制它把已有材料说成答案 ----
@@ -1083,7 +1245,10 @@ async def run_agent(
         text = (final.get("content") or "").strip()
         if text and not final.get("error"):
             return {"status": "done", "answer": text,
-                    "tool_calls": trace, "rounds": MAX_ROUNDS}
+                    "tool_calls": trace, "rounds": MAX_ROUNDS,
+                    "truncated": bool(final.get("truncated")),
+                    "finish_reason": final.get("finish_reason"),
+                    "max_tokens": final.get("max_tokens")}
     except Exception as e:
         log.warning("agent 收尾作答失败：%s", e)
 
@@ -1091,6 +1256,7 @@ async def run_agent(
         "status": "done",
         "answer": "这个问题需要的查询步骤太多，我没能完成。换个更具体的问法试试？",
         "tool_calls": trace, "rounds": MAX_ROUNDS, "error": "too_many_rounds",
+        "truncated": False,
     }
 
 

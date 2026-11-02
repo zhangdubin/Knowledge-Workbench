@@ -40,14 +40,28 @@ _THINK_OPEN_RE_STRICT = re.compile(r"<(think|thinking|reasoning)>", re.IGNORECAS
 _THINK_CLOSE_RE = re.compile(r"</(think|thinking|reasoning)>", re.IGNORECASE)
 
 
+def scrub_reasoning_ex(text: str) -> tuple[str, dict]:
+    """剥离模型泄漏的思考块，同时报告「正文是不是被思考块吃掉了」
+
+    返回 (clean_text, info)：
+    - dropped：确实剥掉了思考块；
+    - unclosed：思考块没有闭合。
+      这几乎总是因为 max_tokens 在思考写到一半时把输出砍断了，
+      此时正文往往整段丢失 —— 调用方必须知道这件事，
+      才有办法「加大 max_tokens 重试」，而不是把一个空答案返回给用户。
+    """
+    if not text:
+        return text, {"dropped": False, "unclosed": False}
+    out = _THINK_CLOSED_RE.sub("", text)
+    closed_removed = out != text
+    out = _THINK_OPEN_RE.sub("", out)
+    unclosed = out != _THINK_CLOSED_RE.sub("", text)
+    return out.strip(), {"dropped": closed_removed or unclosed, "unclosed": unclosed}
+
+
 def scrub_reasoning(text: str) -> str:
     """剥离模型泄漏的思考块，保留真正的回答"""
-    if not text:
-        return text
-    out = _THINK_CLOSED_RE.sub("", text)
-    # 未闭合（被 max_tokens 截断）的情况：从起始标签起全部丢弃
-    out = _THINK_OPEN_RE.sub("", out)
-    return out.strip()
+    return scrub_reasoning_ex(text)[0]
 
 
 def _extract_error(r: "httpx.Response") -> str:
@@ -74,26 +88,71 @@ def _extract_error(r: "httpx.Response") -> str:
 
 # ============ 真实 API 调用（OpenAI 兼容）============
 
-async def chat_real(
+# 各家厂商表示「输出被长度上限切断」的 finish_reason 写法不完全一样：
+# OpenAI 用 length，MiniMax / 通义也是 length，个别推理模型用 max_output_tokens。
+# 不认全的话，被截断的答案会被当成完整答案原样返回给用户 ——
+# 这正是「回复到一半没了、界面还不提示」的根因。
+LENGTH_FINISH_REASONS = {"length", "max_tokens", "max_output_tokens", "truncated"}
+
+# 自动加长重试最多几次（每次把 max_tokens 翻倍）
+MAX_LENGTH_RETRIES = 2
+
+
+def is_length_finish(finish_reason: str | None) -> bool:
+    """finish_reason 是否表示「因为长度上限被切断」"""
+    if not finish_reason:
+        return False
+    return str(finish_reason).strip().lower() in LENGTH_FINISH_REASONS
+
+
+async def chat_real_meta(
     messages: list[dict],
     *,
     stream: bool = False,
-) -> str | AsyncIterator[str]:
+    max_tokens: int | None = None,
+) -> dict:
+    """调用真实 API，并返回「正文 + 结构化截断信息」
+
+    返回 {content, finish_reason, truncated, max_tokens, retried, usage, model}
+    - truncated=True：这段回答被长度上限切掉了，不是完整答案；
+    - retried=True：后端已经自动加大长度重试过。
+
+    为什么要有这一层：以前这里只回一段字符串，上游根本分不清
+    「模型写完了」和「模型被拦腰砍断」，用户只能看到半截回答，
+    而且没有任何提示 —— 只能自己猜是不是系统坏了。
+    """
     cfg = cfg_svc.get_full_config()
+    meta: dict = {
+        "content": "",
+        "finish_reason": None,
+        "truncated": False,
+        "max_tokens": 0,
+        "retried": False,
+        "usage": None,
+        "model": cfg.get("model") or "gpt-3.5-turbo",
+        "mock": False,
+    }
     if not cfg.get("enabled") or not cfg.get("api_key") or not cfg.get("base_url"):
-        # 降级到 mock
-        return await chat_mock(messages)
+        meta["content"] = await chat_mock(messages)
+        meta["finish_reason"] = "mock"
+        meta["mock"] = True
+        return meta
 
     # 清理 api_key：去除首尾空白、换行
     api_key = (cfg.get("api_key") or "").strip()
+
+    base_tokens = int(max_tokens or cfg_svc.get_max_tokens(cfg))
+    ceiling = cfg_svc.get_max_tokens_ceiling(cfg)
+    retry_on = cfg_svc.auto_retry_enabled(cfg)
 
     payload = {
         "model": cfg.get("model") or "gpt-3.5-turbo",
         "messages": messages,
         "temperature": cfg.get("temperature", 0.7),
-        "max_tokens": cfg.get("max_tokens", 1024),
+        "max_tokens": base_tokens,
         "stream": stream,
     }
+    meta["max_tokens"] = base_tokens
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -103,81 +162,146 @@ async def chat_real(
     url = cfg["base_url"]
 
     if stream:
-        async def gen():
-            in_think = False
-            buf = ""
-            try:
-                async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                    async with client.stream(
-                        "POST", url,
-                        json=payload, headers=headers,
-                    ) as resp:
-                        resp.raise_for_status()
-                        async for line in resp.aiter_lines():
-                            if not line or line.startswith(":"):
+        meta["stream"] = _stream_chat(url, payload, headers, messages, meta)
+        return meta
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            attempt = 0
+            while True:
+                r = await client.post(url, json=payload, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+                choice = (data.get("choices") or [{}])[0]
+                msg = choice.get("message") or {}
+                finish_reason = choice.get("finish_reason")
+                raw = msg.get("content") or ""
+                content, info = scrub_reasoning_ex(raw)
+
+                meta["finish_reason"] = finish_reason
+                meta["usage"] = data.get("usage")
+                meta["model"] = data.get("model") or payload["model"]
+
+                truncated = is_length_finish(finish_reason)
+                empty = not content.strip()
+
+                # 「没写完」有两种来路，都要靠加大 max_tokens 解决：
+                #   1) finish_reason=length —— 正文写到一半被上限砍断；
+                #   2) 正文为空 —— 模型把 max_tokens 全花在思考块上，
+                #      剥掉思考块之后什么都不剩（实测问「中标供应商」时命中过）。
+                # 之前只处理了第 2 种，第 1 种（更常见）被当成完整答案直接返回了。
+                need_more = (truncated or empty) and retry_on
+                if (need_more and attempt < MAX_LENGTH_RETRIES
+                        and payload["max_tokens"] < ceiling):
+                    payload["max_tokens"] = min(payload["max_tokens"] * 2, ceiling)
+                    attempt += 1
+                    meta["retried"] = True
+                    meta["max_tokens"] = payload["max_tokens"]
+                    logger.warning(
+                        "AI 回答未完成（finish_reason=%s，空内容=%s），加大 max_tokens 到 %s 重试",
+                        finish_reason, empty, payload["max_tokens"])
+                    continue
+
+                if empty:
+                    # 加到天花板还是空 → 退回本地规则引擎，别把空答案扔给用户
+                    meta["content"] = await chat_mock(messages)
+                    meta["finish_reason"] = "mock_fallback"
+                    meta["truncated"] = False
+                    break
+
+                meta["content"] = content
+                meta["truncated"] = truncated
+                break
+        return meta
+    except Exception as e:
+        # 优雅降级：真实 API 失败（额度用尽 / 网络异常 / Key 失效）时
+        # 回退到本地规则引擎，保证业务功能不中断
+        detail = ""
+        if isinstance(e, httpx.HTTPStatusError):
+            detail = f"{e.response.status_code} {STATUS_HINT.get(e.response.status_code, '')}"
+        logger.warning("AI 真实接口调用失败，降级到本地规则：%s %s", detail or type(e).__name__, e)
+        meta["content"] = await chat_mock(messages)
+        meta["finish_reason"] = "mock_fallback"
+        meta["truncated"] = False
+        return meta
+
+
+async def _stream_chat(url, payload, headers, messages, meta) -> AsyncIterator[str]:
+    """流式调用：边收边吐，并把 finish_reason 记进 meta
+
+    流式正文光看长度是看不出被截断的，只能靠最后一个 chunk 的
+    finish_reason 判断 —— 所以这里必须把它单独存下来。
+    """
+    in_think = False
+    buf = ""
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            async with client.stream(
+                "POST", url,
+                json=payload, headers=headers,
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line or line.startswith(":"):
+                        continue
+                    if line.startswith("data: "):
+                        chunk = line[6:]
+                        if chunk.strip() == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(chunk)
+                            choice = (data.get("choices") or [{}])[0]
+                            delta = choice.get("delta") or {}
+                            # 结束原因单独记：这是「有没有被截断」的唯一依据
+                            fr = choice.get("finish_reason")
+                            if fr:
+                                meta["finish_reason"] = fr
+                                meta["truncated"] = is_length_finish(fr)
+                            content = delta.get("content", "")
+                            if not content:
                                 continue
-                            if line.startswith("data: "):
-                                chunk = line[6:]
-                                if chunk.strip() == "[DONE]":
-                                    break
-                                try:
-                                    data = json.loads(chunk)
-                                    delta = data.get("choices", [{}])[0].get("delta", {})
-                                    content = delta.get("content", "")
-                                    if not content:
-                                        continue
-                                    # 跨 chunk 的 <think>…</think> 需要状态机处理，
-                                    # 否则思考链会一段段漏到前端
-                                    if in_think:
-                                        buf += content
-                                        if _THINK_CLOSE_RE.search(buf):
-                                            rest = _THINK_CLOSE_RE.split(buf, 1)[-1]
-                                            in_think, buf = False, ""
-                                            if rest:
-                                                yield rest
-                                    elif _THINK_OPEN_RE_STRICT.search(content):
-                                        if _THINK_CLOSE_RE.search(content):
-                                            yield scrub_reasoning(content)
-                                        else:
-                                            in_think, buf = True, content
-                                    else:
-                                        yield content
-                                except Exception:
-                                    pass
-            except Exception as e:
-                logger.warning("AI 流式接口失败，降级到本地规则：%s", e)
-                yield await chat_mock(messages)
-        return gen()
-    else:
-        try:
-            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                for attempt in range(2):
-                    r = await client.post(url, json=payload, headers=headers)
-                    r.raise_for_status()
-                    data = r.json()
-                    raw = (data["choices"][0]["message"].get("content") or "")
-                    out = scrub_reasoning(raw)
-                    if out.strip():
-                        return out
-                    # 空回答有两种来路：模型把 max_tokens 全花在思考块上，
-                    # 或者正文本身被 max_tokens 截断在思考块里。
-                    # 两种都表现为「剥掉思考块之后什么都不剩」——
-                    # 实测问「中标供应商」时命中过，接口 200，答案却是空的。
-                    # 这时候加 token 再问一次，比把空答案扔给用户强。
-                    logger.warning("AI 返回空内容（第 %s 次），加大 max_tokens 重试", attempt + 1)
-                    try:
-                        payload["max_tokens"] = int(payload.get("max_tokens") or 1024) * 2
-                    except (TypeError, ValueError):
-                        payload["max_tokens"] = 2048
-                return await chat_mock(messages)
-        except Exception as e:
-            # 优雅降级：真实 API 失败（额度用尽 / 网络异常 / Key 失效）时
-            # 回退到本地规则引擎，保证业务功能不中断
-            detail = ""
-            if isinstance(e, httpx.HTTPStatusError):
-                detail = f"{e.response.status_code} {STATUS_HINT.get(e.response.status_code, '')}"
-            logger.warning("AI 真实接口调用失败，降级到本地规则：%s %s", detail or type(e).__name__, e)
-            return await chat_mock(messages)
+                            # 跨 chunk 的 <think>…</think> 需要状态机处理，
+                            # 否则思考链会一段段漏到前端
+                            if in_think:
+                                buf += content
+                                if _THINK_CLOSE_RE.search(buf):
+                                    rest = _THINK_CLOSE_RE.split(buf, 1)[-1]
+                                    in_think, buf = False, ""
+                                    if rest:
+                                        yield rest
+                            elif _THINK_OPEN_RE_STRICT.search(content):
+                                if _THINK_CLOSE_RE.search(content):
+                                    yield scrub_reasoning(content)
+                                else:
+                                    in_think, buf = True, content
+                            else:
+                                yield content
+                        except Exception:
+                            pass
+    except Exception as e:
+        logger.warning("AI 流式接口失败，降级到本地规则：%s", e)
+        yield await chat_mock(messages)
+
+
+async def chat_real(
+    messages: list[dict],
+    *,
+    stream: bool = False,
+) -> str | AsyncIterator[str]:
+    """兼容旧调用：只取正文
+
+    需要知道「有没有被截断」的调用方请改用 chat_real_meta()。
+    """
+    meta = await chat_real_meta(messages, stream=stream)
+    if stream:
+        st = meta.get("stream")
+        if st is not None:
+            return st
+
+        async def _fallback():
+            yield await chat_mock(messages)
+        return _fallback()
+    return meta["content"]
 
 
 # ============ Mock 规则引擎 ============
@@ -407,6 +531,32 @@ async def suggest_title(content: str) -> str:
 
 async def ask(question: str, context: list[str] | None = None,
               genes: list[dict] | None = None) -> str:
+    """AI 问答（只取正文）
+
+    需要知道「有没有被截断」请用 ask_meta()。
+    """
+    meta = await ask_meta(question, context, genes)
+    return meta["content"]
+
+
+def continuation_tail(text: str, limit: int = 2000) -> str:
+    """截取已有回答的尾巴，供「续写」时回灌给模型
+
+    为什么留尾巴而不是全文：
+    全文可能好几千 token，回灌一遍就把预算吃光了；
+    但续写必须接在最后一句的断点上，所以尾巴不能丢。
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    if len(t) <= limit:
+        return t
+    return "…（前文已省略）\n" + t[-limit:]
+
+
+async def ask_meta(question: str, context: list[str] | None = None,
+                    genes: list[dict] | None = None,
+                    continuation: str = "") -> dict:
     """AI 问答（带上下文 + 养料库基因）
 
     四条提示词规矩，每条都对应一个真实踩过的坑：
@@ -447,10 +597,22 @@ async def ask(question: str, context: list[str] | None = None,
             used += len(c)
         sys_msg += "\n\n参考上下文：\n" + "\n---\n".join(kept)
 
-    return await chat_real([
+    msgs = [
         {"role": "system", "content": sys_msg},
         {"role": "user", "content": question},
-    ])
+    ]
+    if continuation:
+        # 续写：把已写出的内容当成模型自己刚说过的话回灌，
+        # 再明确要求「从断点接着写、不要重复」——
+        # 不带上下文续写，模型会从头再答一遍，用户看到的就是重复内容。
+        msgs.append({"role": "assistant",
+                     "content": continuation_tail(continuation)})
+        msgs.append({"role": "user", "content": (
+            "【继续写作】上面那段回答因为长度上限被截断了。"
+            "请从它最后一句被切断的地方接着往下写，"
+            "不要重复已经写过的内容，也不要重新开头。"
+        )})
+    return await chat_real_meta(msgs)
 
 
 def normalize_gene_citations(text: str, aliases: dict[int, int] | None = None) -> str:

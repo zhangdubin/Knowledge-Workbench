@@ -89,11 +89,26 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="最大 Tokens">
-              <el-input-number v-model="form.max_tokens" :min="64" :max="8192" :step="64" style="width:100%" />
+            <el-form-item label="回答长度上限">
+              <el-input-number v-model="form.max_tokens" :min="256" :max="32768" :step="256" style="width:100%" />
+              <div style="color:var(--text-tertiary);font-size:12px;margin-top:4px">
+                单次回答最多写多少 token（默认 4096 ≈ 3000 字）。<b>调小了会被中途切断</b> ——
+                以前默认 1024（约 700 字），模型写两句就到底，用户看到的就是「回复到一半没了」。
+              </div>
             </el-form-item>
           </el-col>
         </el-row>
+
+        <el-form-item label="截断自动加长">
+          <div class="agent-write">
+            <el-switch v-model="form.auto_retry_on_truncation" />
+            <span class="hint">
+              回答被长度上限切断时，自动把上限翻倍重试（最多 2 次，最高到
+              {{ form.max_tokens_ceiling || 32768 }} token）。
+              关掉的话回答会被原样截断，用户只能看到半截内容。
+            </span>
+          </div>
+        </el-form-item>
 
         <el-form-item label="系统提示词">
           <el-input v-model="form.system_prompt" type="textarea" :rows="2" />
@@ -297,7 +312,12 @@ const form = reactive({
   api_key: '',
   model: '',
   temperature: 0.7,
-  max_tokens: 1024,
+  // 回答长度上限：默认 4096（1024 太小，模型写两句就被切断）
+  max_tokens: 4096,
+  // 被截断时自动加大长度重试
+  auto_retry_on_truncation: true,
+  // 自动重试时长度上限能涨到的天花板
+  max_tokens_ceiling: 32768,
   enabled: false,
   system_prompt: '',
   agent_write: true,
@@ -515,7 +535,8 @@ const diagnosis = computed(() => {
 async function reset() {
   Object.assign(form, {
     provider: 'mock', base_url: '', api_key: '', model: '',
-    temperature: 0.7, max_tokens: 1024, enabled: false,
+    temperature: 0.7, max_tokens: 4096, enabled: false,
+    auto_retry_on_truncation: true, max_tokens_ceiling: 32768,
     system_prompt: '你是一个知识工作台 AI 助手，简洁准确。',
   })
   await save({ clear: true })

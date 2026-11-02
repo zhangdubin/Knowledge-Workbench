@@ -38,7 +38,18 @@
                   <el-tag v-else-if="t.confirmed" size="small" type="success" effect="plain">已执行</el-tag>
                   <el-icon class="tool-caret" :class="{ open: t._open }"><ArrowDown /></el-icon>
                 </div>
-                <pre v-if="t._open" class="tool-body">{{ prettyResult(t.result) }}</pre>
+                <div v-if="t._open" class="tool-body-wrap">
+                  <pre class="tool-body" :class="{ 'is-full': t._full }">{{ t._full ? toolResultText(t.result) : t._preview.text }}</pre>
+                  <!-- 结果太长时必须明说，不能静默 slice：
+                       用户看到半截 JSON 还以为这就是全部 -->
+                  <div v-if="toolTruncationNote(t, t._preview)" class="tool-truncated">
+                    <el-icon><WarningFilled /></el-icon>
+                    <span>{{ toolTruncationNote(t, t._preview) }}</span>
+                    <el-link v-if="t._preview.truncated" type="primary" :underline="false"
+                      @click="t._full = !t._full">{{ t._full ? '收起' : '查看完整' }}</el-link>
+                    <el-link type="primary" :underline="false" @click="downloadTool(t)">下载 JSON</el-link>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -105,6 +116,16 @@
             <!-- AI 回答按 Markdown 排版（表格/列表/代码块）；用户发言保持纯文本原样 -->
             <MarkdownText v-if="m.role === 'assistant'" class="msg-text" :content="m.content" />
             <div v-else class="msg-text">{{ m.content }}</div>
+
+            <!-- 回答被长度上限切断时必须明说，并给一键续写入口：
+                 用户只看到半截内容、却不知道发生了什么，是最糟的体验 -->
+            <div v-if="m.truncated" class="msg-truncated">
+              <el-icon><WarningFilled /></el-icon>
+              <span class="trunc-text">{{ noticeOf(m).text }}</span>
+              <el-button size="small" type="primary" plain :loading="m._continuing"
+                @click="continueAnswer(m, i)">{{ noticeOf(m).action }}</el-button>
+            </div>
+            <div v-if="m.truncated" class="trunc-hint">{{ noticeOf(m).hint }}</div>
           </div>
         </div>
 
@@ -144,6 +165,15 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Api } from '../api'
 import MarkdownText from './MarkdownText.vue'
+import {
+  toolResultText,
+  toolResultPreview,
+  toolTruncationNote,
+  toolDownloadFilename,
+  buildContinueRequest,
+  mergeContinuation,
+  truncationNotice,
+} from '../utils/chatTruncation'
 
 const props = defineProps({ modelValue: Boolean })
 const emit = defineEmits(['update:modelValue'])
@@ -202,13 +232,33 @@ function briefArgs(name, args = {}) {
   return ''
 }
 
-function prettyResult(r) {
-  if (r == null) return ''
-  try {
-    return JSON.stringify(r, null, 2).slice(0, 1500)
-  } catch {
-    return String(r)
-  }
+/** 工具结果的预览与截断标记（在消息进列表时就算好，模板里直接用） */
+function toolPreviewOf(t) {
+  if (!t._preview) t._preview = toolResultPreview(t.result)
+  return t._preview
+}
+
+/** 消息底部的截断提示 */
+function noticeOf(m) {
+  return truncationNotice(m.truncated, m.finish_reason) || { text: '', action: '', hint: '' }
+}
+
+/**
+ * 下载工具完整结果
+ *
+ * 以前长结果只显示前 1500 字符，连「被截断了」都不说，
+ * 用户既拿不到完整数据，也没法判断结果可不可信。
+ */
+function downloadTool(t) {
+  const blob = new Blob([toolResultText(t.result)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = toolDownloadFilename(t.name)
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 function goRecords(typeId) {
@@ -245,13 +295,24 @@ function pushAssistant(r, q, hist) {
   const msg = {
     role: 'assistant',
     content: r.answer || '（无回答）',
-    tools: (r.tool_calls || []).map(t => ({ ...t, _open: false })),
+    // 工具结果：预先算好预览与截断标记，模板里直接用
+    tools: (r.tool_calls || []).map(t => ({
+      ...t,
+      _open: false,
+      _full: false,
+      _preview: toolResultPreview(t.result),
+    })),
+    // 截断信息：后端明确告诉我们「这段被长度上限切断了」，
+    // 界面上要显示出来，还要给一键续写的入口
+    truncated: !!r.truncated,
+    finish_reason: r.finish_reason || null,
+    q,
+    hist,
+    _continuing: false,
   }
   if (r.status === 'awaiting_confirmation' && r.pending) {
     msg.pending = r.pending
     msg.state = 'idle'
-    msg.q = q
-    msg.hist = hist
   }
   messages.value.push(msg)
 }
@@ -275,6 +336,41 @@ async function send() {
     ElMessage.error('AI 助理调用失败')
   } finally {
     thinking.value = false
+    scrollBottom()
+  }
+}
+
+/**
+ * 一键续写：让 AI 从断点接着写
+ *
+ * 关键是把「已经写出来的内容」回灌进去（buildContinueRequest），
+ * 并且历史里不再放这一段 —— 否则模型会从头再答一遍，
+ * 用户看到的就是「刚才那段又来一次」。
+ */
+async function continueAnswer(m, i) {
+  if (!m || m._continuing) return
+  m._continuing = true
+  try {
+    const req = buildContinueRequest({
+      question: m.q,
+      // 历史到「本次提问之前」为止：正在续写的那条消息不进历史
+      history: historyOf(i - 1),
+      content: m.content,
+    })
+    const r = await Api.aiAgent(req.question, req.history, { continuation: req.continuation })
+    m.content = mergeContinuation(m.content, r.answer)
+    m.truncated = !!r.truncated
+    m.finish_reason = r.finish_reason || null
+    if (r.truncated) {
+      ElMessage.warning('回答仍被长度上限截断，可再点一次「继续写完」')
+    } else {
+      ElMessage.success('已续写完成')
+    }
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.message || '调用失败'
+    ElMessage.error('续写失败：' + detail)
+  } finally {
+    m._continuing = false
     scrollBottom()
   }
 }
@@ -344,6 +440,10 @@ function cancelPending(m) {
 .msg.user { justify-content: flex-end; }
 .msg .bubble {
   max-width: 88%;
+  /* flex 子项默认 min-width:auto：回答里带宽表格时，
+     气泡会被撑得比抽屉还宽，右侧内容直接被裁掉看不见。
+     加上 min-width:0 让长内容在气泡内部换行/横向滚动。 */
+  min-width: 0;
   border-radius: 12px;
   padding: 10px 13px;
   font-size: 13.5px;
@@ -397,6 +497,41 @@ function cancelPending(m) {
   overflow: auto;
   white-space: pre-wrap;
   font-family: var(--font-mono, monospace);
+}
+/* 点「查看完整」后给更大的高度，但仍可滚动，不做静默裁剪 */
+.tool-body.is-full { max-height: 420px; }
+
+/* 工具结果被截断时的说明条 */
+.tool-truncated {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 5px 10px;
+  border-top: 1px dashed var(--el-border-color);
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
+  font-size: 11.5px;
+}
+
+/* 回答被截断时的提示条 */
+.msg-truncated {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: var(--el-color-warning-light-9);
+  border: 1px solid var(--el-color-warning-light-7);
+  color: var(--el-color-warning-dark-2);
+  font-size: 12px;
+}
+.trunc-text { flex: 1; min-width: 0; }
+.trunc-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--el-text-color-placeholder);
 }
 
 /* ---------- 待确认操作卡片 ---------- */

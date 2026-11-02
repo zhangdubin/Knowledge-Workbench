@@ -89,6 +89,17 @@
       </div>
       <div v-else class="output-text"><MarkdownText :content="output" /></div>
 
+      <!-- 回答被长度上限截断时必须明说，并给一键续写入口：
+           用户只看到半截内容、却不知道发生了什么，是最糟的体验 -->
+      <div v-if="truncated" class="output-truncated">
+        <el-icon><WarningFilled /></el-icon>
+        <span class="trunc-text">{{ notice.text }}</span>
+        <el-button size="small" type="primary" plain :loading="continuing" @click="continueAnswer">
+          {{ notice.action }}
+        </el-button>
+      </div>
+      <div v-if="truncated" class="trunc-hint">{{ notice.hint }}</div>
+
       <div v-if="task === 'ask' && genes.length" class="output-src gene-src">
         <div class="src-title">引用了养料库基因（{{ genes.length }}）</div>
         <div class="src-list">
@@ -149,6 +160,11 @@ import { ElMessage } from 'element-plus'
 import { Api } from '../api'
 import MarkdownText from './MarkdownText.vue'
 import GenePicker from './GenePicker.vue'
+import {
+  buildContinueRequest,
+  mergeContinuation,
+  truncationNotice,
+} from '../utils/chatTruncation'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -216,6 +232,12 @@ const isTagOutput = computed(() => props.task === 'tags')
 const loading = ref(false)
 const rewriteStyle = ref('polish')
 const config = ref(null)
+// 回答是否被长度上限截断（后端会明确告知）
+const truncated = ref(false)
+const finishReason = ref('')
+const continuing = ref(false)
+const notice = computed(() =>
+  truncationNotice(truncated.value, finishReason.value) || { text: '', action: '', hint: '' })
 // 会议纪要、排版都能「应用到笔记」——
 // 排版这个任务原来只给建议清单、用不了；现在输出的是排版后的正文，直接能存进去
 const showApply = computed(() =>
@@ -260,6 +282,8 @@ async function run() {
   loading.value = true
   output.value = ''
   sources.value = []
+  truncated.value = false
+  finishReason.value = ''
   try {
     let resp
     if (props.task === 'summarize') {
@@ -291,6 +315,9 @@ async function run() {
       opts.gene_ids = pinned.value.map((g) => g.id)
       resp = await Api.aiAsk(input.value, ctx, opts)
       output.value = withCitationLinks(resp.answer)
+      // 后端明确告知是否被截断 —— 界面上要显示出来并给续写入口
+      truncated.value = !!resp.truncated
+      finishReason.value = resp.finish_reason || ''
       sources.value = resp.sources || []
       genes.value = resp.genes || []
       if (!sources.value.length && resp.context_count) {
@@ -301,6 +328,43 @@ async function run() {
     output.value = '（AI 调用失败：' + (e.message || e) + '）'
   } finally {
     loading.value = false
+  }
+}
+
+
+/**
+ * 一键续写：让 AI 从断点接着写
+ *
+ * 把已经写出来的内容回灌（buildContinueRequest），
+ * 并明确要求模型不要重复 —— 否则续写出来的又是同样一段话。
+ */
+async function continueAnswer() {
+  if (continuing.value) return
+  continuing.value = true
+  try {
+    const req = buildContinueRequest({
+      question: input.value,
+      history: [],
+      content: output.value,
+    })
+    const ctx = askScope.value === 'auto'
+      ? props.contextItems.map(i => typeof i === 'string' ? i : (i.snippet || i.content || ''))
+      : []
+    const opts = askScope.value === 'docs'
+      ? { document_ids: props.documentIds, auto_retrieve: false }
+      : { auto_retrieve: true }
+    opts.gene_ids = pinned.value.map((g) => g.id)
+    opts.continuation = req.continuation
+    const resp = await Api.aiAsk(input.value, ctx, opts)
+    output.value = mergeContinuation(output.value, withCitationLinks(resp.answer))
+    truncated.value = !!resp.truncated
+    finishReason.value = resp.finish_reason || ''
+    if (!resp.truncated) ElMessage.success('已续写完成')
+    else ElMessage.warning('回答仍被长度上限截断，可再点一次「继续写完」')
+  } catch (e) {
+    ElMessage.error('续写失败：' + (e.message || e))
+  } finally {
+    continuing.value = false
   }
 }
 
@@ -373,6 +437,26 @@ function applyOutput() {
 }
 .output-text {
   color: var(--text-primary);
+}
+
+/* 回答被截断时的提示条 */
+.output-truncated {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--warning-bg);
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+  color: var(--warning);
+  font-size: 12px;
+}
+.trunc-text { flex: 1; min-width: 0; }
+.trunc-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 .output-tags {
   display: flex;

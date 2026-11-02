@@ -8,9 +8,11 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -1176,6 +1178,71 @@ async def _offline_mode(db: AsyncSession) -> bool:
         return False
 
 
+# ---------- 基因表达度：后台写回 ----------
+#
+# 为什么检索路径上不能有写操作：
+#   SQLite 只有一个写者。搜索时顺手把命中基因的表达度 UPDATE 一把并 COMMIT，
+#   等于每来一个搜索请求就抢一次全局写锁，还要等一次落盘
+#   （实测 3~5ms，占关键词检索耗时的一多半）。并发搜索时所有请求
+#   挤在同一把锁上 —— 「搜的人越多越慢」，而慢的原因跟数据量毫无关系，
+#   是最难解释、也最难排查的一类慢。
+#
+# 放到后台写回，语义不变（还是「命中一次 +1」），只是不再挡着结果。
+
+async def _write_gene_usage(gene_ids: list[int]) -> None:
+    """把基因表达度写回库里（后台任务，不阻塞检索结果）"""
+    try:
+        from . import dna_library
+        from ..database import SessionLocal
+        # 独立会话：请求用的那个 session 在响应返回后就被关掉了，
+        # 后台任务不能碰它
+        async with SessionLocal() as s:
+            await dna_library.mark_gene_used(s, gene_ids)
+    except Exception as e:
+        log.warning("基因表达度后台写回失败：%s", e)
+
+
+def _schedule_gene_usage(gene_ids: list[int]) -> None:
+    """把表达度更新丢到后台去做"""
+    if not gene_ids:
+        return
+    try:
+        asyncio.get_running_loop().create_task(
+            _write_gene_usage(list(dict.fromkeys(gene_ids))))
+    except RuntimeError:
+        # 没有运行中的事件循环（同步调用场景）：直接跳过，
+        # 表达度只是度量，丢一次不影响业务
+        pass
+
+
+async def _embed_with_budget(query: str, budget: float,
+                             meta_info: dict) -> list[float] | None:
+    """取查询向量，但不许超过本次检索的预算
+
+    语义通道要打远端接口，是整条检索链路上唯一的大额等待
+    （实测一次 380ms+，网络差时更久）。给它一个明确的墙钟上界：
+    超了就降级成关键词结果，并在返回里说清楚「语义通道超时已跳过」——
+    用户看到的是「少了一条通道」，而不是「一直转圈」。
+
+    budget <= 0 表示不设上界（信任网络，或把上界交给运维配置）。
+    """
+    if budget <= 0:
+        return await embed_svc.embed_query(query)
+    try:
+        return await asyncio.wait_for(embed_svc.embed_query(query),
+                                      timeout=budget)
+    except asyncio.TimeoutError:
+        meta_info["degraded"] = True
+        meta_info["degraded_reason"] = (
+            f"语义通道超过 {budget:.1f}s 未返回，已降级为关键词检索")
+        return None
+    except Exception as e:
+        meta_info["degraded"] = True
+        meta_info["degraded_reason"] = (
+            f"语义通道异常（{type(e).__name__}），已降级为关键词检索")
+        return None
+
+
 async def search_documents(
     db: AsyncSession,
     query: str,
@@ -1193,15 +1260,26 @@ async def search_documents(
     列表展示要片段、AI 问答要原文，只有一个 document_id 是不够的。
     """
     q = (query or "").strip()
+    # 检索的墙钟上界：从进门开始算，超了就得给结论（哪怕是降级的结论）
+    t_start = time.perf_counter()
+    budget = float(settings.search_timeout or 0)
     if not q:
         return {"items": [], "query": q, "mode": mode,
-                "channels": {"fts": 0, "vector": 0}}
+                "channels": {"fts": 0, "vector": 0},
+                "elapsed_ms": 0, "degraded": False,
+                "degraded_reason": "", "truncated": False,
+                "truncated_reason": ""}
 
     fts_hits: list[dict] = []
     vec_hits: list[dict] = []
     vec_chunk_hits: list[dict] = []
     gene_hits: list[dict] = []
     gene_doc_ids: list[int] = []
+    # 检索元信息：耗时、降级、截断。
+    # 前端要拿它说人话（「命中过多，已取前 N 条」「语义通道超时已降级」），
+    # 用户看到的是「已经出结果了，只是少了一条通道」，而不是干等。
+    meta_info: dict = {"degraded": False, "degraded_reason": "",
+                       "truncated": False, "truncated_reason": ""}
 
     if mode in ("hybrid", "keyword"):
         fts_hits = await docindex.fts_search(db, q, limit * 3)
@@ -1238,7 +1316,10 @@ async def search_documents(
     # 少一条通道，总比整个检索瘫掉强。
     offline = await _offline_mode(db)
     if mode in ("hybrid", "semantic") and not offline:
-        qvec = await embed_svc.embed_query(q)
+        # 剩下的预算留给语义通道：本地那点查询已经花掉的时间要扣掉，
+        # 否则「上界」就不是上界，而是「上界 + 本地耗时」
+        remain = (budget - (time.perf_counter() - t_start)) if budget > 0 else 0
+        qvec = await _embed_with_budget(q, remain, meta_info)
         if qvec:
             # 要的块数不能只按文档数给：向量通道是块级的，
             # 给少了就等于只让排名靠前的那几篇文档有资格进入融合。
@@ -1261,7 +1342,9 @@ async def search_documents(
 
     if not ranked:
         return {"items": [], "query": q, "mode": mode,
-                "channels": {"fts": 0, "vector": 0}}
+                "channels": {"fts": 0, "vector": 0},
+                "elapsed_ms": int((time.perf_counter() - t_start) * 1000),
+                **meta_info}
 
     order = sorted(ranked.items(), key=lambda x: -x[1])[:limit]
     ids = [i for i, _ in order]
@@ -1278,12 +1361,9 @@ async def search_documents(
     if gene_hits:
         # 表达度：这条基因被检索命中了，就说明它有用。
         # 冷基因（从没被命中过）提示复核 —— 库不是只进不出。
-        try:
-            from . import dna_library
-            await dna_library.mark_gene_used(
-                db, [g["gene"].id for g in gene_hits])
-        except Exception:
-            pass
+        #
+        # 放到后台写回：检索路径上不碰写锁（原因见 _schedule_gene_usage）
+        _schedule_gene_usage([g["gene"].id for g in gene_hits])
 
     # 块级素材：向量命中的块（免费）+ 关键词在块级补扫（仅 with_chunks 时）
     chunk_map: dict[int, list[dict]] = {}
@@ -1345,11 +1425,25 @@ async def search_documents(
             ]
         items.append(item)
 
+    # 命中过多时明确告诉用户「只取了前 N 条」
+    # 与其让用户以为「就这些」，不如说清楚 ——
+    # 「搜不到」和「没搜全」在用户看来是一样的，但只有后者能解释。
+    if len(fts_hits) >= limit * 3:
+        meta_info["truncated"] = True
+        meta_info["truncated_reason"] = (
+            f"关键词命中超过 {limit * 3} 条，已按相关度取前 {len(items)} 条")
+    elif len(vec_chunk_hits) >= max(limit * 4, 40):
+        meta_info["truncated"] = True
+        meta_info["truncated_reason"] = (
+            f"语义命中超过 {max(limit * 4, 40)} 段，已按相关度取前 {len(items)} 条")
+
     return {
         "items": items,
         "query": q,
         "mode": mode,
         "channels": {"fts": len(fts_hits), "vector": len(vec_hits)},
+        "elapsed_ms": int((time.perf_counter() - t_start) * 1000),
+        **meta_info,
     }
 
 

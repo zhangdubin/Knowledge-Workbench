@@ -93,7 +93,10 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Api } from '../api'
+// 直接用 axios 实例（而不是 Api.graphForNotes 包装）：
+// 只有拿到实例才能挂 AbortController，换标签时把上一个请求取消掉。
+import api, { Api } from '../api'
+import { createSearchRequest } from '../utils/searchRequest'
 import PageTitle from '../components/PageTitle.vue'
 import GraphCanvas from '../components/GraphCanvas.vue'
 
@@ -132,14 +135,40 @@ async function loadTags() {
   } catch { /* 拦截器已提示 */ }
 }
 
+/**
+ * 加载图谱
+ *
+ * 换标签就取消上一个请求：图谱重建不便宜（后端要查连接、前端要重排版），
+ * 而且先发后到的那个会把新图盖掉 —— 用户看到的是上一个标签的图，
+ * 却以为是刚点的那个。用序号做兜底，取消没赶上也不认旧结果。
+ */
+const request = createSearchRequest()
+
 async function load() {
+  // 换标签就取消上一个请求（图谱重建不便宜，且旧结果会盖掉新图）
+  const key = tagFilter.value || ''
+  const { seq: mySeq, controller, duplicated } = request.begin(key)
+  if (duplicated) return
   loading.value = true
   try {
-    graph.value = await Api.graphForNotes(tagFilter.value || null)
+    // silent：取消是正常流程，不是错误
+    const g = await api.get('/api/graph/notes', {
+      params: { tag: tagFilter.value || null, limit: 300 },
+      signal: controller.signal,
+      silent: true,
+    })
+    if (!request.isCurrent(mySeq)) return
+    graph.value = g
   } catch (e) {
+    // 被取消不算错
+    if (e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError') return
+    if (!request.isCurrent(mySeq)) return
     graph.value = { nodes: [], edges: [], truncated: false }
   } finally {
-    loading.value = false
+    if (request.isCurrent(mySeq)) {
+      request.end(mySeq)
+      loading.value = false
+    }
   }
 }
 

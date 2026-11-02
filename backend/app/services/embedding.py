@@ -11,9 +11,21 @@
 
 维度不写死：emo-01 在各处资料里有 1024 / 1536 两种说法，所以首次调用
 成功后按实际返回长度确定维度，交给 docindex 建表。
+
+—— 检索效率这一层的三个改动（都是为了「同一个问题别问两遍钱」）：
+
+  1. **查询向量缓存**：语义检索最贵的一步不是查库，是向远端要一个向量
+     （实测一次 380ms+）。同一个问题问第二次时，这笔钱不该再花。
+  2. **单飞（single-flight）**：同一句话并发进来只发一次远端请求。
+     用户连按两下回车、前端自动重试，都会造成重复计费。
+  3. **HTTP 连接复用**：httpx.AsyncClient 每次新建都要重新 TCP + TLS 握手，
+     而 embedding 是检索链路上唯一的高频出站请求。
+
+批量向量化也改成**并发发批**：原来一批一批串行等，100 个块要等 7 个来回。
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -23,6 +35,7 @@ import httpx
 
 from ..config import settings
 from . import ai_config as cfg_svc
+from .docindex import TTLCache
 
 log = logging.getLogger("kb.embed")
 
@@ -70,6 +83,85 @@ STATUS_HINT = {
     404: "接口地址不存在",
     429: "请求过于频繁",
 }
+
+
+# ---------- 共享 HTTP 客户端 ----------
+
+_client: httpx.AsyncClient | None = None
+_client_lock: asyncio.Lock | None = None
+
+
+def _get_lock() -> asyncio.Lock:
+    """惰性建锁：模块导入时还没有事件循环，建锁要推迟到第一次真用"""
+    global _client_lock
+    if _client_lock is None:
+        _client_lock = asyncio.Lock()
+    return _client_lock
+
+
+async def _get_client() -> httpx.AsyncClient:
+    """拿共享的 HTTP 客户端（不存在就建一个）
+
+    为什么不能每次调用都新建 httpx.AsyncClient：新建就意味着重新
+    TCP 握手 + TLS 握手 + 新的连接池。embedding 是检索链路上唯一的
+    高频出站请求，反复握手纯属把钱和时间一起烧掉。
+    复用连接后，同一个接口的连续调用会明显变快。
+
+    超时改成**每个请求**单独指定（httpx 支持 request 级 timeout），
+    这样共享客户端不会把不同调用的超时策略搅在一起。
+    """
+    global _client
+    async with _get_lock():
+        if _client is None or _client.is_closed:
+            _client = httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=httpx.Timeout(30.0),
+                limits=httpx.Limits(
+                    max_connections=max(8, int(settings.embed_concurrency) * 2),
+                    max_keepalive_connections=max(4, int(settings.embed_concurrency)),
+                ),
+            )
+        return _client
+
+
+async def aclose_client() -> None:
+    """关掉共享客户端（进程退出时调用，避免连接池泄漏）"""
+    global _client
+    async with _get_lock():
+        if _client is not None and not _client.is_closed:
+            try:
+                await _client.aclose()
+            except Exception:
+                pass
+        _client = None
+
+
+# ---------- 查询向量缓存 ----------
+
+# 缓存的键带上模型与风格：换了 embedding 模型（或接口地址），
+# 老向量就是另一套坐标系里的东西，混用会让相似度彻底失真。
+_query_cache = TTLCache(
+    max_size=max(16, int(getattr(settings, "embed_cache_max", 512))),
+    ttl=max(1.0, float(getattr(settings, "embed_cache_ttl", 600.0))),
+)
+
+# 单飞表：同一句话正在飞的时候，后来者等它，不另发一次请求
+_inflight: dict[str, asyncio.Future] = {}
+
+
+def _cache_key(text: str, c: dict) -> str:
+    return f"{c.get('model')}|{c.get('style')}|{c.get('url')}|{text}"
+
+
+def cache_stats() -> dict:
+    """缓存命中情况（给体检面板/排障用）"""
+    return {
+        "enabled": bool(getattr(settings, "embed_cache_enabled", True)),
+        "size": _query_cache.size,
+        "max": _query_cache.max_size,
+        "hits": _query_cache.hits,
+        "misses": _query_cache.misses,
+    }
 
 
 def derive_embed_url(cfg: dict) -> str:
@@ -133,9 +225,10 @@ def config_summary() -> dict:
         "model": c["model"],
         "style": c["style"],
         "has_key": bool(c["api_key"]),
-        "key_from_chat": not bool((cfg.get("embed_api_key") or "").strip()),
+        "key_from_chat": not bool((cfg.get("embed_base_url") or "").strip()),
         "dim": int(cfg.get("embed_dim") or 0),
         **breaker_state(),
+        **cache_stats(),
     }
 
 
@@ -157,21 +250,85 @@ async def embed_texts(texts: list[str], *, kind: str = "db") -> list[list[float]
 
     out: list[list[float]] = []
     batch = max(1, settings.embed_batch_size)
-    for i in range(0, len(texts), batch):
-        part = texts[i:i + batch]
-        vecs = await _call(part, c, kind)
-        if vecs is None:
+    parts = [texts[i:i + batch] for i in range(0, len(texts), batch)]
+
+    # 多批之间并发发出去，但并发数有上限：
+    # 一来接口有并发配额，发太快会 429；二来 SQLite 那边虽然不写，
+    # 但大批量并发会把连接池占满，反而拖慢别的请求。
+    conc = max(1, min(int(settings.embed_concurrency), len(parts)))
+    sem = asyncio.Semaphore(conc)
+
+    async def _one(part: list[str]):
+        async with sem:
+            return await _call(part, c, kind)
+
+    # 原来是一批一批串行等：100 个块（batch=16）要 7 个网络往返。
+    # 现在最多 conc 个同时在飞 —— 同样的墙钟时间少了 4/7。
+    results = await asyncio.gather(*[_one(p) for p in parts],
+                                   return_exceptions=True)
+    for r in results:
+        if isinstance(r, BaseException):
+            # 一批失败就整批失败：返回 None 让调用方降级，
+            # 半截向量比没有向量更危险（维度对不上会写坏索引）
             return None
-        out.extend(vecs)
+        if r is None:
+            return None
+        out.extend(r)
     return out
 
 
-
 async def embed_query(text: str) -> list[float] | None:
-    vecs = await embed_texts([text], kind="query")
-    if not vecs:
+    """取查询向量：先查缓存，再单飞地打远端
+
+    缓存与单飞解决的是两件事：
+      - 缓存：同一个问题**先后**问两次 → 第二次零成本
+      - 单飞：同一个问题**同时**问两次 → 只发一次远端请求
+    少任何一个，都会白花一次远端调用的钱与时间。
+    """
+    text = (text or "").strip()
+    if not text:
         return None
-    return vecs[0]
+    if not getattr(settings, "embed_cache_enabled", True):
+        vecs = await embed_texts([text], kind="query")
+        return vecs[0] if vecs else None
+
+    c = get_embed_config()
+    if not c["enabled"]:
+        return None
+    key = _cache_key(text, c)
+
+    hit = _query_cache.get(key)
+    if hit is not None:
+        return hit
+
+    fut = _inflight.get(key)
+    if fut is not None:
+        # 有人在飞：等它，不要另发一次
+        try:
+            vecs = await asyncio.shield(fut)
+        except Exception:
+            return None
+        return vecs[0] if vecs else None
+
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    _inflight[key] = fut
+    try:
+        vecs = await embed_texts([text], kind="query")
+        if vecs and vecs[0]:
+            _query_cache.put(key, vecs[0])
+            if not fut.done():
+                fut.set_result(vecs)
+            return vecs[0]
+        if not fut.done():
+            fut.set_result(None)
+        return None
+    except Exception:
+        if not fut.done():
+            fut.set_exception(Exception("embed failed"))
+        return None
+    finally:
+        _inflight.pop(key, None)
 
 
 async def _call(batch: list[str], c: dict, kind: str) -> list[list[float]] | None:
@@ -191,15 +348,16 @@ async def _call(batch: list[str], c: dict, kind: str) -> list[list[float]] | Non
     else:
         payload = {"model": c["model"], "input": trimmed}
 
+    client = await _get_client()
     try:
-        async with httpx.AsyncClient(timeout=c["timeout"], follow_redirects=True) as client:
-            r = await client.post(url, json=payload, headers=headers, params=params or None)
-            if r.status_code != 200:
-                reason = f"{r.status_code} {STATUS_HINT.get(r.status_code, r.text[:120])}"
-                log.warning("embedding 接口 %s", reason)
-                _mark_failure(reason)
-                return None
-            body = r.json()
+        r = await client.post(url, json=payload, headers=headers,
+                              params=params or None, timeout=c["timeout"])
+        if r.status_code != 200:
+            reason = f"{r.status_code} {STATUS_HINT.get(r.status_code, r.text[:120])}"
+            log.warning("embedding 接口 %s", reason)
+            _mark_failure(reason)
+            return None
+        body = r.json()
     except Exception as e:
         _mark_failure(f"{type(e).__name__}: {e}")
         log.warning("embedding 调用异常：%s: %s", type(e).__name__, e)
@@ -214,7 +372,6 @@ async def _call(batch: list[str], c: dict, kind: str) -> list[list[float]] | Non
         _mark_failure(f"[{code}] {msg}")
         return None
 
-
     vecs = _parse_vectors(body)
     if vecs is None:
         # 风格判断错了就换另一种再试一次
@@ -224,10 +381,10 @@ async def _call(batch: list[str], c: dict, kind: str) -> list[list[float]] | Non
         else:
             payload = {"model": c["model"], "input": trimmed}
         try:
-            async with httpx.AsyncClient(timeout=c["timeout"], follow_redirects=True) as client:
-                r = await client.post(url, json=payload, headers=headers, params=params or None)
-                if r.status_code == 200:
-                    vecs = _parse_vectors(r.json())
+            r = await client.post(url, json=payload, headers=headers,
+                                  params=params or None, timeout=c["timeout"])
+            if r.status_code == 200:
+                vecs = _parse_vectors(r.json())
         except Exception:
             pass
 

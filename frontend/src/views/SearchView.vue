@@ -11,7 +11,7 @@
         size="large"
         clearable
         @keyup.enter="search"
-        @clear="recordResults = []; docResults = []"
+        @clear="recordResults = []; docResults = []; notice = ''; elapsedMs = 0"
         class="hero-search"
       >
         <template #prefix><el-icon><Search /></el-icon></template>
@@ -97,6 +97,13 @@
         记录 <strong>{{ recordResults.length }}</strong> ·
         文件 <strong>{{ docResults.length }}</strong> ·
         关键字 <strong>{{ kw }}</strong>
+        <span v-if="elapsedMs" class="result-elapsed">· 用时 {{ elapsedMs }} ms</span>
+      </div>
+
+      <!-- 降级 / 截断提示：宁可说清楚，也不要让用户干等 -->
+      <div v-if="notice" class="result-notice">
+        <el-icon><InfoFilled /></el-icon>
+        <span>{{ notice }}</span>
       </div>
 
       <!-- 文件命中 -->
@@ -188,10 +195,14 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Api } from '../api'
+// 直接用 axios 实例（而不是 Api.search 包装）：
+// 只有拿到实例才能挂 AbortController，
+// 换关键词时把上一个请求取消掉。
+import api from '../api'
 import { formatSize } from '../utils/format'
 import { entityIcon } from '../utils/icons'
 import { highlightHtml } from '../utils/md'
+import { buildSearchNotice, createSearchRequest } from '../utils/searchRequest'
 import PageTitle from '../components/PageTitle.vue'
 import EmptyState from '../components/EmptyState.vue'
 
@@ -201,6 +212,9 @@ const kw = ref('')
 const recordResults = ref([])
 const docResults = ref([])
 const loading = ref(false)
+// 本次检索用时（毫秒）与提示文案（降级 / 截断）
+const elapsedMs = ref(0)
+const notice = ref('')
 
 const totalCount = computed(() => recordResults.value.length + docResults.value.length)
 
@@ -286,15 +300,47 @@ function highlight(text) {
   return highlightHtml(text, kw.value)
 }
 
+/**
+ * 搜索请求
+ *
+ * 这里面有两条「省时间」的做法，都是为了数据变多时也不变慢：
+ *
+ * 1. **同一句话不重复发**。回车连按两下、或者同一个词搜了两次，
+ *    后端就要跑两遍完整检索 —— 而语义通道那一步要打远端算向量，
+ *    是整条链路上最贵的一段。重复请求在这里被直接丢掉。
+ * 2. **换了关键词就取消上一个**。不取消的话，两个请求并行跑，
+ *    而且先发后到的那个还可能把新结果盖掉（用户看到的是旧结果）。
+ *    取消掉既省资源，也不会有「结果对不上关键词」的情况。
+ *
+ * 用 `seq` 序号做兜底：万一取消没赶上（响应已经回来了），
+ * 也只认最后一次请求的结果。
+ */
+const request = createSearchRequest()
+
 async function search() {
-  if (!kw.value.trim()) {
+  const key = kw.value.trim()
+  if (!key) {
     recordResults.value = []
     docResults.value = []
+    notice.value = ''
+    elapsedMs.value = 0
     return
   }
+  // 同一个词已经在飞 → 不重复发；换了词 → 取消上一个（都在工具里）
+  const { seq: mySeq, controller, duplicated } = request.begin(key)
+  if (duplicated) return
   loading.value = true
+  notice.value = ''
+  const t0 = performance.now()
   try {
-    const r = await Api.search(kw.value.trim())
+    // silent：取消是正常流程，不是错误，别弹「请求失败」
+    const r = await api.get('/api/search', {
+      params: { keyword: key, limit: 50 },
+      signal: controller.signal,
+      silent: true,
+    })
+    // 已经有更新的请求了 → 这份结果过期，丢掉
+    if (!request.isCurrent(mySeq)) return
     // 兼容旧返回（数组）与新返回（{records, documents}）
     if (Array.isArray(r)) {
       recordResults.value = r
@@ -303,8 +349,20 @@ async function search() {
       recordResults.value = r.records || []
       docResults.value = r.documents || []
     }
+    // 后端会说明这次是不是「降级了」或「截断了」，
+    // 原样转成人话给用户 —— 干等和「结果不全」都很难解释
+    notice.value = buildSearchNotice(r)
+    elapsedMs.value = Number.isFinite(r?.elapsed_ms) ? r.elapsed_ms : Math.round(performance.now() - t0)
+  } catch (e) {
+    // 被取消不算错：新的请求已经在路上了
+    if (e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError') return
+    if (!request.isCurrent(mySeq)) return
+    notice.value = '搜索失败，请稍后重试'
   } finally {
-    loading.value = false
+    if (request.isCurrent(mySeq)) {
+      request.end(mySeq)
+      loading.value = false
+    }
   }
 }
 
@@ -421,6 +479,24 @@ onMounted(() => {
 .result-stats strong {
   color: var(--primary);
   font-weight: 700;
+}
+.result-elapsed {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 降级 / 截断提示：不是报错，是「这次结果有什么限制」 */
+.result-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 var(--space-4);
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
 }
 
 .result-group { padding: 16px 20px; }

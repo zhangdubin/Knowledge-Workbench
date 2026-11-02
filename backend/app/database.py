@@ -22,6 +22,7 @@ import sqlite3
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from .config import settings
 
@@ -54,8 +55,89 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_async_engine(settings.database_url, echo=False, future=True)
-SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+def _engine_kwargs() -> dict:
+    """引擎参数：连接池大小按「是不是文件库」分开给
+
+    文件库放开连接数：WAL 模式下多个读请求可以真并行，
+    这是「用户一多会不会互相拖慢」的关键 —— 默认 5 条连接，
+    第 6 个并发请求就开始排队。
+
+    内存库只能一条连接：多于一条就看不到彼此的数据了（StaticPool）。
+    这类库只出现在测试里，但参数给错会直接起不来，所以单独判。
+    """
+    url = (settings.database_url or "")
+    if ":memory:" in url or "mode=memory" in url:
+        return {}
+    return {
+        # aiosqlite 方言默认给的是 NullPool —— 「用完就扔」。
+        # 后果是每条语句背后都新建一条连接：重新设一遍 PRAGMA、
+        # 重新 load 一次 sqlite-vec 扩展、还要起一个新线程。
+        # 这些全是固定开销，却每次都付 —— 实测一条 SQL 的开销里
+        # 有大半是它，不是 SQL 本身。
+        # 换成带池的适配器后，连接被复用，开销只付一次。
+        "poolclass": AsyncAdaptedQueuePool,
+        "pool_size": max(1, int(settings.sqlite_pool_size)),
+        "max_overflow": max(0, int(settings.sqlite_max_overflow)),
+        # 连接是长期持有的，得确认它还活着（文件被替换过时会失效）
+        "pool_pre_ping": False,
+    }
+
+
+engine = create_async_engine(settings.database_url, echo=False, future=True,
+                              **_engine_kwargs())
+# 会被当成「瞬时错误」重试的 SQLite 报错
+#
+# 为什么需要这一层：数据目录常常挂在外接盘 / 网络盘上（bind mount 进容器）。
+# 这类挂载偶发返回 "disk I/O error" —— 一次读失败就变成 500，
+# 而这种错误重试一次通常就过去了（是盘抖了一下，不是数据坏了）。
+#
+# 刻意**不**重试的错误：唯一约束冲突、语法错、类型错 —— 那些重试多少次都一样，
+# 重试只会把真正的报错推迟一点才暴露出来。
+_TRANSIENT_SQLITE_MARKERS = (
+    "disk i/o error",
+    "database is locked",
+    "database table is locked",
+    "unable to open database file",
+)
+
+
+def is_transient_db_error(exc: BaseException) -> bool:
+    """这个异常是不是「再来一次说不定就好了」"""
+    msg = str(exc).lower()
+    return any(m in msg for m in _TRANSIENT_SQLITE_MARKERS)
+
+
+class RetryingAsyncSession(AsyncSession):
+    """遇到瞬时 I/O 错误自动重试的会话
+
+    为什么放在会话这一层，而不是让每个接口自己 try/except：
+    几十个查询点，逐个加 try/except 一定会漏；
+    而漏掉的那个，表现就是「有时候刷新一下页面又好了」——
+    最像玄学的一类故障。
+
+    重试前必须 rollback：失败的语句已经把事务打断了，
+    不回滚的话下一次执行会带着一个坏掉的事务去跑，
+    报错会变得莫名其妙（「cannot start a transaction within a transaction」）。
+    """
+
+    async def execute(self, *args, **kwargs):
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                return await super().execute(*args, **kwargs)
+            except Exception as e:
+                if attempt >= attempts - 1 or not is_transient_db_error(e):
+                    raise
+                log.warning("数据库瞬时错误，重试第 %d 次：%s", attempt + 1, e)
+                try:
+                    await self.rollback()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.15 * (attempt + 1))
+
+
+SessionLocal = async_sessionmaker(engine, class_=RetryingAsyncSession,
+                                 expire_on_commit=False)
 
 
 @event.listens_for(engine.sync_engine, "connect")
@@ -67,6 +149,23 @@ def _on_connect(dbapi_conn, connection_record):
     等于换了配置，漏设某条会让性能悄悄退回默认值。
     """
     global VEC_AVAILABLE
+
+    # 注册 SQLite 自定义函数：记录级倒排索引的触发器要用它做 bigram 切分。
+    #
+    # 为什么用触发器而不是在 Python 里维护索引：触发器写在库里，
+    # 任何写入路径（ORM、批量 update、迁移脚本、将来新增的接口）都自动生效；
+    # 靠 Python 钩子的话，只要漏掉一条写入路径，索引就悄悄过期了 ——
+    # 表现是「搜不到某些记录」而且不报错，最难查的一类问题。
+    #
+    # 为什么每个连接都要注册：自定义函数是**连接级**的，
+    # 连接池里换一条连接就等于换了一份函数表，漏注册会让触发器在那一刻报错。
+    try:
+        from .services import docindex as _docindex
+        raw = dbapi_conn.driver_connection
+        dbapi_conn.await_(raw.create_function(
+            "kb_seg_bigram", 1, _docindex.seg_bigram_sql, deterministic=True))
+    except Exception as e:
+        log.warning("注册 kb_seg_bigram 失败，记录级倒排索引将不可用：%s", e)
 
     cur = dbapi_conn.cursor()
     try:
@@ -133,6 +232,14 @@ def direct_connection(busy_ms: int = 30000):
     conn = sqlite3.connect(db_file_path(), timeout=busy_ms / 1000.0,
                            isolation_level=None)
     conn.execute(f"pragma busy_timeout={int(busy_ms)}")
+    # 自定义函数也是连接级的：这条直连虽然不查向量表，
+    # 但它照样可能触发 entity_record 的索引触发器，所以也得注册。
+    try:
+        from .services import docindex as _docindex
+        conn.create_function("kb_seg_bigram", 1, _docindex.seg_bigram_sql,
+                             deterministic=True)
+    except Exception as e:
+        log.warning("直连未注册 kb_seg_bigram：%s", e)
     return conn
 
 
@@ -205,6 +312,16 @@ async def shutdown_maintenance() -> dict:
     except Exception as e:
         log.warning("关停维护未完成：%s", e)
         return {"optimized": False, "wal_truncated": False}
+    finally:
+        # 共享的 embedding HTTP 客户端要在关停时关掉，
+        # 否则连接池会一直挂着（httpx 会打印 "Unclosed client" 警告）。
+        # 放在这里是因为关停流程本来就归这一段管，
+        # 不必为了一个 close 去改 main.py 的生命周期钩子。
+        try:
+            from .services import embedding as _embed_svc
+            await _embed_svc.aclose_client()
+        except Exception as e:
+            log.warning("关闭 embedding 客户端失败：%s", e)
 
 
 
@@ -273,6 +390,10 @@ async def init_db():
     from .services import docindex
     async with engine.begin() as conn:
         await docindex.ensure_index_tables(conn)
+        # 记录级索引：记录检索原来靠 LIKE 全表扫描，
+        # 记录一多（经验数据正是最会长大的那批）就越搜越慢。
+        # 这张倒排索引让「候选」先被索引缩到几十条，再做精确过滤。
+        await docindex.ensure_record_fts(conn)
         # 基因级索引：养料库自己的全文索引。
         # 与块级索引分开的理由：基因的粒度、生命周期、检索口径都不同
         # （块随文档重切，基因跨文档长期存在）。

@@ -138,6 +138,12 @@ class Settings(BaseSettings):
     # 单条 WAL 达到多少页就自动检查点（每页 4KB，默认 1000 页 ≈ 4MB）。
     # 调大能减少写放大的停顿，代价是 WAL 文件更大。
     sqlite_wal_autocheckpoint: int = 1000
+    # SQLite 连接池大小。
+    # WAL 模式下「多读一写」：多个读请求可以真的并行，
+    # 不用挤在一条连接后面排队。默认 5 个偏小 ——
+    # 用户一多、或者后台任务也来借连接，就排上了。
+    sqlite_pool_size: int = 10
+    sqlite_max_overflow: int = 10
     # 启动时做一次完整性自检（quick_check 只扫索引结构，通常毫秒级）
     startup_quick_check: bool = True
 
@@ -155,6 +161,35 @@ class Settings(BaseSettings):
     # 文档分块的字符长度与重叠
     chunk_size: int = 800
     chunk_overlap: int = 120
+
+    # ==== 检索性能（缓存与超时）====
+    # 检索链路上所有进程内缓存的总开关。
+    # 排障时把它关掉就回到「每次都真查」的确定状态 ——
+    # 排查「为什么结果不对」时，这一点比任何日志都重要。
+    search_cache_enabled: bool = True
+    # 检索缓存条目的存活时间（秒）与容量上限（条）。
+    # 缓存里存的全是「可重算」的东西（索引版本号、块的 token 集、查询向量），
+    # 所以过期只影响命中率，不会让结果变错。
+    # 120 秒：一段连续的检索会话里同一批块会被反复命中，
+    # 缓存活得比一次会话久，就不用反复重算。
+    search_cache_ttl: float = 120.0
+    search_cache_max: int = 256
+    # 查询向量缓存：语义检索最贵的一步不是查库，是向远端要一个向量
+    # （实测一次 380ms+）。同一个问题问第二次时，这笔钱不该再花。
+    # 600 秒：向量只跟查询文本有关，跟库里数据无关 ——
+    # 换 embedding 模型必然伴随进程重启（模型与维度都存在 sys_meta 里）。
+    embed_cache_enabled: bool = True
+    embed_cache_ttl: float = 600.0
+    embed_cache_max: int = 512
+    # 批量向量化时的并发批次数。
+    # 原来是一批一批串行等：100 个块（batch=16）要 7 个网络往返。
+    # 4 是折中：再高会撞上接口的并发配额（429），再低省不了多少时间。
+    embed_concurrency: int = 4
+    # 单次检索的墙钟上界（秒）。
+    # 超过就降级：先给关键词通道的结果，并明确告诉用户「语义通道超时已跳过」。
+    # 有了上界，检索耗时就有个可承诺的边界 —— 数据再多也不会无限等。
+    # 0 = 不设上界（信任网络）。
+    search_timeout: float = 8.0
 
     # ==== 安全 ====
     # 是否开启登录鉴权。关闭后所有请求按管理员身份处理，

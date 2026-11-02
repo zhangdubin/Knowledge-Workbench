@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +32,62 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 
 log = logging.getLogger("kb.index")
+
+
+# ---------- 进程内缓存（TTL + 容量上限） ----------
+
+class TTLCache:
+    """带存活时间与容量上限的进程内缓存（LRU 淘汰）
+
+    为什么集中写一份而不是各写各的：检索链路上有三处要缓存
+    （sys_meta 的索引版本号、查询向量、块级 token 集），
+    三处的差别只有「存什么」和「多久过期」，淘汰策略与并发语义完全一样 ——
+    抄三份就等于埋三份不同步的 bug。
+
+    淘汰用「插入序 + 写入时顺手清过期」而不是真 LRU：
+    Python 3.7+ 的 dict 保证插入序，取最早插入的几个出来丢就够用了；
+    真 LRU 要额外维护访问序，在这个量级上不划算。
+
+    并发语义：只在事件循环里用（无锁）。多进程部署时每个进程各有一份 ——
+    语义上没问题（缓存的只是「可重算」的东西），只是命中率低一些。
+    """
+
+    def __init__(self, max_size: int = 128, ttl: float = 30.0):
+        self.max_size = max(1, int(max_size))
+        self.ttl = float(ttl)
+        self._data: dict[str, tuple[float, Any]] = {}
+        self.hits = 0
+        self.misses = 0
+
+    @property
+    def size(self) -> int:
+        return len(self._data)
+
+    def get(self, key: str):
+        item = self._data.get(key)
+        if item is None:
+            self.misses += 1
+            return None
+        ts, value = item
+        if (time.time() - ts) > self.ttl:
+            self._data.pop(key, None)
+            self.misses += 1
+            return None
+        self.hits += 1
+        return value
+
+    def put(self, key: str, value: Any) -> None:
+        if len(self._data) >= self.max_size:
+            # 满了就丢最早写入的那批（dict 保插入序）
+            for k in list(self._data.keys())[: max(1, self.max_size // 4)]:
+                self._data.pop(k, None)
+        self._data[key] = (time.time(), value)
+
+    def drop(self, key: str) -> None:
+        self._data.pop(key, None)
+
+    def clear(self) -> None:
+        self._data.clear()
 
 # 覆盖基本汉字区 + 扩展 A 区
 CJK_RE = re.compile(r"([\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff])")
@@ -500,9 +558,25 @@ async def _table_exists(conn, name: str) -> bool:
 
 # ---------- sys_meta 读写 ----------
 
+# sys_meta 的读缓存：这几个值（向量维度、距离度量、分词版本）
+# 一次请求里会被读好几遍，而它们几乎不变。
+# 缓存 5 秒：版本号变了最多 5 秒后生效 —— 重建索引这种低频动作，
+# 不值得为「立刻可见」去多写一套失效广播。
+_meta_cache = TTLCache(max_size=64, ttl=5.0)
+
+
 async def get_meta(conn, key: str) -> str | None:
+    if not getattr(settings, "search_cache_enabled", True):
+        r = await conn.execute(text("select value from sys_meta where key=:k"),
+                               {"k": key})
+        return r.scalar()
+    cached = _meta_cache.get(key)
+    if cached is not None:
+        return cached
     r = await conn.execute(text("select value from sys_meta where key=:k"), {"k": key})
     row = r.scalar()
+    if row is not None:
+        _meta_cache.put(key, row)
     return row
 
 
@@ -511,6 +585,8 @@ async def set_meta(conn, key: str, value: str) -> None:
         "insert into sys_meta(key, value, updated_at) values (:k, :v, datetime('now')) "
         "on conflict(key) do update set value=:v, updated_at=datetime('now')"
     ), {"k": key, "v": value})
+    # 自己刚写的值要立刻可见，不能等缓存过期
+    _meta_cache.drop(key)
 
 
 # ---------- 文档写入索引 ----------
@@ -567,6 +643,10 @@ async def index_chunks(db, doc_id: int, chunks: list[tuple[int, str]]) -> int:
         await db.execute(
             text(f"insert into {CHUNK_FTS_TABLE}(rowid, heading, body) "
                  "values (:r, :h, :b)"), payload)
+        # 块内容变了，缓存里的 token 集就不再作数
+        for cid, _ctext in chunks:
+            _chunk_token_cache.drop(f"{cid}:b")
+            _chunk_token_cache.drop(f"{cid}:h")
         return len(payload)
     except Exception as e:
         log.warning("块级索引写入失败 doc=%s：%s", doc_id, e)
@@ -584,6 +664,10 @@ async def remove_chunks(db, chunk_ids: list[int]) -> None:
             text(f"delete from {CHUNK_FTS_TABLE} where rowid in ({qmarks})"), params)
     except Exception as e:
         log.warning("块级索引删除失败：%s", e)
+    # 块没了，缓存里的 token 集也不能留着
+    for cid in chunk_ids:
+        _chunk_token_cache.drop(f"{cid}:b")
+        _chunk_token_cache.drop(f"{cid}:h")
 
 
 async def rebuild_document_chunks(db, doc_id: int) -> int:
@@ -608,6 +692,10 @@ async def rebuild_document_chunks(db, doc_id: int) -> int:
             await db.execute(
                 text(f"insert into {CHUNK_FTS_TABLE}(rowid, heading, body) "
                      "values (:r, :h, :b)"), payload)
+        # 重建 = 换了分词方案，缓存里的旧 token 集必须作废
+        for cid, _text in rows:
+            _chunk_token_cache.drop(f"{cid}:b")
+            _chunk_token_cache.drop(f"{cid}:h")
         return len(payload)
     except Exception as e:
         log.warning("块级索引重建失败 doc=%s：%s", doc_id, e)
@@ -636,6 +724,8 @@ async def remove_document(db: AsyncSession, doc_id: int) -> None:
             await db.execute(
                 text(f"delete from {VEC_TABLE} where rowid = :rid"), {"rid": cid}
             )
+            _chunk_token_cache.drop(f"{cid}:b")
+            _chunk_token_cache.drop(f"{cid}:h")
     except Exception as e:
         log.warning("向量索引删除失败 doc=%s：%s", doc_id, e)
 
@@ -833,6 +923,34 @@ async def _chunk_fts_rows(db, expr: str, limit: int) -> list[tuple[int, float]]:
     return [(r[0], -float(r[1] or 0.0)) for r in rows]
 
 
+# 块级 token 集缓存：同一个块被反复命中时，不用每次重新切一遍 bigram。
+#
+# 为什么值得缓存：切词是纯 CPU 开销，而且**与查询无关** ——
+# 同一个块在 10 个不同查询里命中 10 次，就要切 10 遍。
+# 实测这一项在「块级 FTS5」这条路径上占了将近 1ms，
+# 而候选块一多它还会线性涨 —— 属于「数据变多就变慢」的那一类。
+#
+# 块是「切好就不动」的（重新切块时会显式清掉缓存），所以缓存它很安全。
+_chunk_token_cache = TTLCache(
+    max_size=max(16, int(getattr(settings, "search_cache_max", 256))),
+    ttl=max(5.0, float(getattr(settings, "search_cache_ttl", 120.0))),
+)
+
+
+def _chunk_tokens(chunk_id: int, text: str, structure: bool) -> set[str]:
+    """取一个块的 token 集（标题通道取标题，正文通道取正文）"""
+    heading, body = split_chunk_heading(text)
+    if not getattr(settings, "search_cache_enabled", True):
+        return set(seg_bigram(heading if structure else body).split())
+    key = f"{chunk_id}:{'h' if structure else 'b'}"
+    hit = _chunk_token_cache.get(key)
+    if hit is not None:
+        return hit
+    tokens = set(seg_bigram(heading if structure else body).split())
+    _chunk_token_cache.put(key, tokens)
+    return tokens
+
+
 async def _hydrate_chunk_hits(db, rows: list[tuple[int, float]], query: str,
                               *, structure: bool = False) -> list[dict]:
     """回表取 document_id/seq/text，并统计命中了几个词
@@ -869,8 +987,7 @@ async def _hydrate_chunk_hits(db, rows: list[tuple[int, float]], query: str,
         if got is None:
             continue
         did, seq, ctext = got
-        heading, body = split_chunk_heading(ctext)
-        tokens = set(seg_bigram(heading if structure else body).split())
+        tokens = _chunk_tokens(cid, ctext, structure)
         out.append({
             "chunk_id": cid,
             "document_id": did,
@@ -982,4 +1099,195 @@ async def _chunk_keyword_scan_python(db: AsyncSession, doc_ids: list[int],
         })
     out.sort(key=lambda x: (-x["score"], -x["hits"], x["chunk_id"]))
     return out[:limit]
+
+
+
+# ---------- 记录级全文索引（entity_record） ----------
+#
+# 为什么记录也要一张倒排索引：
+#   记录检索原来靠 `search_text like '%kw%'`，那是**全表扫描** ——
+#   命中一条和一条没命中，代价都跟库里有多少条记录成正比。
+#   而记录恰恰就是「经验数据」的主要载体，是最会长大的那张表。
+#   全表扫描撞上「经验变多」，表现就是搜索越来越慢，
+#   而且慢得毫无道理（数据没坏、索引没坏，纯粹是扫得多了）。
+#
+# 同步靠 SQLite 触发器，不靠 Python 钩子：
+#   触发器写在库里，任何写入路径（ORM、批量 update、迁移脚本、
+#   将来新增的接口）都自动生效。靠 Python 钩子的话，
+#   只要漏掉一条写入路径，索引就悄悄过期了 —— 搜不到东西，而且不报错。
+
+RECORD_FTS_TABLE = "record_fts"
+# 分词方案版本号。变了就得整表重建（同 chunk_fts 的道理）。
+# 版本号变了 = 触发器写法或分词方案变了，要整表重建一次。
+# 「bigram3」：触发器改用普通 DELETE（原因见 ensure_record_fts 里的说明）。
+RECORD_FTS_VERSION = "bigram3"
+META_RECORD_FTS_VERSION = "record_fts_version"
+
+
+def seg_bigram_sql(text: str | None) -> str:
+    """触发器里用的 bigram 切分（与 seg_bigram 必须逐字一致）
+
+    SQLite 触发器只能调 SQLite 内置函数，除非我们把 Python 函数
+    注册进去（见 database.py 的 _on_connect）。注册的是这个函数，
+    索引里写进去的也就是这个函数算出来的 —— 两边只要有一处不同构，
+    这条通道就会静默失效：查出来看着有命中，其实排序全乱。
+    """
+    return seg_bigram(text or "")
+
+
+def record_fts_query(query: str) -> str:
+    """记录级 MATCH 表达式
+
+    与块级同一套 bigram OR：命中「哪些二字组合」而不是「整句原样出现」。
+    用户搜「知识库采购项目」时，这整句在字段值里根本不会连续出现，
+    拆成二字词才有召回；召回变宽了由 bm25 排序把最像的顶上来。
+
+    单字查询（「张」）在 bigram 索引里没有对应 token，强行查会返回空 ——
+    这种查询交给 LIKE 兜底（见 record_search）。
+    """
+    terms = chunk_fts_terms(query)
+    multi = [t for t in terms if len(t) >= 2]
+    if not multi:
+        return ""
+    return " OR ".join('"' + t + '"' for t in multi)
+
+
+async def ensure_record_fts(conn) -> bool:
+    """确保记录级全文索引存在，且内容是当前分词方案写的
+
+    返回 False = 索引不可用（调用方退回 LIKE 扫描，功能不中断）。
+    """
+    try:
+        await conn.execute(text(
+            f"create virtual table if not exists {RECORD_FTS_TABLE} using fts5("
+            "body, tokenize='unicode61 remove_diacritics 2')"))
+    except Exception as e:
+        log.warning("记录级 FTS5 索引表创建失败，记录检索将退回 LIKE：%s", e)
+        return False
+
+    # 触发器：写记录即写索引。ifnull 是为了 search_text 为 NULL 时
+    # 不给 FTS5 塞 NULL（FTS5 收到 NULL 会报「SQL logic error」）。
+    # 触发器：写记录即写索引。
+    #
+    # 删除为什么用 `delete from 索引表 where rowid=...` 而不是 FTS5 的
+    # 'delete' 命令：'delete' 命令要求把**原文**再喂一遍，
+    # 而这里喂的是 UDF 现算出来的分词结果 —— 一旦两边不一致，
+    # FTS5 会直接报 "SQL logic error"（实测：改一次记录就整条更新失败）。
+    # 普通 DELETE 走 FTS5 自己的删除路径，不依赖原文，最稳。
+    triggers = [
+        ("record_fts_ai", "after insert on entity_record",
+         f"insert into {RECORD_FTS_TABLE}(rowid, body) "
+         "values (new.id, kb_seg_bigram(ifnull(new.search_text, '')));"),
+        ("record_fts_ad", "after delete on entity_record",
+         f"delete from {RECORD_FTS_TABLE} where rowid = old.id;"),
+        ("record_fts_au", "after update of search_text on entity_record",
+         f"delete from {RECORD_FTS_TABLE} where rowid = old.id; "
+         f"insert into {RECORD_FTS_TABLE}(rowid, body) "
+         "values (new.id, kb_seg_bigram(ifnull(new.search_text, '')));"),
+    ]
+    for name, when, body in triggers:
+        try:
+            # 先删再建：create trigger if not exists 不会替换旧触发器，
+            # 触发器写法改了却没重建 = 索引静默不同步（搜不到新建的记录）
+            await conn.execute(text(f"drop trigger if exists {name}"))
+            await conn.execute(text(
+                f"create trigger {name} {when} begin {body} end;"))
+        except Exception as e:
+            log.warning("记录级索引触发器 %s 创建失败：%s", name, e)
+            return False
+
+    version = await get_meta(conn, META_RECORD_FTS_VERSION)
+    if version == RECORD_FTS_VERSION:
+        return True
+    try:
+        await conn.execute(text(f"delete from {RECORD_FTS_TABLE}"))
+        await conn.execute(text(
+            f"insert into {RECORD_FTS_TABLE}(rowid, body) "
+            "select id, kb_seg_bigram(ifnull(search_text, '')) "
+            "from entity_record"))
+        await set_meta(conn, META_RECORD_FTS_VERSION, RECORD_FTS_VERSION)
+        log.info("记录级全文索引已重建（分词方案 %s）", RECORD_FTS_VERSION)
+        return True
+    except Exception as e:
+        log.warning("记录级全文索引重建失败，记录检索将退回 LIKE：%s", e)
+        return False
+
+
+async def record_fts_ready(db) -> bool:
+    """记录级索引能不能用（表建好了、且是当前分词方案写的）"""
+    try:
+        version = await get_meta(db, META_RECORD_FTS_VERSION)
+    except Exception:
+        return False
+    return (version or "") == RECORD_FTS_VERSION
+
+
+async def record_search(db: AsyncSession, keyword: str, limit: int = 50,
+                        allowed_type_ids: list[int] | None = None) -> list[dict]:
+    """记录级检索：倒排索引缩小候选 + 一次 JOIN 拿全类型信息
+
+    两处改动，都冲着「数据变多别变慢」去：
+
+      1. 用 record_fts 倒排索引把候选缩到少量，而不是全表 LIKE；
+         LIKE 条件仍然保留在最终过滤里 —— 它保证结果集与原来
+         **完全一致**（索引只用来缩小候选，不改变命中口径）。
+      2. 类型信息一次 JOIN 拿完，不再「取 N 条记录 → 再回表 N 次」
+         （N+1：结果条数一多，查询次数就线性涨）。
+
+    索引不可用时返回 None，调用方退回原来的 LIKE 扫描。
+    """
+    q = (keyword or "").strip()
+    if not q:
+        return []
+    expr = record_fts_query(q)
+    if not expr or not await record_fts_ready(db):
+        return None
+
+    sql = [
+        "select r.id, r.entity_type_id, r.data, r.search_text, "
+        "t.key, t.name, t.icon "
+        "from entity_record r "
+        "left join entity_type t on t.id = r.entity_type_id "
+        "where r.id in (select rowid from record_fts "
+        "where record_fts match :m) "
+        "and r.search_text like :like "
+        "and r.deleted_at is null"]
+    params: dict[str, Any] = {"m": expr, "like": f"%{q}%", "lim": int(limit)}
+    if allowed_type_ids is not None:
+        ids = [int(i) for i in allowed_type_ids]
+        if not ids:
+            return []
+        sql.append("and r.entity_type_id in (" +
+                   ",".join(f":t{i}" for i in range(len(ids))) + ")")
+        for i, tid in enumerate(ids):
+            params[f"t{i}"] = tid
+    sql.append("order by r.updated_at desc limit :lim")
+    try:
+        rows = (await db.execute(text(" ".join(sql)), params)).all()
+    except Exception as e:
+        log.warning("记录级索引检索失败，退回 LIKE：%s", e)
+        return None
+
+    out: list[dict] = []
+    low = q.lower()
+    for rid, etid, data, search_text, key, name, icon in rows:
+        text_src = search_text or ""
+        idx = text_src.lower().find(low)
+        if idx >= 0:
+            start = max(0, idx - 30)
+            end = min(len(text_src), idx + len(q) + 30)
+            snippet = ("..." if start > 0 else "") + text_src[start:end] + (
+                "..." if end < len(text_src) else "")
+        else:
+            snippet = text_src[:80]
+        out.append({
+            "record_id": rid,
+            "entity_type_id": etid,
+            "entity_type_key": key or "",
+            "entity_type_name": name or "",
+            "entity_type_icon": icon or "📦",
+            "snippet": snippet,
+            "data": data or {},
+        })
+    return out
 

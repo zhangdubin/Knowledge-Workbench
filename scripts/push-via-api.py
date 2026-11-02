@@ -8,7 +8,21 @@
     blob → tree → commit → ref，一条链走完。
 
 用法：
-    python3 scripts/push-via-api.py <版本号>
+    python3 scripts/push-via-api.py                  # 只推提交，不动任何标签
+    python3 scripts/push-via-api.py --tag v1.1.0     # 推提交，并把标签打上去
+    python3 scripts/push-via-api.py --tag v1.1.0 --force-move-tag
+                                                  # 明知要移动旧标签才用
+
+**默认不打标签**，这是刻意的：
+    打标签 = 发版。发版是有后果的（Release、镜像包、一键升级都盯着它），
+    不该在「推个提交」的时候顺手发生。
+    早先的版本把版本号当必填参数，于是每次推提交都会动一次标签 ——
+    有一次把已发布的 v1.1.0 移走了，而 Release 上的镜像包还是旧那版构建的，
+    标签与资产对不上 —— 正是这个项目一直在修的那类「版本对不上」。
+
+**已存在的标签默认不许移动**：
+    标签一动，Release 页面上的说明、已经发出去的镜像包、用户的 checkout
+    三者就会指向不同的内容。除非明确 --force-move-tag，否则直接拒绝。
 
 前提：
     - 本地已 commit 干净（工作区无未提交改动）
@@ -208,10 +222,31 @@ def changed_files_against_remote(parent: str, local_sha: str):
 
 
 def main() -> int:
-    tag = sys.argv[1] if len(sys.argv) > 1 else ""
-    if not tag:
-        print("用法：push-via-api.py <版本号>", file=sys.stderr)
-        return 2
+    # 参数解析：--tag <名字>（可省略）、--force-move-tag
+    args = sys.argv[1:]
+    tag = ""
+    force_move = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--tag":
+            i += 1
+            if i >= len(args):
+                print("--tag 后面要跟标签名", file=sys.stderr)
+                return 2
+            tag = args[i]
+        elif a == "--force-move-tag":
+            force_move = True
+        else:
+            print("未知参数：%s" % a, file=sys.stderr)
+            print("用法：push-via-api.py [--tag vX.Y.Z] [--force-move-tag]", file=sys.stderr)
+            return 2
+        i += 1
+    # 标签名统一用 v 前缀（仓库从 v0.7 起的约定）。
+    # 不做归一化的话，"1.1.0" 会被原样建成 refs/tags/1.1.0，
+    # 远端同时挂着 v1.1.0 和 1.1.0 两个标签 —— 以后看的人会懵。
+    if tag and not tag.startswith("v"):
+        tag = "v" + tag
 
     local_sha = git("rev-parse", "HEAD")
     parent = api("GET", f"/repos/{REPO}/git/ref/heads/main")["object"]["sha"]
@@ -288,22 +323,37 @@ def main() -> int:
             {"sha": commit["sha"], "force": False})
         print(f"  main 已更新到 {commit['sha'][:12]}")
 
-    # ---- 6. 打标签 ----
+    # ---- 6. 打标签（只有显式要求时才打）----
     head_sha = api("GET", f"/repos/{REPO}/git/ref/heads/main")["object"]["sha"]
-    try:
-        api("GET", f"/repos/{REPO}/git/ref/tags/{tag}")
-        api("PATCH", f"/repos/{REPO}/git/refs/tags/{tag}",
-            {"sha": head_sha, "force": True})
-        print(f"  标签 {tag} 已指到 {head_sha[:12]}")
-    except RuntimeError:
-        api("POST", f"/repos/{REPO}/git/refs",
-            {"ref": f"refs/tags/{tag}", "sha": head_sha})
-        print(f"  标签 {tag} 已创建 → {head_sha[:12]}")
+    if not tag:
+        print("  （没要求打标签，不动任何标签）")
+    else:
+        try:
+            old = api("GET", f"/repos/{REPO}/git/ref/tags/{tag}")["object"]["sha"]
+        except RuntimeError:
+            old = ""
+        if old and old != head_sha and not force_move:
+            # 移动一个已经存在的标签 = 改口「这一版就是这个内容」。
+            # 而 Release 页面上的说明、已经发出去的镜像包、用户的 checkout
+            # 都还指着旧内容 —— 三者会各说各话。
+            # 正是这个项目一直在修的那类「版本对不上」，不该由这个脚本顺手造成。
+            print(f"  ! 标签 {tag} 已经存在（指向 {old[:12]}），不移动。")
+            print("    移动已发布的标签会让标签、Release 说明、已发出去的镜像包各说各话。")
+            print("    确实要移，加 --force-move-tag。")
+            return 3
+        if old:
+            api("PATCH", f"/repos/{REPO}/git/refs/tags/{tag}",
+                {"sha": head_sha, "force": True})
+            print(f"  标签 {tag} 已指到 {head_sha[:12]}")
+        else:
+            api("POST", f"/repos/{REPO}/git/refs",
+                {"ref": f"refs/tags/{tag}", "sha": head_sha})
+            print(f"  标签 {tag} 已创建 → {head_sha[:12]}")
 
     # ---- 7. 本地对齐 ----
     align_local_to(head_sha)
 
-    print(f"完成：main 与 {tag} 都在 {head_sha[:12]}")
+    print(f"完成：main 在 {head_sha[:12]}" + (f"，标签 {tag} 也在" if tag else ""))
     return 0
 
 

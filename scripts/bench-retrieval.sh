@@ -73,13 +73,39 @@ fi
 
 echo "== 基准环境：${MODE}（${ENV_DIR}）=="
 
+# --json 的落盘位置要特别处理：
+# 容器里的 /tmp 是容器自己的，容器一退出就没了 ——
+# 结果文件会跟着一起消失，等于白写。
+# 所以把宿主的输出目录挂进容器，容器里写 /out，出来再搬回宿主指定的位置。
+OUT_DIR="$(mktemp -d -t kb-bench-out-XXXXXX)"
+JSON_PATH=""
+ARGS=()
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--json" ] && [ "$#" -ge 2 ]; then
+    JSON_PATH="$2"
+    ARGS+=("--json" "/out/result.json")
+    shift 2
+    continue
+  fi
+  ARGS+=("$1")
+  shift
+done
+
 # 3) 在容器里跑（依赖齐全，还能访问外网测 embedding/大模型延迟）
 docker run --rm \
   -v "$ENV_DIR/backend/app:/app/app:ro" \
   -v "$REPO/scripts:/scripts:ro" \
   -v "$REPO/data:/app/data:ro" \
+  -v "$OUT_DIR:/out" \
   --entrypoint python "$IMAGE" \
   /scripts/bench-retrieval.py \
     --db /app/data/kb.db \
     --backend /app \
-    "$@"
+    "${ARGS[@]}"
+
+# 把结果搬回宿主指定的位置
+if [ -n "$JSON_PATH" ] && [ -f "$OUT_DIR/result.json" ]; then
+  cp "$OUT_DIR/result.json" "$JSON_PATH"
+  echo "结果已写入 $JSON_PATH"
+fi
+rm -rf "$OUT_DIR"

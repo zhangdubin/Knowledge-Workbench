@@ -90,6 +90,75 @@ export const DevApi = {
     api.get('/api/dev/projects/' + id + '/citations',
       { params: { session_id: sessionId || 0 }, silent: true }),
   job: (id) => api.get('/api/dev/jobs/' + id, { silent: true }),
+
+  /* ---- 四阶段流水线（契约：docs/软件开发流水线设计.md） ---- */
+
+  /**
+   * 读流水线：阶段状态 + 左栏导航用的精简视图 + 闸门。
+   * 后端还没上线这个接口时，前端要显示「后端还没上线这个阶段」而不是白屏，
+   * 所以这里不吞异常 —— 由调用方按 404 单独处理。
+   */
+  pipeline: (id) => api.get('/api/dev/projects/' + id + '/pipeline', { silent: true }),
+
+  /**
+   * 跑某个阶段（clarify / specify / design / implement）。
+   * 闸门不通过时后端直接返回 409 与原因（detail / missing / how_to_fix），
+   * 那是「正常的拒绝」，不是错误 —— 界面要把原因显示出来。
+   */
+  runStage: (id, stage, body) =>
+    api.post('/api/dev/projects/' + id + '/stages/' + stage + '/run', body || {}, { silent: true }),
+
+  /**
+   * 提交澄清答案 / 编辑阶段产出。
+   * clarify 用 answers，specify/design 用 notes（可带 data 覆盖产出）。
+   */
+  answerStage: (id, stage, body) =>
+    api.post('/api/dev/projects/' + id + '/stages/' + stage + '/answer', body || {}, { silent: true }),
+
+  /** 导出 ZIP 的地址（配合 downloadExport 用，不要单独 window.open） */
+  exportUrl: (id) => '/api/dev/projects/' + id + '/export.zip',
+}
+
+/**
+ * 下载导出的项目 ZIP。
+ *
+ * 为什么不能直接 window.open(url)：
+ *   裸链不带会话 cookie —— 后端认不出是谁，导出直接 401；
+ *   而且失败了浏览器只会跳一个 JSON 错误页，用户完全不知道发生了什么。
+ * 所以这里用 fetch 带 credentials 拿 blob，再触发一次本地下载；
+ * 失败时把后端的 detail 抛出来给界面显示。
+ */
+export async function downloadExport(id, filename) {
+  const url = DevApi.exportUrl(id)
+  const resp = await fetch(url, { credentials: 'include' })
+  if (!resp.ok) {
+    let detail = '导出失败（HTTP ' + resp.status + '）'
+    try {
+      const data = await resp.json()
+      detail = data.detail || data.message || detail
+      // 后端在 409 时会带 how_to_fix（「依次跑完…然后执行项目生成」），
+      // 一并显示出来，用户才知道下一步该点什么
+      if (Array.isArray(data.how_to_fix) && data.how_to_fix.length) {
+        detail = detail + '（' + data.how_to_fix.join('；') + '）'
+      }
+    } catch (e) {
+      // 响应不是 JSON（比如网关错误页），就用兜底文案
+    }
+    const err = new Error(detail)
+    err.response = { status: resp.status, data: { detail: detail } }
+    throw err
+  }
+  const blob = await resp.blob()
+  const href = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = href
+  a.download = filename || 'project.zip'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  // 不 revoke 的话 blob 会一直占着内存，文件大时能吃掉不少
+  setTimeout(() => URL.revokeObjectURL(href), 2000)
+  return true
 }
 
 export default DevApi

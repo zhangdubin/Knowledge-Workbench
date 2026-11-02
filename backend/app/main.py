@@ -83,6 +83,10 @@ async def lifespan(app: FastAPI):
                 update(DnaJob)
                 .where(DnaJob.status.in_(("pending", "running")))
                 .values(status="failed", error="服务重启中断",
+                        detail={"how_to_fix": [
+                            "重新点一次生成；这次作业是在服务重启时中断的，"
+                            "不是内容有问题",
+                            "如果反复中断，看后端日志：docker compose logs backend"]},
                         finished_at=datetime.now()))
             await _db.commit()
         n = dna_ingest.cleanup_staging()

@@ -18,9 +18,6 @@
         </el-tag>
       </div>
       <div class="ws-head-right">
-        <el-button :loading="generating === 'plan'" @click="genPlan">
-          <el-icon><Aim /></el-icon>生成方案
-        </el-button>
         <el-button :loading="generating === 'all'" @click="genAll">
           <el-icon><Files /></el-icon>逐任务生成
         </el-button>
@@ -32,17 +29,42 @@
 
     <p v-if="project?.goal" class="ws-goal">{{ project.goal }}</p>
 
-    <!-- 进度条：长任务必须有进度，不然用户只能干等 -->
+    <!-- 流水线总览：当前在哪一步 -->
+    <div v-if="!pipelineMissing" class="ws-progress">
+      <span class="ws-progress-label">当前阶段</span>
+      <span class="ws-progress-name">{{ currentStageTitle }}</span>
+      <span class="ws-progress-note">{{ currentStageNote }}</span>
+    </div>
+
+    <!-- 进度条：长任务必须有进度 -->
     <div v-if="job" class="job-bar" :class="{ failed: jobProgress(job).failed }">
       <el-progress
+        v-if="!jobProgress(job).indeterminate"
         :percentage="jobProgress(job).percent"
         :status="jobProgress(job).failed ? 'exception' : jobProgress(job).done ? 'success' : undefined"
+        :stroke-width="10"
+      />
+      <!-- 总量未知时不显示百分比：假的 50% 比不给更害人 -->
+      <el-progress
+        v-else
+        :percentage="100"
+        :indeterminate="true"
+        :duration="3"
         :stroke-width="10"
       />
       <div class="job-text">
         {{ jobProgress(job).text }}
         <span v-if="job.error" class="job-error">{{ job.error }}</span>
-        <span v-if="job.detail" class="job-detail">{{ job.detail }}</span>
+        <span v-if="job.detail" class="job-detail">{{ jobDetailText }}</span>
+        <span v-if="jobTimeout" class="job-timeout">
+          已经等了很久（超过 10 分钟），可以刷新页面看最新状态。
+        </span>
+      </div>
+      <div v-if="jobMissing.length || jobHowToFix(job).length" class="job-fix">
+        <span v-if="jobMissing.length" class="job-fix-title">缺什么：</span>
+        <span v-if="jobMissing.length">{{ jobMissing.join('、') }}</span>
+        <span v-if="jobHowToFix(job).length" class="job-fix-title">怎么修：</span>
+        {{ jobHowToFix(job).join('；') }}
       </div>
     </div>
 
@@ -58,6 +80,32 @@
       <template #title>{{ n.title }}</template>
       <div v-if="n.missing?.length" class="blk-line">缺：{{ n.missing.join('、') }}</div>
       <div v-if="n.how_to_fix?.length" class="blk-line">怎么配：{{ n.how_to_fix.join('；') }}</div>
+      <div v-if="canSwitchOnline" class="blk-ops">
+        <el-button type="primary" size="small" :loading="switching" @click="switchOnline">
+          切到在线协同模式并重跑
+        </el-button>
+        <span class="blk-ops-note">{{ doctorSummaryText }}</span>
+      </div>
+    </el-alert>
+
+    <!-- 模型不可用：给一条出路，而不是只说「缺什么」。
+         契约第 4.6 条：模式不能把功能锁死 ——
+         离线闭环模式不认应用里已配好的云端大模型，用户明明有模型却用不了。
+         所以这里给一个「切到在线协同模式并重跑」的按钮。 -->
+    <el-alert
+      v-if="doctorMissing.length && canSwitchOnline && !blockers.length"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="ws-alert"
+    >
+      <template #title>模型还不可用</template>
+      <div class="blk-line">{{ doctorSummaryText }}</div>
+      <div class="blk-ops">
+        <el-button type="primary" size="small" :loading="switching" @click="switchOnline">
+          <el-icon><Connection /></el-icon>切到在线协同模式并重跑
+        </el-button>
+      </div>
     </el-alert>
 
     <!-- 降级说明：「没搜到」和「没搜」必须分开说 -->
@@ -71,179 +119,160 @@
     >{{ n }}</el-alert>
 
     <div class="ws-body">
-      <!-- ============ 左：方案与任务树 ============ -->
-      <aside class="ws-col ws-left">
-        <section class="col-block">
-          <div class="col-head">
-            <span class="col-title">方案</span>
-            <el-button size="small" text @click="genPlan">重新生成</el-button>
-          </div>
-          <div v-if="planOutline(project?.plan_json)" class="plan-summary">
-            {{ planOutline(project.plan_json) }}
-          </div>
-          <div v-if="project?.tech_notes" class="plan-notes">{{ project.tech_notes }}</div>
-          <div v-if="project?.tech_stack?.length" class="plan-stack">
-            <el-tag v-for="t in project.tech_stack" :key="t" size="small" type="info" effect="plain">
-              {{ t }}
-            </el-tag>
-          </div>
-          <EmptyState
-            v-if="!project?.plan_json || !Object.keys(project.plan_json).length"
-            compact
-            icon="Aim"
-            title="还没有方案"
-            description="点「生成方案」，模型会结合喂养的源码知识拆出任务。"
-          />
-        </section>
+      <!-- ============ 左：四阶段导航 ============ -->
+      <DevStageNav
+        class="ws-col ws-left"
+        :stages="stageList"
+        :current-stage="pipeline?.current_stage || ''"
+        :active="activeStage"
+        :gates="gates"
+        @select="selectStage"
+      />
 
-        <section class="col-block grow">
-          <div class="col-head">
-            <span class="col-title">任务树</span>
-            <el-button size="small" text @click="openTask()">
-              <el-icon><Plus /></el-icon>加任务
+      <!-- ============ 中：当前阶段 ============ -->
+      <section class="ws-col ws-mid">
+        <!-- 阶段级兜底：后端自动推进的阶段没有 job 可轮询，
+             这里用阶段状态 + 计时器盯着，超时了就说「还在跑/已超时」，
+             不能让用户对着一个永远转的骨架屏发呆。 -->
+        <el-alert
+          v-if="stageTimeout"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="ws-alert"
+          title="这一步还在跑，已经超过 10 分钟"
+        >
+          <div class="blk-line">
+            后端可能卡住了。可以点面板里的「重新生成」重跑，或者刷新页面看最新状态。
+          </div>
+        </el-alert>
+        <!-- 后端还没上线流水线接口：说清楚，别白屏 -->
+        <div v-if="pipelineMissing" class="pipeline-missing">
+          <el-alert type="info" :closable="false" show-icon title="后端还没上线这个阶段">
+            <div class="fail-line">
+              四阶段流水线接口（/api/dev/projects/{id}/pipeline）还没上线，
+              这里暂时只能用旧的一次性流程。
+            </div>
+          </el-alert>
+          <div class="legacy-box">
+            <div class="legacy-title">方案</div>
+            <p v-if="planText" class="legacy-plan">{{ planText }}</p>
+            <p v-else class="legacy-plan muted">还没有方案</p>
+            <div v-if="project?.tech_stack?.length" class="plan-stack">
+              <el-tag v-for="t in project.tech_stack" :key="t" size="small" type="info" effect="plain">
+                {{ t }}
+              </el-tag>
+            </div>
+            <el-button type="primary" :loading="generating === 'plan'" @click="genPlan">
+              <el-icon><Aim /></el-icon>生成方案
             </el-button>
           </div>
-          <div v-if="tasks.length" class="task-list">
-            <div
-              v-for="t in flatTasks"
-              :key="t.id"
-              class="task-item"
-              :style="{ marginLeft: (t.depth || 0) * 14 + 'px' }"
-            >
-              <div class="task-main" @click="toggleTask(t.id)">
-                <el-tag :type="taskStatus(t.status).type" size="small" effect="plain">
-                  {{ taskStatus(t.status).label }}
-                </el-tag>
-                <span class="task-title">{{ t.title }}</span>
-              </div>
-              <div v-if="t.description" class="task-desc">{{ t.description }}</div>
-              <div v-if="t.acceptance" class="task-acc">验收：{{ t.acceptance }}</div>
-              <div class="task-ops">
-                <el-button size="small" text @click="genTaskOutput(t)">生成产出</el-button>
-                <el-button size="small" text @click="openTask(t)">编辑</el-button>
-                <el-button size="small" text type="danger" @click="removeTask(t)">删除</el-button>
-              </div>
-              <div v-if="taskWarnings[t.id]?.length" class="task-warn">
-                <div v-for="(w, wi) in taskWarnings[t.id]" :key="wi" class="warn-line">
-                  <el-tag :type="warningSeverity(w).type" size="small" effect="dark">
-                    {{ warningSeverity(w).label }}
-                  </el-tag>
-                  <span>{{ describeWarning(w) }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
+        </div>
+
+        <DevStageClarify
+          v-else-if="activeStage === 'clarify'"
+          :stage="stageOf('clarify')"
+          :busy="runningStage === 'clarify'"
+          @run="runStage('clarify', $event)"
+          @submit="answerStage('clarify', $event)"
+        />
+
+        <DevStageSpecify
+          v-else-if="activeStage === 'specify'"
+          :stage="stageOf('specify')"
+          :busy="runningStage === 'specify'"
+          @run="runStage('specify', $event)"
+          @submit="answerStage('specify', $event)"
+        />
+
+        <DevStageDesign
+          v-else-if="activeStage === 'design'"
+          :stage="stageOf('design')"
+          :tasks="tasks"
+          :warnings="taskWarnings"
+          :busy="runningStage === 'design'"
+          @run="runStage('design', $event)"
+          @gen-task="genTaskOutput"
+          @edit-task="openTask"
+          @del-task="removeTask"
+          @toggle-task="toggleTask"
+        />
+
+        <DevStageImplement
+          v-else-if="activeStage === 'implement'"
+          :stage="stageOf('implement')"
+          :artifacts="artifacts"
+          :busy="runningStage === 'implement'"
+          :exporting="exporting"
+          :importing="importing"
+          @run="runStage('implement', $event)"
+          @export="doExport"
+          @import="importArtifact"
+          @remove="removeArtifact"
+        />
+
+        <div v-else class="panel-placeholder">
           <EmptyState
-            v-else
-            compact
-            icon="List"
-            title="还没有任务"
-            description="生成方案后任务会自动落在这里。"
+            icon="Guide"
+            title="选一个阶段开始"
+            description="左边是四个阶段，先从「需求理解」开始。"
           />
-        </section>
-      </aside>
-
-      <!-- ============ 中：对话与生成 ============ -->
-      <section class="ws-col ws-mid">
-        <div class="col-head">
-          <span class="col-title">对话与生成</span>
-          <span class="col-note">每一句回答都带出处，点右侧「知识引用」可以看到它靠什么撑起来</span>
-        </div>
-
-        <div class="chat-scroll" ref="scrollBox">
-          <div v-if="!messages.length" class="chat-empty">
-            <EmptyState
-              compact
-              icon="ChatDotRound"
-              title="问点什么，或者直接生成"
-              description="问题会带上这个项目的方案、任务与喂养的源码知识一起问模型。"
-            />
-          </div>
-          <div v-for="m in messages" :key="m.key" class="msg" :class="m.role">
-            <div class="msg-head">
-              <span class="msg-who">{{ m.role === 'user' ? '我' : (m.model || '模型') }}</span>
-              <span class="msg-time">{{ shortTime(m.at) }}</span>
-            </div>
-            <div class="msg-body">{{ m.text }}</div>
-            <div v-if="m.notices?.length" class="msg-notice">
-              <div v-for="(n, i) in m.notices" :key="i">· {{ n }}</div>
-            </div>
-            <div v-if="m.citations?.length" class="msg-cites">
-              <el-tag
-                v-for="(c, i) in m.citations"
-                :key="i"
-                size="small"
-                effect="plain"
-                :type="citationKind(c.kind).type"
-              >{{ c.title || c.ref }}</el-tag>
-            </div>
-          </div>
-        </div>
-
-        <div class="chat-input">
-          <el-input
-            v-model="question"
-            type="textarea"
-            :rows="3"
-            placeholder="问模型：怎么做这个任务？需要哪些知识支撑？"
-            @keydown.enter.exact.prevent="send"
-          />
-          <div class="chat-ops">
-            <el-button type="primary" :loading="chatting" @click="send">发送</el-button>
-            <el-button :loading="generating === 'plan'" @click="genPlan">生成方案</el-button>
-            <el-button :loading="generating === 'all'" @click="genAll">逐任务生成</el-button>
-          </div>
         </div>
       </section>
 
-      <!-- ============ 右：产出物与知识引用 ============ -->
+      <!-- ============ 右：会话与知识引用 ============ -->
       <aside class="ws-col ws-right">
-        <section class="col-block">
+        <section class="col-block grow chat-block">
           <div class="col-head">
-            <span class="col-title">产出物</span>
-            <span class="col-note">{{ artifactSummary.text }}</span>
+            <span class="col-title">会话记录</span>
+            <span class="col-note">每一句回答都带出处</span>
           </div>
-          <div v-if="artifacts.length" class="art-list">
-            <div v-for="a in artifacts" :key="a.id" class="art-item">
-              <div class="art-main" @click="openArtifact(a)">
-                <el-icon class="art-icon"><Document /></el-icon>
-                <div class="art-info">
-                  <div class="art-name">{{ a.filename || a.path || '未命名' }}</div>
-                  <div class="art-meta">
-                    {{ formatBytes(a.size) }}
-                    · {{ artifactSource(a.source).label }}
-                    <span v-if="a.document_id" class="art-imported">· 已入库</span>
-                  </div>
-                </div>
+
+          <div class="chat-scroll" ref="scrollBox">
+            <div v-if="!messages.length" class="chat-empty">
+              <EmptyState
+                compact
+                icon="ChatDotRound"
+                title="问点什么"
+                description="问题会带上这个项目的方案、任务与喂养的源码知识一起问模型。"
+              />
+            </div>
+            <div v-for="m in messages" :key="m.key" class="msg" :class="m.role">
+              <div class="msg-head">
+                <span class="msg-who">{{ m.role === 'user' ? '我' : (m.model || '模型') }}</span>
+                <span class="msg-time">{{ shortTime(m.at) }}</span>
               </div>
-              <div v-if="(a.warnings || []).length" class="art-warn">
+              <div class="msg-body">{{ m.text }}</div>
+              <div v-if="m.notices?.length" class="msg-notice">
+                <div v-for="(n, i) in m.notices" :key="i">· {{ n }}</div>
+              </div>
+              <div v-if="m.citations?.length" class="msg-cites">
                 <el-tag
-                  v-for="(w, wi) in a.warnings"
-                  :key="wi"
-                  :type="warningSeverity(w).type"
+                  v-for="(c, i) in m.citations"
+                  :key="i"
                   size="small"
                   effect="plain"
-                >{{ warningSeverity(w).label }}</el-tag>
-              </div>
-              <div class="art-ops">
-                <el-checkbox v-model="acceptedMap[a.id]" size="small">采纳</el-checkbox>
-                <el-button size="small" text @click="importArtifact(a)" :loading="importing === a.id">
-                  入库
-                </el-button>
-                <el-button size="small" text type="danger" @click="removeArtifact(a)">删除</el-button>
+                  :type="citationKind(c.kind).type"
+                >{{ c.title || c.ref }}</el-tag>
               </div>
             </div>
           </div>
-          <EmptyState
-            v-else
-            compact
-            icon="Document"
-            title="还没有产出物"
-            description="生成任务产出后，文件会出现在这里。"
-          />
+
+          <div class="chat-input">
+            <el-input
+              v-model="question"
+              type="textarea"
+              :rows="3"
+              placeholder="问模型：怎么做这个任务？需要哪些知识支撑？"
+              @keydown.enter.exact.prevent="send"
+            />
+            <div class="chat-ops">
+              <el-button type="primary" :loading="chatting" @click="send">发送</el-button>
+            </div>
+          </div>
         </section>
 
-        <section class="col-block grow">
+        <section class="col-block">
           <div class="col-head">
             <span class="col-title">知识引用</span>
             <span class="col-note">{{ citations.length }} 条</span>
@@ -308,17 +337,6 @@
       </template>
     </el-dialog>
 
-    <!-- 产出物内容 -->
-    <el-dialog v-model="artifactDialog" :title="currentArtifact?.filename || '产出物'" width="760px">
-      <pre class="art-content">{{ currentArtifact?.content || '（空）' }}</pre>
-      <template #footer>
-        <el-button @click="artifactDialog = false">关闭</el-button>
-        <el-button type="primary" @click="importArtifact(currentArtifact)" :loading="importing === currentArtifact?.id">
-          导入数据中心
-        </el-button>
-      </template>
-    </el-dialog>
-
     <!-- 反哺：闭环的收口 -->
     <el-dialog v-model="feedbackDialog" title="反哺知识库" width="640px">
       <p class="fb-hint">
@@ -370,29 +388,38 @@
     </el-dialog>
   </div>
 </template>
-
 <script setup>
 /**
  * 软件开发 · 项目工作台
  *
- * 三栏布局：左边是「计划与任务」，中间是「对话与生成」，右边是「产出物与知识引用」。
- * 这样摆的原因：开发是一个「看计划 → 提问题 → 看结果」的循环，
- * 三样东西必须同屏可见 —— 换页签就会打断这个循环。
+ * 布局：左栏四阶段导航 / 中栏当前阶段 / 右栏会话与引用。
+ *
+ * 为什么这么摆：
+ *   专业开发是一条有先后依赖的流水线 —— 用户最需要知道的是
+ *   「我在哪一步、这一步该做什么、为什么下一步还不能跑」。
+ *   原来的三栏（方案+任务 / 对话 / 产出物+引用）把内容平铺着，
+ *   看着多，实际看不出流程。
  *
  * 两条硬规矩：
  *   1) 缺配置时把后端给的 missing / how_to_fix 原样显示，不自己编；
- *   2) 在线模式下「没搜到」与「没搜」必须分开说 —— 降级要诚实地降级。
+ *   2) 判定一律用后端给的结论（gates / pipeline），前端不自己算状态机。
  */
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import EmptyState from '../../components/EmptyState.vue'
-import DevApi from '../../api/dev.js'
+import DevApi, { downloadExport } from '../../api/dev.js'
+import DevStageNav from './DevStageNav.vue'
+import DevStageClarify from './DevStageClarify.vue'
+import DevStageSpecify from './DevStageSpecify.vue'
+import DevStageDesign from './DevStageDesign.vue'
+import DevStageImplement from './DevStageImplement.vue'
 import {
   TASK_STATUS, modeLabel, modeType, projectStatus, taskStatus,
-  artifactSource, citationKind, warningSeverity, describeWarning,
-  planOutline, buildTaskTree, flattenTaskTree, groupCitations,
-  jobProgress, formatPercent, scoreLevel, formatBytes, summarizeArtifacts,
+  citationKind, warningSeverity, describeWarning,
+  planOutline, groupCitations, stageMeta, stageSummary,
+  jobProgress, jobHowToFix, unwrapJob, doctorSummary, doctorMissingText,
+  formatPercent, scoreLevel,
 } from '../../utils/dev.js'
 
 const route = useRoute()
@@ -412,12 +439,24 @@ const notices = ref([])
 const taskWarnings = ref({})
 const acceptedMap = reactive({})
 const generating = ref('')
+const runningStage = ref('')
 const chatting = ref(false)
 const feeding = ref(false)
 const savingTask = ref(false)
 const importing = ref(null)
+const exporting = ref(false)
+const switching = ref(false)
 const question = ref('')
 const scrollBox = ref(null)
+
+/* ---- 四阶段流水线 ---- */
+const pipeline = ref(null)
+const stageList = ref([])
+const gates = ref({})
+const pipelineMissing = ref(false)
+const pipelineNotice = ref('')
+const activeStage = ref('')
+const doctor = ref(null)
 
 const taskDialog = ref(false)
 const editingTask = ref(null)
@@ -425,18 +464,70 @@ const taskForm = reactive({
   title: '', description: '', acceptance: '', status: 'todo', depends_on: [],
 })
 
-const artifactDialog = ref(false)
-const currentArtifact = ref(null)
-
 const feedbackDialog = ref(false)
 const feedbackReport = ref(null)
 const feedbackForm = reactive({ artifact_ids: [], lessons: '' })
 
 let pollTimer = null
+let pollStartedAt = 0
+const JOB_TIMEOUT_MS = 10 * 60 * 1000
+const jobTimeout = ref(false)
 
-const flatTasks = computed(() => flattenTaskTree(buildTaskTree(tasks.value)))
+/* ---- 阶段级超时兜底 ---- */
+// 后端自动推进的阶段不一定返回 job（比如 answer 之后后端自己把下一阶段排上了），
+// 那时候没有作业可轮询，就只剩一个转圈的骨架屏 ——
+// 这里用「阶段状态 + 计时」盯着，超时了明确告诉用户「还在跑/已超时」。
+const STAGE_TIMEOUT_MS = 10 * 60 * 1000
+const stageStartedAt = ref(0)
+const stageTimeout = ref(false)
+let stageClock = null
+
+function syncStageClock() {
+  const st = stageOf(activeStage.value)
+  if (st && st.status === 'running') {
+    if (!stageStartedAt.value) stageStartedAt.value = Date.now()
+    if (Date.now() - stageStartedAt.value > STAGE_TIMEOUT_MS) stageTimeout.value = true
+  } else {
+    stageStartedAt.value = 0
+    stageTimeout.value = false
+  }
+}
+
 const citationGroups = computed(() => groupCitations(citations.value))
-const artifactSummary = computed(() => summarizeArtifacts(artifacts.value))
+const planText = computed(() => planOutline(project.value?.plan_json))
+const currentStageKey = computed(() => pipeline.value?.current_stage || '')
+const currentStageTitle = computed(() => stageMeta(currentStageKey.value).title)
+const currentStageNote = computed(() => stageSummary(stageOf(currentStageKey.value)))
+const doctorMissing = computed(() => doctorMissingText(doctor.value?.missing))
+const doctorSummaryText = computed(() => doctorSummary(doctor.value))
+
+/**
+ * 作业失败时后端挂在 job 顶层的 missing / how_to_fix。
+ *
+ * 注意：别去挖 job.detail —— dna_job 的序列化只带 detail.items，
+ * 缺什么、怎么配是路由层单独提上来的，挖不到。
+ */
+const jobMissing = computed(() => {
+  const m = job.value?.missing
+  if (Array.isArray(m)) return m.map(String)
+  if (m) return [String(m)]
+  return []
+})
+
+/**
+ * 模型不可用时能不能给「切在线协同」这个出口。
+ *
+ * 契约第 4.6 条：模式不能把功能锁死 ——
+ * 离线模式没有本地模型时，后端在 doctor 里要明确给出
+ * 「系统大模型已就绪，可切到在线协同」，前端给一个一键切换并重跑的按钮。
+ */
+const canSwitchOnline = computed(() => {
+  const d = doctor.value
+  if (!d) return false
+  return d.mode !== 'online'
+})
+
+/* ============ 载入 ============ */
 
 async function load() {
   loading.value = true
@@ -472,30 +563,214 @@ async function load() {
   }
 }
 
-/* ============ 生成 ============ */
+/**
+ * 读流水线状态。
+ *
+ * 后端还没上线这个接口时（404）不是错误 ——
+ * 页面上说清「后端还没上线这个阶段」，并保留旧流程，
+ * 而不是白屏或者一堆红字。
+ */
+async function loadPipeline() {
+  try {
+    const res = await DevApi.pipeline(projectId.value)
+    applyPipeline(res)
+  } catch (e) {
+    const status = e.response?.status
+    pipelineMissing.value = true
+    pipelineNotice.value = status === 404
+      ? '后端还没上线这个阶段'
+      : ('流水线状态读不到：' + ((e.response?.data || {}).detail || e.message || '未知错误'))
+  }
+}
+
+/** 体检：模型到底能不能用。离线模式下不发任何外网请求 */
+async function loadDoctor() {
+  try {
+    doctor.value = await DevApi.doctor(project.value?.mode || '')
+  } catch (e) {
+    doctor.value = null
+  }
+}
+
+/**
+ * 把一份流水线数据套到界面上。
+ *
+ * GET /pipeline 与 POST /stages/{stage}/answer 返回的是同一套结构
+ * （{pipeline, stages, gates}），所以共用这一个渲染入口。
+ */
+function applyPipeline(res) {
+  if (!res) return
+  pipeline.value = res.pipeline || null
+  stageList.value = res.stages || []
+  gates.value = res.gates || {}
+  pipelineMissing.value = false
+  pipelineNotice.value = ''
+  const cur = pipeline.value?.current_stage || ''
+  if (!activeStage.value && cur) {
+    activeStage.value = cur
+    return
+  }
+  // 阶段跑完之后自动跟到当前阶段：用户不该还要手动点一下
+  const prev = stageOf(activeStage.value)
+  if (cur && activeStage.value !== cur && prev && prev.status === 'done') {
+    activeStage.value = cur
+  }
+}
+
+function stageOf(key) {
+  if (!key) return null
+  return (pipeline.value && pipeline.value.stages && pipeline.value.stages[key]) || null
+}
+
+function selectStage(key) {
+  activeStage.value = key
+  syncStageClock()
+}
+
+/* ============ 阶段执行 ============ */
 
 function collectError(e, fallback) {
   const d = (e && e.response && e.response.data) || {}
   blockers.value = [{
-    title: d.detail || fallback || '生成没成',
+    title: d.detail || fallback || '这一步没成',
     missing: d.missing || [],
     how_to_fix: d.how_to_fix || [],
   }]
 }
+
+/**
+ * 跑一个阶段。
+ *
+ * 闸门不通过时后端直接返回 409 与原因 ——
+ * 那是「正常的拒绝」，要把原因显示出来，不该当成异常弹个红字。
+ */
+async function runStage(stage, body) {
+  runningStage.value = stage
+  blockers.value = []
+  jobTimeout.value = false
+  try {
+    const res = await DevApi.runStage(projectId.value, stage, body || {})
+    const j = unwrapJob(res)
+    if (!j || !j.id) {
+      collectError(null, '这一步没启动')
+      return
+    }
+    job.value = j
+    pollJob(j.id)
+  } catch (e) {
+    collectError(e, '这一步没启动')
+    // 失败多半是「模型不可用」，拉一次体检，好给「切在线协同」的出口
+    await loadDoctor()
+  } finally {
+    runningStage.value = ''
+  }
+}
+
+/** 提交澄清答案 / 修订说明 */
+async function answerStage(stage, body) {
+  runningStage.value = stage
+  try {
+    const res = await DevApi.answerStage(projectId.value, stage, body || {})
+    // 后端 answer 接口直接返回 {pipeline, stages, gates}，与 GET /pipeline 同构，
+    // 先用它渲染，再刷新一次兜底（后端可能在 answer 里顺手把下一阶段排上了）。
+    applyPipeline(res)
+    ElMessage.success('已提交')
+    await loadPipeline()
+  } catch (e) {
+    collectError(e, '提交没成功')
+    await loadDoctor()
+  } finally {
+    runningStage.value = ''
+  }
+}
+
+/**
+ * 一键切到在线协同模式并重跑当前阶段。
+ *
+ * 为什么要有这个按钮：模块默认离线闭环，而离线闭环不认
+ * 应用里已经配好的云端大模型 —— 用户明明有模型却用不了。
+ * 与其让人自己去设置里翻，不如这里直接给一条出路。
+ */
+async function switchOnline() {
+  switching.value = true
+  try {
+    const res = await DevApi.switchMode('online')
+    if (res && res.mode) {
+      ElMessage.success('已切到在线协同模式，正在重跑')
+    }
+    await loadDoctor()
+    await load()
+    const stage = activeStage.value || currentStageKey.value
+    if (stage) await runStage(stage, { force: true })
+  } catch (e) {
+    ElMessage.error((e.response?.data || {}).detail || '切换模式失败')
+  } finally {
+    switching.value = false
+  }
+}
+
+/**
+ * 轮询后台作业。
+ *
+ * ⚠️ 必须 unwrapJob：后端返回的是 { job: {...} }，
+ * 直接把整个包装对象塞进 job.value 的话，
+ * job.total 永远是 undefined —— 进度条于是永远停在 50%、
+ * 文案永远停在「进行中」，作业其实早就 failed 了，页面全程不报错。
+ *
+ * 另外必须有超时兜底：作业卡住时不能无限转圈。
+ */
+function pollJob(jobId) {
+  if (pollTimer) clearInterval(pollTimer)
+  pollStartedAt = Date.now()
+  jobTimeout.value = false
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await DevApi.job(jobId)
+      const j = unwrapJob(res)
+      if (!j) return
+      job.value = j
+      const p = jobProgress(j)
+      if (p.done) {
+        clearInterval(pollTimer)
+        pollTimer = null
+        if (p.failed) {
+          ElMessage.error('后台作业失败：' + (j.error || '（后端没给原因）'))
+        } else {
+          ElMessage.success('生成完成')
+        }
+        await load()
+        await loadPipeline()
+        return
+      }
+      if (Date.now() - pollStartedAt > JOB_TIMEOUT_MS) {
+        clearInterval(pollTimer)
+        pollTimer = null
+        jobTimeout.value = true
+        ElMessage.warning('等太久了，先停下来；可以刷新页面看最新状态')
+      }
+    } catch {
+      // 轮询失败不打断作业：作业还在后端跑，下一轮再看
+    }
+  }, 1500)
+}
+
+/* ============ 旧的一次性流程（流水线没上线时的兜底） ============ */
 
 async function genPlan() {
   generating.value = 'plan'
   blockers.value = []
   try {
     const res = await DevApi.generatePlan(projectId.value, {})
-    if (!res || !res.job) {
+    const j = unwrapJob(res)
+    if (!j || !j.id) {
       collectError(null, '生成方案没启动')
       return
     }
-    job.value = res.job
-    pollJob(res.job.id)
+    job.value = j
+    pollJob(j.id)
   } catch (e) {
     collectError(e, '生成方案没启动')
+    await loadDoctor()
   } finally {
     generating.value = ''
   }
@@ -506,14 +781,16 @@ async function genAll() {
   blockers.value = []
   try {
     const res = await DevApi.generateAllTasks(projectId.value, {})
-    if (!res || !res.job) {
+    const j = unwrapJob(res)
+    if (!j || !j.id) {
       collectError(null, '生成产出没启动')
       return
     }
-    job.value = res.job
-    pollJob(res.job.id)
+    job.value = j
+    pollJob(j.id)
   } catch (e) {
     collectError(e, '生成产出没启动')
+    await loadDoctor()
   } finally {
     generating.value = ''
   }
@@ -536,30 +813,6 @@ async function genTaskOutput(t) {
   } catch (e) {
     collectError(e, '生成产出失败')
   }
-}
-
-function pollJob(jobId) {
-  if (pollTimer) clearInterval(pollTimer)
-  pollTimer = setInterval(async () => {
-    try {
-      const j = await DevApi.job(jobId)
-      if (!j) return
-      job.value = j
-      const p = jobProgress(j)
-      if (p.done) {
-        clearInterval(pollTimer)
-        pollTimer = null
-        if (p.failed) {
-          ElMessage.error('后台作业失败：' + j.error)
-        } else {
-          ElMessage.success('生成完成')
-        }
-        await load()
-      }
-    } catch {
-      // 轮询失败不打断作业：作业还在后端跑，下一轮再看
-    }
-  }, 1500)
 }
 
 /* ============ 对话 ============ */
@@ -618,11 +871,10 @@ function scrollDown() {
 
 /* ============ 任务 ============ */
 
-function toggleTask(id) {
-  const t = tasks.value.find((x) => x.id === id)
+function toggleTask(t) {
   if (!t) return
   const next = t.status === 'done' ? 'todo' : 'done'
-  DevApi.patchTask(id, { status: next })
+  DevApi.patchTask(t.id, { status: next })
     .then(load)
     .catch((e) => ElMessage.error((e.response?.data || {}).detail || '更新任务失败'))
 }
@@ -683,16 +935,6 @@ async function removeTask(t) {
 
 /* ============ 产出物 ============ */
 
-async function openArtifact(a) {
-  try {
-    const res = await DevApi.artifact(a.id)
-    currentArtifact.value = res && (res.artifact || res)
-    artifactDialog.value = true
-  } catch (e) {
-    ElMessage.error((e.response?.data || {}).detail || '读不到产出物内容')
-  }
-}
-
 async function importArtifact(a) {
   if (!a) return
   importing.value = a.id
@@ -712,6 +954,7 @@ async function importArtifact(a) {
 }
 
 async function removeArtifact(a) {
+  if (!a) return
   try {
     await ElMessageBox.confirm('删除产出物「' + (a.filename || '') + '」？', '删除产出物', {
       type: 'warning', confirmButtonText: '删除', cancelButtonText: '算了',
@@ -724,6 +967,25 @@ async function removeArtifact(a) {
     await load()
   } catch (e) {
     ElMessage.error((e.response?.data || {}).detail || '删除失败')
+  }
+}
+
+/**
+ * 导出项目 ZIP。
+ *
+ * 不用 window.open 裸链：裸链不带会话 cookie，后端认不出是谁直接 401，
+ * 而且失败时浏览器只会跳一个 JSON 错误页，用户完全不知道发生了什么。
+ */
+async function doExport() {
+  exporting.value = true
+  try {
+    const name = (project.value?.name || 'project').replace(/[\\/:*?"<>|]/g, '_')
+    await downloadExport(projectId.value, name + '.zip')
+    ElMessage.success('已导出 ZIP')
+  } catch (e) {
+    ElMessage.error((e.response?.data || {}).detail || e.message || '导出失败')
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -766,12 +1028,33 @@ function shortTime(t) {
   return String(t).replace('T', ' ').slice(5, 16)
 }
 
-onMounted(load)
+/** 作业的 detail 后端给的是数组，渲染出来会变成「a,b,c」 */
+const jobDetailText = computed(() => {
+  const d = job.value?.detail
+  if (!d) return ''
+  if (Array.isArray(d)) return d.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join('；')
+  return String(d)
+})
+
+onMounted(async () => {
+  await load()
+  await Promise.all([loadPipeline(), loadDoctor()])
+  // 阶段状态兜底计时：没有作业可轮询时，至少要告诉用户「还在跑，别干等」。
+  // 后端自动推进的阶段不会给前端 job，前端只能自己定期读一次流水线状态 ——
+  // 否则后端早就跑完了，前端还停在骨架屏上。
+  stageClock = setInterval(async () => {
+    const st = stageOf(activeStage.value)
+    syncStageClock()
+    if (st && st.status === 'running') {
+      await loadPipeline()
+    }
+  }, 5000)
+})
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  if (stageClock) clearInterval(stageClock)
 })
 </script>
-
 <style scoped>
 .dev-ws {
   padding: var(--space-5);
@@ -814,6 +1097,20 @@ onUnmounted(() => {
   line-height: 1.7;
 }
 
+/* ---------- 流水线总览 ---------- */
+.ws-progress {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--primary-bg);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+}
+.ws-progress-label { color: var(--text-tertiary); }
+.ws-progress-name { font-weight: 650; color: var(--primary); }
+.ws-progress-note { color: var(--text-secondary); }
+
 /* ---------- 进度 ---------- */
 .job-bar {
   padding: var(--space-3) var(--space-4);
@@ -823,6 +1120,7 @@ onUnmounted(() => {
 }
 .job-bar.failed {
   border-color: var(--danger);
+  background: var(--danger-bg);
 }
 .job-text {
   margin-top: var(--space-1);
@@ -837,56 +1135,70 @@ onUnmounted(() => {
   color: var(--text-tertiary);
   margin-left: var(--space-2);
 }
-.ws-alert {
-  margin-bottom: var(--space-1);
+.job-timeout {
+  color: var(--warning-text);
+  margin-left: var(--space-2);
 }
-.blk-line {
-  font-size: var(--text-sm);
-  line-height: 1.8;
+.job-fix {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+.job-fix-title { font-weight: 600; color: var(--text-primary); }
+
+/* ---------- 拦截提示 ---------- */
+.ws-alert { margin-bottom: var(--space-1); }
+.blk-line { font-size: var(--text-sm); line-height: 1.8; }
+.blk-ops {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  flex-wrap: wrap;
+}
+.blk-ops-note {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  line-height: 1.6;
 }
 
 /* ---------- 三栏 ---------- */
 .ws-body {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr) 340px;
-  gap: var(--space-3);
+  gap: var(--space-4);
   flex: 1 1 auto;
   min-height: 0;
 }
 .ws-col {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
   min-height: 0;
-  overflow: auto;
+  min-width: 0;
 }
 .ws-left,
+.ws-mid,
 .ws-right {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-3);
-  box-shadow: var(--shadow-card);
+  overflow: auto;
 }
 .ws-mid {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-3);
-  box-shadow: var(--shadow-card);
-  overflow: hidden;
+  display: block;
 }
 .col-block {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding-bottom: var(--space-3);
-  border-bottom: 1px solid var(--border-light);
+  padding: var(--space-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
 }
 .col-block.grow {
   flex: 1 1 auto;
-  border-bottom: none;
-  padding-bottom: 0;
+  min-height: 0;
 }
 .col-head {
   display: flex;
@@ -904,236 +1216,121 @@ onUnmounted(() => {
   color: var(--text-tertiary);
 }
 
-/* ---------- 方案 ---------- */
-.plan-summary {
-  font-size: var(--text-sm);
-  line-height: 1.75;
-  color: var(--text-secondary);
-}
-.plan-notes {
-  font-size: var(--text-xs);
-  line-height: 1.7;
-  color: var(--text-tertiary);
-  padding: var(--space-2);
-  background: var(--bg-sunken);
-  border-radius: var(--radius-sm);
-  white-space: pre-wrap;
-}
-.plan-stack {
-  display: flex;
-  gap: var(--space-1);
-  flex-wrap: wrap;
-}
-
-/* ---------- 任务 ---------- */
-.task-list {
+/* ---------- 流水线缺失时的兜底 ---------- */
+.pipeline-missing {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-4);
 }
-.task-item {
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-light);
-  background: var(--bg-subtle);
-}
-.task-main {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  cursor: pointer;
-}
-.task-title {
-  font-size: var(--text-sm);
-  color: var(--text-primary);
-  font-weight: 550;
-}
-.task-desc {
-  margin-top: var(--space-1);
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  line-height: 1.7;
-}
-.task-acc {
-  margin-top: 2px;
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-.task-ops {
-  margin-top: var(--space-1);
-  display: flex;
-  gap: var(--space-1);
-}
-.task-warn {
-  margin-top: var(--space-1);
-}
-.warn-line {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-1);
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  line-height: 1.7;
-}
-
-/* ---------- 对话 ---------- */
-.chat-scroll {
-  flex: 1 1 auto;
-  overflow: auto;
-  padding: var(--space-2);
+.legacy-box {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  min-height: 240px;
+  align-items: flex-start;
+  padding: var(--space-5);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
 }
+.legacy-title {
+  font-size: var(--text-sm);
+  font-weight: 620;
+  color: var(--text-primary);
+}
+.legacy-plan {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.8;
+  color: var(--text-secondary);
+  max-width: 72ch;
+}
+.legacy-plan.muted { color: var(--text-tertiary); }
+.plan-stack { display: flex; gap: var(--space-1); flex-wrap: wrap; }
+.panel-placeholder {
+  padding: var(--space-5);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+.fail-line { font-size: var(--text-sm); line-height: 1.7; }
+
+/* ---------- 会话 ---------- */
+.chat-block { min-height: 0; }
+.chat-scroll {
+  flex: 1 1 auto;
+  min-height: 180px;
+  max-height: 46vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-right: var(--space-1);
+}
+.chat-empty { padding: var(--space-4) 0; }
 .msg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
   padding: var(--space-3);
   border-radius: var(--radius-md);
   background: var(--bg-subtle);
-  border: 1px solid var(--border-light);
 }
 .msg.user {
   background: var(--primary-bg);
-  border-color: var(--primary);
 }
 .msg-head {
   display: flex;
   align-items: baseline;
+  justify-content: space-between;
   gap: var(--space-2);
-  margin-bottom: var(--space-1);
 }
-.msg-who {
-  font-size: var(--text-xs);
-  font-weight: 620;
-  color: var(--text-primary);
-}
-.msg-time {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
+.msg-who { font-size: var(--text-xs); font-weight: 600; color: var(--text-secondary); }
+.msg-time { font-size: var(--text-xs); color: var(--text-tertiary); }
 .msg-body {
   font-size: var(--text-sm);
   line-height: 1.8;
   color: var(--text-primary);
   white-space: pre-wrap;
-  word-break: break-word;
 }
 .msg-notice {
-  margin-top: var(--space-2);
   font-size: var(--text-xs);
   color: var(--warning-text);
   line-height: 1.7;
 }
-.msg-cites {
-  margin-top: var(--space-2);
-  display: flex;
-  gap: var(--space-1);
-  flex-wrap: wrap;
-}
+.msg-cites { display: flex; gap: var(--space-1); flex-wrap: wrap; }
 .chat-input {
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--border-light);
-}
-.chat-ops {
-  margin-top: var(--space-2);
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-/* ---------- 产出物 ---------- */
-.art-list {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-light);
 }
-.art-item {
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-light);
-  background: var(--bg-subtle);
-}
-.art-main {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  cursor: pointer;
-}
-.art-icon {
-  color: var(--primary);
-}
-.art-info {
-  min-width: 0;
-}
-.art-name {
-  font-size: var(--text-sm);
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.art-meta {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-.art-imported {
-  color: var(--success-text);
-}
-.art-warn {
-  margin-top: var(--space-1);
-  display: flex;
-  gap: var(--space-1);
-  flex-wrap: wrap;
-}
-.art-ops {
-  margin-top: var(--space-1);
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-.art-content {
-  margin: 0;
-  padding: var(--space-3);
-  background: var(--bg-sunken);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 1.7;
-  max-height: 52vh;
-  overflow: auto;
-  white-space: pre;
-}
+.chat-ops { display: flex; gap: var(--space-2); }
 
 /* ---------- 引用 ---------- */
 .cite-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  max-height: 34vh;
+  overflow: auto;
 }
-.cite-group-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-1);
-}
-.cite-count {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
+.cite-group { display: flex; flex-direction: column; gap: var(--space-2); }
+.cite-group-head { display: flex; align-items: center; gap: var(--space-2); }
+.cite-count { font-size: var(--text-xs); color: var(--text-tertiary); }
 .cite-item {
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--border-strong);
   background: var(--bg-subtle);
-  border: 1px solid var(--border-light);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
-.cite-title {
-  font-size: var(--text-sm);
-  color: var(--text-primary);
-  line-height: 1.5;
-}
+.cite-title { font-size: var(--text-xs); font-weight: 600; color: var(--text-primary); }
 .cite-snippet {
-  margin-top: 2px;
   font-size: var(--text-xs);
   color: var(--text-secondary);
   line-height: 1.6;
@@ -1143,13 +1340,14 @@ onUnmounted(() => {
   overflow: hidden;
 }
 .cite-meta {
-  margin-top: var(--space-1);
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
   font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
+.cite-ref { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cite-conf.lv-high { color: var(--success-text); }
 .cite-conf.lv-mid { color: var(--warning-text); }
 .cite-conf.lv-low { color: var(--danger-text); }
@@ -1164,34 +1362,28 @@ onUnmounted(() => {
 .fb-report {
   margin-top: var(--space-3);
   padding: var(--space-3);
-  border-radius: var(--radius-md);
   background: var(--bg-subtle);
-  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
   font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-.fb-round {
-  font-weight: 620;
-  color: var(--text-primary);
-  margin-bottom: var(--space-1);
-}
-.fb-report ul {
-  margin: 0;
-  padding-left: 1.2em;
   line-height: 1.9;
 }
+.fb-round { font-weight: 600; color: var(--text-primary); }
+.fb-report ul { margin: var(--space-1) 0 0; padding-left: 18px; }
 
+/* ---------- 窄屏 ---------- */
 @media (max-width: 1280px) {
   .ws-body {
-    grid-template-columns: 280px minmax(0, 1fr);
-  }
-  .ws-right {
-    grid-column: 1 / -1;
+    grid-template-columns: 260px minmax(0, 1fr) 300px;
   }
 }
-@media (max-width: 900px) {
+@media (max-width: 1024px) {
   .ws-body {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .ws-left,
+  .ws-mid,
+  .ws-right {
+    overflow: visible;
   }
 }
 </style>

@@ -782,16 +782,18 @@ def ensure_model_available(mode: str, cfg: dict | None = None) -> dict:
                    how_to_fix=how, detail={"model": info})
 
 
-async def _chat_openai(base_url: str, api_key: str, model: str,
-                        messages: list[dict], *, temperature: float = 0.3,
-                        max_tokens: int = 2048, timeout: float = 120.0) -> str:
-    """一次 OpenAI 兼容调用。
+async def _chat_openai_meta(base_url: str, api_key: str, model: str,
+                               messages: list[dict], *, temperature: float = 0.3,
+                               max_tokens: int = 8192, timeout: float = 600.0) -> dict:
+    """一次 OpenAI 兼容调用，连同「是不是被截断了」一起返回。
 
-    为什么不复用 ai.chat_real：
-        那个函数在调用失败时会静默降级到本地规则引擎（chat_mock），
-    返回一段「看起来像答案」的规则拼装结果。
-    开发流程里这等于假成功 —— 用户以为生成了方案，实际拿到的是模板。
-    这里要的是：失败就明说失败。
+    为什么多返回 finish_reason：
+        模型输出撞到 max_tokens 上限时，OpenAI 兼容接口不会报错，
+        它会把回答**戛然而止**地截断掉，返回 finish_reason="length"。
+        对调用方来说这是「内容不完整」，跟「网络失败」完全不是一回事 ——
+        前者可以抢救（补括号、让模型重写短的），后者只能重试。
+        不看 finish_reason，两种情况都会退化成同一句「生成失败」，
+        用户完全不知道自己该换模型还是该重试。
     """
     payload = {
         "model": model or "gpt-3.5-turbo",
@@ -805,12 +807,38 @@ async def _chat_openai(base_url: str, api_key: str, model: str,
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         r = await client.post(base_url, json=payload, headers=headers)
         if r.status_code >= 400:
-            raise DevError("模型接口返回 %s（%s）" % (r.status_code, r.text[:200]),
+            body = (r.text or "")[:200]
+            # 不同的错要给出不同的出路：
+            #   429 = 额度/频率限制（等一会儿或换个模型），
+            #   401/403 = 密钥不对（去改密钥），
+            #   5xx = 服务端抖动（重试）。
+            # 一律说「检查模型地址、模型名与密钥」等于什么都没说 ——
+            # 密钥明明是对的，是额度用完了。
+            if r.status_code == 429:
+                raise DevError(
+                    "模型接口返回 429：%s" % body,
+                    missing=["model_quota"],
+                    how_to_fix=[
+                        "模型额度用完了（429）：等额度恢复后再重跑，"
+                        "或到 AI 设置里换一个额度充足的模型",
+                        "如果同时跑多个开发任务，先停掉几个再重试",
+                    ])
+            if r.status_code in (401, 403):
+                raise DevError("模型接口返回 %s：%s" % (r.status_code, body),
+                               missing=["model_api_key"],
+                               how_to_fix=["到 AI 设置里检查密钥是否正确、是否过期"])
+            if r.status_code >= 500:
+                raise DevError("模型接口返回 %s：%s" % (r.status_code, body),
+                               missing=["model_endpoint"],
+                               how_to_fix=["模型服务端出错了，稍后重试；"
+                                           "反复失败就换一个模型端点"])
+            raise DevError("模型接口返回 %s（%s）" % (r.status_code, body),
                            missing=["model_endpoint"],
                            how_to_fix=["检查模型地址、模型名与密钥是否正确"])
         data = r.json()
     try:
-        msg = data["choices"][0]["message"]
+        choice = data["choices"][0]
+        msg = choice["message"]
     except Exception as e:
         raise DevError("模型返回的结构不符合 OpenAI 兼容协议") from e
     content = msg.get("content") or ""
@@ -820,7 +848,28 @@ async def _chat_openai(base_url: str, api_key: str, model: str,
         content = scrub_reasoning(content)
     except Exception:
         pass
-    return content
+    return {
+        "text": content,
+        "finish_reason": choice.get("finish_reason") or "",
+        "usage": data.get("usage") or {},
+    }
+
+
+async def _chat_openai(base_url: str, api_key: str, model: str,
+                        messages: list[dict], *, temperature: float = 0.3,
+                        max_tokens: int = 8192, timeout: float = 600.0) -> str:
+    """一次 OpenAI 兼容调用，只要正文。
+
+    为什么不复用 ai.chat_real：
+        那个函数在调用失败时会静默降级到本地规则引擎（chat_mock），
+    返回一段「看起来像答案」的规则拼装结果。
+    开发流程里这等于假成功 —— 用户以为生成了方案，实际拿到的是模板。
+    这里要的是：失败就明说失败。
+    """
+    out = await _chat_openai_meta(base_url, api_key, model, messages,
+                                  temperature=temperature, max_tokens=max_tokens,
+                                  timeout=timeout)
+    return out["text"]
 
 
 async def call_model(mode: str, messages: list[dict], *, cfg: dict | None = None,
@@ -840,27 +889,192 @@ async def call_model(mode: str, messages: list[dict], *, cfg: dict | None = None
         temp = float(lm.get("temperature") or 0.3)
     else:
         temp = float(ai_config.get_full_config().get("temperature") or 0.3)
-    mx = max_tokens or int(lm.get("max_tokens") or 2048)
+    mx = max_tokens or _dev_max_tokens(cfg, info["kind"])
+    ceiling = _max_tokens_ceiling(cfg, info["kind"])
+    # 读超时：开发流程一次要出的东西比问答大得多，
+    # 120 秒连「一份需求规格」都写不完 —— 实测 specify 阶段跑了几分钟，
+    # 读超时先到了，作业被判失败。宁可多等，不要随机失败。
+    timeout = float((cfg.get("model") or {}).get("timeout") or 600.0)
 
-    if info["kind"] == "local":
-        base = (lm.get("base_url") or "").strip()
-        if mode == dev_config.MODE_OFFLINE and not is_local_endpoint(base):
-            raise DevError("离线模式的模型端点必须是本机或内网地址（当前填的是外部地址）",
-                           missing=["local_model.base_url"],
-                           how_to_fix=["把端点改成 http://127.0.0.1:11434/v1/chat/completions "
-                                      "这类本机地址；确实要用云端模型请切到在线协同模式"])
-        text = await _chat_openai(base, lm.get("api_key") or "", lm.get("model") or "",
-                                   messages, temperature=temp, max_tokens=mx)
-        return {"text": text, "model": lm.get("model") or "local"}
+    async def _once(budget: int) -> dict:
+        if info["kind"] == "local":
+            base = (lm.get("base_url") or "").strip()
+            if mode == dev_config.MODE_OFFLINE and not is_local_endpoint(base):
+                raise DevError("离线模式的模型端点必须是本机或内网地址（当前填的是外部地址）",
+                               missing=["local_model.base_url"],
+                               how_to_fix=["把端点改成 http://127.0.0.1:11434/v1/chat/completions "
+                                          "这类本机地址；确实要用云端模型请切到在线协同模式"])
+            o = await _chat_openai_meta(base, lm.get("api_key") or "", lm.get("model") or "",
+                                        messages, temperature=temp, max_tokens=budget,
+                                        timeout=timeout)
+            return {"text": o["text"], "model": lm.get("model") or "local",
+                    "finish_reason": o.get("finish_reason") or "",
+                    "usage": o.get("usage") or {}}
 
-    ai = ai_config.get_full_config()
-    base = (ai.get("base_url") or "").strip()
-    # 云端端点属于出网：总开关关着时必须拦下
-    if not is_local_endpoint(base):
-        dev_config.assert_outbound(mode, "大模型调用", cfg=cfg)
-    text = await _chat_openai(base, ai.get("api_key") or "", ai.get("model") or "",
-                               messages, temperature=temp, max_tokens=mx)
-    return {"text": text, "model": ai.get("model") or "system"}
+        ai = ai_config.get_full_config()
+        base = (ai.get("base_url") or "").strip()
+        # 云端端点属于出网：总开关关着时必须拦下
+        if not is_local_endpoint(base):
+            dev_config.assert_outbound(mode, "大模型调用", cfg=cfg)
+        o = await _chat_openai_meta(base, ai.get("api_key") or "", ai.get("model") or "",
+                                    messages, temperature=temp, max_tokens=budget,
+                                    timeout=timeout)
+        return {"text": o["text"], "model": ai.get("model") or "system",
+                "finish_reason": o.get("finish_reason") or "",
+                "usage": o.get("usage") or {}}
+
+    # ---- 「没写完」就加预算重来 ----
+    #
+    # 推理模型有个坑：它会把 max_tokens 预算**全花在思考块上**，
+    # 正文一个字都吐不出来。实测 MiniMax-M3.1-Flash：
+    #   max_tokens=2048 → completion_tokens=2048，
+    #   reasoning_tokens=2049，content 长度 **0**，
+    #   finish_reason=length。
+    # 这时候不是「内容写了一半」，是「根本没开始写」——
+    # 加大预算才有意义，否则重试一万次也是空的。
+    # AI 模块（services/ai.py）早就有这套逻辑，
+    # 这里跟着它走一份，免得两个模块对同一件事有两套脾气。
+    attempt = 0
+    out = await _once(mx)
+    while attempt < _MAX_LENGTH_RETRIES:
+        empty = not (out.get("text") or "").strip()
+        truncated = out.get("finish_reason") == "length"
+        if not (empty or truncated):
+            break
+        if mx >= ceiling:
+            break
+        mx = min(mx * 2, ceiling)
+        attempt += 1
+        out = await _once(mx)
+    out["retries"] = attempt
+    out["max_tokens"] = mx
+    return out
+
+
+# 「没写完就加预算重来」最多重试几次
+# 2048 → 4k → 8k → 16k → 32k：四次才够从最小的预算摸到天花板
+_MAX_LENGTH_RETRIES = 4
+
+
+def _max_tokens_ceiling(cfg: dict, kind: str = "") -> int:
+    """输出预算的天花板 —— 加大也不能超过它。
+
+    云端大模型的上限是用户在 AI 设置里自己定的（默认 32768），
+    那是用户对「这次调用最多花多少钱」的表态，不能替他超。
+    """
+    if kind == "system":
+        try:
+            c = int(ai_config.get_full_config().get("max_tokens_ceiling") or 0)
+        except Exception:
+            c = 0
+        if c:
+            return c
+    m = cfg.get("model") or {}
+    return int(m.get("max_tokens_ceiling") or 32768)
+
+
+def _dev_max_tokens(cfg: dict, kind: str = "") -> int:
+    """开发流程该给模型多少输出预算。
+
+    为什么不用 AI 设置里的 max_tokens：
+        问答一次要的是一段话，4096 够用；
+        开发流程一次要吐的是**一整份规格 + 一整套项目文件**，
+        2048 会在半路被截断 —— 而截断的 JSON 解析不出来，
+        用户只看到一句「生成失败」。
+        实测就是这个：方案 JSON 在 2048 字符处戛然而止，
+        finish_reason=length，于是「模型没有返回可解析的方案 JSON」。
+    """
+    m = cfg.get("model") or {}
+    want = int(m.get("max_tokens") or 0)
+    if not want:
+        lm = cfg.get("local_model") or {}
+        want = int(lm.get("max_tokens") or 0)
+    if not want:
+        want = 8192
+    if kind == "system":
+        # 系统大模型的上限是用户自己设的，不能越过去
+        try:
+            ceiling = int(ai_config.get_full_config().get("max_tokens_ceiling") or 0)
+        except Exception:
+            ceiling = 0
+        if ceiling:
+            want = min(want, ceiling)
+    return max(1024, want)
+
+
+async def call_model_json(mode: str, messages: list[dict], *, cfg: dict | None = None,
+                          temperature: float | None = None,
+                          max_tokens: int | None = None,
+                          validator=None, retries: int = 1) -> dict:
+    """调模型要一段 JSON，带**截断抢救**与**一次自动重试**。
+
+    为什么要有这层：
+        模型返回的 JSON 有两种「不完整」：
+          1) 被 max_tokens 截断 —— 内容是对的，只是没写完；
+          2) 字段结构不对 —— 内容在，但形状不对（比如 summary 给了对象）。
+        第 1 种可以**抢救**（把断掉的括号补上、砍掉没写完的最后一个元素）；
+        第 2 种抢救不了，只能**把问题告诉模型让它重写**。
+        没有这层，两种情况的用户体感都是同一句「生成失败」。
+
+    返回：{"text", "data", "model", "finish_reason", "attempts", "repaired"}
+      data 是解析出来的 dict（失败为 None）
+      repaired=True 表示原始输出是残的、这份 data 是抢救出来的
+    """
+    cfg = cfg or dev_config.load_config()
+    last_text = ""
+    last_reason = ""
+    for attempt in range(max(1, retries + 1)):
+        out = await call_model(mode, messages, cfg=cfg,
+                               temperature=temperature, max_tokens=max_tokens)
+        text = out.get("text") or ""
+        last_text = text
+        last_reason = out.get("finish_reason") or ""
+        data = parse_json_block(text)
+        repaired = False
+        if data is None:
+            data = parse_json_block(text, salvage=True)
+            repaired = data is not None
+        if data is not None and validator is not None:
+            try:
+                validator(data)
+            except Exception as e:
+                # 结构不对：告诉模型哪儿不对，让它重写
+                if attempt >= max(1, retries + 1) - 1:
+                    raise DevError(
+                        "模型返回的结构不符合要求：%s" % (str(e)[:200]),
+                        missing=["model_output"],
+                        how_to_fix=["换个更听话的模型", "或在开发设置里调高输出预算"])
+                messages = list(messages) + [
+                    {"role": "assistant", "content": text[:4000]},
+                    {"role": "user", "content":
+                     "上一次输出不符合要求：%s\n请只输出一个 JSON 对象，"
+                     "修正后重新输出，不要加任何解释文字。" % (str(e)[:300])},
+                ]
+                continue
+        if data is not None:
+            return {"text": text, "data": data, "model": out.get("model") or "",
+                    "finish_reason": last_reason, "attempts": attempt + 1,
+                    "repaired": repaired}
+        # 解析不出来：告诉模型「刚才那次没写完/写坏了」
+        if attempt >= max(1, retries + 1) - 1:
+            break
+        hint = ("上一次输出在写完之前就被截断了（输出预算 %s token）。"
+                % (max_tokens or _dev_max_tokens(cfg)))
+        if last_reason != "length":
+            hint = "上一次输出的 JSON 解析不出来。"
+        messages = list(messages) + [
+            {"role": "assistant", "content": text[:4000]},
+            {"role": "user", "content":
+             hint + "请**重新输出一次**完整的 JSON，"
+             "内容要精简（长数组只保留最关键的 3~5 项），"
+             "每个字符串不要超过 200 字，只输出 JSON、不要任何解释。"},
+        ]
+    raise DevError("模型没有返回可解析的 JSON（重试 %d 次仍失败）" % (max(1, retries + 1)),
+                   missing=["model_output"],
+                   how_to_fix=["换个更听话的模型再试一次",
+                               "在开发设置里调大「输出预算（max_tokens）」",
+                               "或者把项目目标写得更具体些"],
+                   detail={"finish_reason": last_reason, "text_head": last_text[:500]})
 
 
 # ============ JSON 解析 ============
@@ -870,12 +1084,88 @@ _FENCE = chr(96) * 3
 _FENCE_RE = re.compile(re.escape(_FENCE) + r"(?:json)?\s*(.*?)" + re.escape(_FENCE), re.S)
 
 
-def parse_json_block(text: str) -> dict | None:
+def _salvage_json(raw: str) -> dict | None:
+    """抢救被截断的 JSON。
+
+    模型输出撞到 token 上限时，JSON 会在半路断掉：
+    数组的最后一个元素写了一半、对象的最后一个键没有值。
+    这时候内容其实是对的，只是**没写完** —— 把它砍到最后一个完整的地方，
+    再把没关上的括号补上，就能拿回大部分内容。
+
+    为什么值得抢救：
+        整份丢掉，用户看到的是「生成失败」，重试一次又是几分钟；
+        抢救出来，用户看到的是「规格写了一半」，他知道该往哪补。
+        前者像是系统坏了，后者像是活儿没干完 —— 后者才是真的。
+
+    只在内容**不完整**时用；完整但结构不对的 JSON 不归它管。
+    """
+    start = raw.find("{")
+    if start < 0:
+        return None
+    body = raw[start:]
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    candidates: list[tuple[int, list[str]]] = []
+    for i, ch in enumerate(body):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+            continue
+        if ch in "}]":
+            if stack:
+                stack.pop()
+            continue
+        if ch == "," and stack:
+            # 逗号后面被截断了 → 这个逗号是多余的，切点在这里
+            candidates.append((i, list(stack)))
+    # 收尾时还停在字符串里：把这个字符串闭合掉
+    body_fixed = body + '"' if in_str else body
+    if not candidates:
+        # 一个逗号都没有：整段就这么点内容，直接补齐括号试试
+        closer = "".join(reversed(stack))
+        for candidate in (body_fixed + closer, body_fixed + closer + "}",
+                          body_fixed + closer + "]"):
+            try:
+                data = json.loads(candidate)
+            except Exception:
+                continue
+            if isinstance(data, dict) and data:
+                return data
+        return None
+    # 从最深的切点往回试：第一个能解析成功的就是内容最全的
+    for cut, cut_stack in reversed(candidates):
+        trimmed = body_fixed[:cut]
+        closer = "".join(reversed(cut_stack))
+        for candidate in (trimmed + closer, trimmed + closer + "}",
+                          trimmed + closer + "]"):
+            try:
+                data = json.loads(candidate)
+            except Exception:
+                continue
+            if isinstance(data, dict) and data:
+                return data
+    return None
+
+
+def parse_json_block(text: str, salvage: bool = False) -> dict | None:
     """从模型回复里抠出 JSON 对象。
 
     模型爱把 JSON 包在代码块里，前后还带一句话。
     直接 json.loads 会失败 —— 那时候不该报「生成失败」，
     该做的是把 JSON 抠出来。
+
+    salvage=True 时额外尝试抢救**被截断**的 JSON（见 _salvage_json）。
     """
     if not text:
         return None
@@ -912,6 +1202,12 @@ def parse_json_block(text: str) -> dict | None:
                         return data
                 except Exception:
                     continue
+    if salvage:
+        # 用原始正文抢救：上面循环里的 raw 是最后一个候选，
+        # 拿它抢救等于只抢救「没有围栏的那份」，围栏版反而救不回来
+        salvaged = _salvage_json(text)
+        if salvaged is not None:
+            return salvaged
     return None
 
 
@@ -932,10 +1228,18 @@ PLAN_SYSTEM = """你是一位资深软件架构师，正在为一个知识库工
      "acceptance": "可判定的验收标准（能拿它对照检查）", "depends_on": []}
   ]
 }
-3. 任务粒度控制在半天到一天能做完，每条都要有可判定的验收标准。
-4. 严格基于给定的参考资料。资料不足的地方要在 summary 里写明「依据不足」，
+3. summary 与 architecture 必须是**字符串**，不要写成对象或数组；
+   tech_stack / risks 必须是**字符串数组**；tasks 必须是**对象数组**。
+   结构错了调用方会直接判定生成失败。
+4. **不要改动用户指定的技术栈**。用户给了技术栈就按它设计；
+   只有当用户明确写「技术栈未指定」时才自己选，并在 tech_notes 里说明理由。
+5. 任务粒度控制在半天到一天能做完，每条都要有可判定的验收标准；
+   任务总数控制在 5~12 条 —— 太多会写不完，被截断的 JSON 一条都不算数。
+6. 严格基于给定的参考资料。资料不足的地方要在 summary 里写明「依据不足」，
    不要用通用套路补齐 —— 那会让人以为这些经验来自这个系统。
-5. 任务之间的 depends_on 填前序任务在 tasks 数组中的下标（从 0 开始）。
+7. 任务之间的 depends_on 填前序任务在 tasks 数组中的下标（从 0 开始）。
+8. 每个字符串控制在 200 字以内。宁可少写几句，也不要让 JSON 写不完 ——
+   写到一半被截断，整份方案都作废。
 """
 
 TASK_SYSTEM = """你是一位资深工程师，正在为一个项目里的某个任务写代码。
@@ -966,6 +1270,118 @@ CHAT_SYSTEM = """你是这个项目的开发助手，回答要贴着这个项目
 """
 
 
+def _flatten_to_text(value) -> str:
+    """把模型随手给的任意结构压成一段能读的正文。
+
+    为什么需要它：
+        模型经常不照 schema 来 —— 明明要一个字符串的 summary，
+        它给了一个对象（{"project": "...", "goal": "..."}）。
+        这时候**内容是好的，只是形状不对**。
+        把形状掰直，比让用户重跑一次划算得多。
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_flatten_to_text(v) for v in value]
+        return "；".join([p for p in parts if p])
+    if isinstance(value, dict):
+        # 常见的两种形状：{"goal": "...", "scope": {...}} / {"description": "..."}
+        for key in ("summary", "text", "description", "content", "goal",
+                    "overview", "detail", "details"):
+            v = value.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        parts = []
+        for k, v in value.items():
+            t = _flatten_to_text(v)
+            if t:
+                parts.append("%s：%s" % (k, t) if isinstance(v, str) else "%s：%s" % (k, t))
+        return "；".join(parts)
+    return str(value)
+
+
+def _normalize_plan_payload(data: dict) -> dict:
+    """把模型的方案 JSON 掰成我们约定的形状。
+
+    约定：
+      summary     字符串
+      architecture 字符串
+      tech_stack  字符串数组
+      risks       字符串数组
+      tasks       对象数组（每项有 title/description/acceptance/depends_on）
+
+    为什么「掰」而不是「拒」：
+        模型给的内容往往是对的，只是把字符串写成了对象、
+        把任务列表写成了对象。直接拒掉等于让用户重跑一次，
+        而重跑一次要再等一分多钟。掰直之后内容还在，只是要读得懂。
+    """
+    out = dict(data or {})
+    out["summary"] = _flatten_to_text(out.get("summary"))
+    out["architecture"] = _flatten_to_text(out.get("architecture"))
+    for key in ("tech_stack", "risks"):
+        v = out.get(key)
+        if isinstance(v, str):
+            out[key] = [v] if v.strip() else []
+        elif isinstance(v, list):
+            out[key] = [_flatten_to_text(x)[:200] for x in v if _flatten_to_text(x)][:20]
+        elif isinstance(v, dict):
+            out[key] = [_flatten_to_text(x)[:200] for x in v.values()
+                        if _flatten_to_text(x)][:20]
+        else:
+            out[key] = []
+    tasks = out.get("tasks")
+    if isinstance(tasks, dict):
+        tasks = [tasks]
+    if not isinstance(tasks, list):
+        tasks = []
+    norm_tasks = []
+    for t in tasks:
+        if not isinstance(t, dict):
+            text = _flatten_to_text(t)
+            if text:
+                norm_tasks.append({"title": text[:200], "description": "",
+                                   "acceptance": "", "depends_on": []})
+            continue
+        deps = t.get("depends_on")
+        if isinstance(deps, (int, float)):
+            deps = [int(deps)]
+        if not isinstance(deps, list):
+            deps = []
+        norm_tasks.append({
+            "title": _flatten_to_text(t.get("title") or t.get("name"))[:200],
+            "description": _flatten_to_text(
+                t.get("description") or t.get("detail") or t.get("content"))[:2000],
+            "acceptance": _flatten_to_text(
+                t.get("acceptance") or t.get("criteria") or t.get("done_when"))[:2000],
+            "depends_on": [int(d) for d in deps
+                           if isinstance(d, (int, float)) and not isinstance(d, bool)],
+        })
+    out["tasks"] = [t for t in norm_tasks if t["title"]]
+    return out
+
+
+def _validate_plan_payload(data: dict) -> None:
+    """校验方案 JSON —— 只在「实在没法用」时才报错。
+
+    为什么不在这里掰形状：
+        掰形状交给 _normalize_plan_payload（它不会失败）；
+        这个函数只负责回答「有没有内容」。
+        没有 summary 也没有任务，等于模型什么都没说 ——
+        那时候重试一次是有意义的。
+    """
+    if not isinstance(data, dict) or not data:
+        raise ValueError("输出不是一个 JSON 对象")
+    has_summary = bool(_flatten_to_text(data.get("summary")))
+    tasks = data.get("tasks")
+    n_tasks = len(tasks) if isinstance(tasks, list) else 0
+    if not has_summary and not n_tasks:
+        raise ValueError("既没有 summary 也没有 tasks，等于什么都没说")
+
+
 def build_plan_prompt(project: DevProject, cites: list[dict], extra: str = "") -> str:
     stack = "、".join(project.tech_stack or []) or "（未指定）"
     parts = [
@@ -973,10 +1389,16 @@ def build_plan_prompt(project: DevProject, cites: list[dict], extra: str = "") -
         "项目目标：%s" % (project.goal or "（未填写）"),
         "技术栈：%s" % stack,
         "技术选型说明：%s" % (project.tech_notes or "（未填写）"),
+    ]
+    # 技术栈是用户拍板的事，不加这一句模型会「顺手」换成自己更喜欢的
+    # （实测：用户选了 Python/FastAPI，模型给的是 Java/Spring Boot）
+    if project.tech_stack:
+        parts.append("注意：技术栈已经定死了，就用上面这些，不要换成别的。")
+    parts.extend([
         "",
         "参考资料（只能基于这些内容推导）：",
         _context_block(cites),
-    ]
+    ])
     if extra:
         parts.extend(["", "补充要求：%s" % extra])
     return "\n".join(parts)
@@ -1101,17 +1523,13 @@ async def generate_plan(db: AsyncSession, project: DevProject, *,
     cites = cites + extra_cites
 
     prompt = build_plan_prompt(project, cites, extra)
-    out = await call_model(mode, [
+    # 走带重试与抢救的通道：模型输出被截断、结构不对，
+    # 在这里当场修好或当场说清楚，不要把半成品丢给用户
+    out = await call_model_json(mode, [
         {"role": "system", "content": PLAN_SYSTEM},
         {"role": "user", "content": prompt},
-    ], cfg=cfg)
-
-    data = parse_json_block(out.get("text") or "")
-    if not data:
-        raise DevError("模型没有返回可解析的方案 JSON，方案未生成",
-                       missing=["model_output"],
-                       how_to_fix=["换一个好一些的模型再试一次",
-                                  "或者把项目目标写得更具体些"])
+    ], cfg=cfg, validator=_validate_plan_payload)
+    data = _normalize_plan_payload(out.get("data") or {})
     tasks = data.get("tasks") or []
     if not isinstance(tasks, list):
         tasks = []
@@ -1739,10 +2157,25 @@ async def doctor(db: AsyncSession, mode: str = "") -> dict:
 
     missing = []
     how = []
+    # 「一键切到在线协同」的出口：
+    #   离线模式不认云端模型是刻意的（不偷偷出网），但现实里大多数机器
+    #   没有本地模型端点 —— 于是整个开发模块直接罢工，用户被卡在门口。
+    #   这里明确告诉前端「系统大模型已经配好了，切一下就能用」，
+    #   让前端能给出**一键切换**而不是一句「请自行配置」。
+    switch_hint = None
     if not info.get("ready"):
         missing.extend(["model_endpoint"])
         how.append("配置模型端点：离线模式用「开发设置 → 本地模型端点」，"
                    "在线模式用「AI 设置」里的大模型")
+        if mode == dev_config.MODE_OFFLINE and system_model_ready():
+            switch_hint = {
+                "action": "switch_mode",
+                "mode": dev_config.MODE_ONLINE,
+                "label": "切到在线协同模式（用系统大模型 %s）"
+                         % (ai_config.get_full_config().get("model") or ""),
+                "why": "当前是离线闭环模式，它只认本机模型端点；"
+                       "而系统里已经配好了一个可用的大模型。",
+            }
     if mode == dev_config.MODE_ONLINE:
         if not gh_ready:
             missing.append("github.repos")
@@ -1763,6 +2196,7 @@ async def doctor(db: AsyncSession, mode: str = "") -> dict:
         "missing": missing,
         "how_to_fix": how,
         "model": info,
+        "switch_hint": switch_hint,
     }
 
 

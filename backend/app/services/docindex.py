@@ -1241,18 +1241,59 @@ async def record_search(db: AsyncSession, keyword: str, limit: int = 50,
         return []
     expr = record_fts_query(q)
     if not expr or not await record_fts_ready(db):
+        # 单字查询没有对应的 bigram 词、或者索引还没建好：
+        # 这两种情况一律交给调用方退回 LIKE 扫描
         return None
+
+    # ---- 候选池：这是本次优化里最需要讲清楚的一处取舍 ----
+    #
+    # 候选池大小 = max(limit × 4, 200)：
+    #   · 小了 → 命中面稍宽的查询就装不下候选，会误判成「要退回扫描」；
+    #   · 大了 → 宽查询的候选表变大，反而比全表扫描还慢。
+    #   200 是实测折中：罕见词（真正会慢的那类查询）命中数远小于它，
+    #   而常见词会顶满它 —— 顶满就说明这次查询「不挑食」，走扫描更快。
+    #
+    # **候选池被顶满时必须退回全表扫描**，原因只有一个：
+    # 保证结果集与优化前**完全一致**。
+    # 索引只能证明「这些记录里有这个关键词」，不能证明「只有这些记录有」；
+    # 候选被截断时，截断掉的那部分里可能还有更新的命中。
+    # 「搜不到」和「搜不全」在用户看来一样，但只有后者能解释。
+    pool = max(int(limit) * 4, 200)
+    try:
+        cand = (await db.execute(text(
+            f"select rowid from {RECORD_FTS_TABLE} "
+            f"where {RECORD_FTS_TABLE} match :m limit :pool"),
+            {"m": expr, "pool": pool})).all()
+    except Exception as e:
+        log.warning("记录级索引检索失败，退回全表扫描：%s", e)
+        return None
+
+    if len(cand) >= pool:
+        # 命中面太宽（常见词）：这类查询全表扫描反而快 ——
+        # LIKE 扫描凑够 limit 条就停 —— 而且只有扫描能保证结果集一致
+        cand_ids = None
+    else:
+        # 候选没装满 → 索引命中的记录全都拿到了，候选集是完整的
+        cand_ids = [int(r[0]) for r in cand]
 
     sql = [
         "select r.id, r.entity_type_id, r.data, r.search_text, "
         "t.key, t.name, t.icon "
         "from entity_record r "
         "left join entity_type t on t.id = r.entity_type_id "
-        "where r.id in (select rowid from record_fts "
-        "where record_fts match :m) "
-        "and r.search_text like :like "
+        "where r.search_text like :like "
         "and r.deleted_at is null"]
-    params: dict[str, Any] = {"m": expr, "like": f"%{q}%", "lim": int(limit)}
+    params: dict[str, Any] = {"like": f"%{q}%", "lim": int(limit)}
+    if cand_ids is not None:
+        if not cand_ids:
+            return []
+        # 用子查询而不是把候选 id 一个个塞进 IN：
+        # 候选最多几百个，塞进去会撞上 SQLite 的绑定参数上限（999），
+        # 而 limit 允许到 200 —— 一次就爆。子查询没有这个问题。
+        sql.append(f"and r.id in (select rowid from {RECORD_FTS_TABLE} "
+                   f"where {RECORD_FTS_TABLE} match :m limit :pool)")
+        params["m"] = expr
+        params["pool"] = pool
     if allowed_type_ids is not None:
         ids = [int(i) for i in allowed_type_ids]
         if not ids:

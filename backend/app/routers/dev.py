@@ -23,8 +23,9 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from typing import Any
+from urllib.parse import quote
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -35,6 +36,7 @@ from ..models import DevCitation, Role, SysMeta
 from ..services import audit as audit_svc
 from ..services import dev_config
 from ..services import dev as svc
+from ..services import dev_pipeline
 from ..services.auth import Principal, current_principal
 
 router = APIRouter(prefix="/api/dev", tags=["dev"])
@@ -614,4 +616,184 @@ async def job_status(job_id: int, db: AsyncSession = Depends(get_db),
         select(DnaJob).where(DnaJob.id == job_id))).scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="作业不存在")
+    data = dna_ingest.job_to_dict(job)
+    # 作业失败时必须让用户看见「缺什么、怎么修」：
+    # dna_ingest 的序列化只带出 detail.items，
+    # 所以把 missing / how_to_fix 单独提到作业对象上（不破坏既有字段）。
+    raw = job.detail if isinstance(job.detail, dict) else {}
+    if raw.get("missing"):
+        data["missing"] = raw.get("missing")
+    if raw.get("how_to_fix"):
+        data["how_to_fix"] = raw.get("how_to_fix")
+    if raw.get("summary"):
+        data["summary"] = raw.get("summary")
+    if raw.get("stage"):
+        data["stage"] = raw.get("stage")
+    return {"job": data}
+
+
+# ============ 四阶段流水线 ============
+
+class StageRunBody(BaseModel):
+    extra: str = ""
+    force: bool = False
+
+
+class StageAnswerBody(BaseModel):
+    answers: dict = Field(default_factory=dict)
+    notes: str = ""
+    data: dict = Field(default_factory=dict)
+
+
+def _model_error(e: svc.DevError, mode: str) -> svc.DevError:
+    """模型不可用时，把「能不能切模式」说清楚。
+
+    为什么要有这个：
+        离线模式没配本地端点，但系统大模型（AI 设置里那个）是好的 ——
+        这时候最该说的是「系统大模型已就绪，切到在线协同就能用」，
+        而不是让用户以为整个模块坏了。
+    """
+    how = list(e.how_to_fix or [])
+    try:
+        ready = svc.system_model_ready()
+    except Exception:
+        ready = False
+    if mode == dev_config.MODE_OFFLINE and ready:
+        how.append("系统大模型已就绪：切到「在线协同」模式即可继续"
+                   "（开发设置 → 模式 → 在线协同）")
+    return svc.DevError(e.message, missing=list(e.missing or []),
+                        how_to_fix=how, status=e.status, detail=e.detail)
+
+
+def _zip_headers(filename: str) -> dict:
+    """ZIP 下载响应头。
+
+    项目名可能是中文：HTTP 头只能放 latin-1，
+    直接塞中文会 500。所以给两套名字：
+    filename 给 ASCII 兜底，filename* 按 RFC 5987 带 UTF-8 真名。
+    """
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii").strip()
+    if not ascii_name:
+        ascii_name = "project.zip"
+    quoted = quote(filename, safe="")
+    return {"Content-Disposition":
+            'attachment; filename="%s"; filename*=UTF-8\'\'%s'
+            % (ascii_name, quoted)}
+
+
+@router.get("/projects/{project_id}/pipeline")
+async def read_pipeline(project_id: int, db: AsyncSession = Depends(get_db),
+                        principal: Principal = Depends(current_principal)):
+    """流水线状态：四个阶段、当前阶段、闸门。
+
+    为什么闸门由后端算：
+        前端只负责显示。自己算闸门就会出现「前后端各算一套」，
+        用户点得动但后端拒绝，或者后端放行但界面不让点。
+    """
+    await _guard_perm(db)
+    p = await _project_or_404(db, project_id)
+    pipeline = dev_pipeline.get_pipeline(p)
+    return {
+        "pipeline": pipeline,
+        "stages": dev_pipeline.stages_view(pipeline),
+        "gates": dev_pipeline.gates_of(pipeline),
+    }
+
+
+@router.post("/projects/{project_id}/stages/{stage}/run")
+async def run_stage(project_id: int, stage: str,
+                    payload: StageRunBody = StageRunBody(),
+                    db: AsyncSession = Depends(get_db),
+                    principal: Principal = Depends(current_principal)):
+    """跑一个阶段（后台作业，前端轮询 /api/dev/jobs/{id} 看真实进度）"""
+    await _guard_perm(db)
+    p = await _project_or_404(db, project_id)
+    if stage not in dev_pipeline.STAGES:
+        return _fail(dev_pipeline.PipelineError(
+            "阶段只能是 %s" % " / ".join(dev_pipeline.STAGES),
+            status=400, missing=["stage"], how_to_fix=["检查阶段名"]))
+
+    # 闸门先查：不过就 409，绝不「先跑再失败」
+    pipeline = dev_pipeline.get_pipeline(p)
+    try:
+        dev_pipeline.check_gate(pipeline, stage, force=payload.force)
+    except svc.DevError as e:
+        return _fail(e)
+
+    mode = p.mode or dev_config.MODE_OFFLINE
+    try:
+        svc.ensure_model_available(mode)
+    except svc.DevError as e:
+        return _fail(_model_error(e, mode))
+
+    from ..services import dna_ingest
+    job = await dna_ingest.create_job(
+        db, job_type="dev_stage",
+        title="%s：%s" % (dev_pipeline.STAGE_TITLES.get(stage, stage),
+                         p.name or ""),
+        # total 用该阶段的真实步骤数：前端进度条按 processed/total 算
+        total=len(dev_pipeline.STAGE_STEPS.get(stage) or [1]),
+        principal=getattr(principal, "username", "") or "")
+    task = asyncio.create_task(dev_pipeline.run_stage_job(
+        job.id, project_id, stage, extra=payload.extra or "",
+        force=payload.force))
+    _JOBS[job.id] = task
+    await audit_svc.log_event(
+        getattr(principal, "username", "") or "-", "dev_stage_run",
+        user_id=getattr(principal, "id", None), resource="dev", method="POST",
+        path="/api/dev/projects/%d/stages/%s/run" % (project_id, stage),
+        detail={"project_id": project_id, "stage": stage, "job_id": job.id,
+                "force": bool(payload.force)})
     return {"job": dna_ingest.job_to_dict(job)}
+
+
+@router.post("/projects/{project_id}/stages/{stage}/answer")
+async def answer_stage(project_id: int, stage: str,
+                       payload: StageAnswerBody = StageAnswerBody(),
+                       db: AsyncSession = Depends(get_db),
+                       principal: Principal = Depends(current_principal)):
+    """提交澄清答案，或修订某一阶段的产出"""
+    await _guard_perm(db)
+    p = await _project_or_404(db, project_id)
+    if stage not in dev_pipeline.STAGES:
+        return _fail(dev_pipeline.PipelineError(
+            "阶段只能是 %s" % " / ".join(dev_pipeline.STAGES),
+            status=400, missing=["stage"], how_to_fix=["检查阶段名"]))
+    try:
+        pipeline = await dev_pipeline.answer_stage(
+            db, p, stage, answers=payload.answers or {},
+            notes=payload.notes or "", data=payload.data or {})
+    except svc.DevError as e:
+        return _fail(e)
+    await audit_svc.log_event(
+        getattr(principal, "username", "") or "-", "dev_stage_answer",
+        user_id=getattr(principal, "id", None), resource="dev", method="POST",
+        path="/api/dev/projects/%d/stages/%s/answer" % (project_id, stage),
+        detail={"project_id": project_id, "stage": stage,
+                "answers": len(payload.answers or {}),
+                "has_notes": bool(payload.notes)})
+    # 顺带把左栏视图与闸门带回去：省一次请求。
+    # 契约要求的 pipeline 字段照旧在最前面，多的只是附加信息。
+    return {"pipeline": pipeline,
+            "stages": dev_pipeline.stages_view(pipeline),
+            "gates": dev_pipeline.gates_of(pipeline)}
+
+
+@router.get("/projects/{project_id}/export.zip")
+async def export_zip(project_id: int, db: AsyncSession = Depends(get_db),
+                     principal: Principal = Depends(current_principal)):
+    """导出可运行项目：ZIP 顶层一层项目目录，内含 README 与全部产出物"""
+    await _guard_perm(db)
+    p = await _project_or_404(db, project_id)
+    try:
+        data, filename = await dev_pipeline.export_project_zip(db, p)
+    except svc.DevError as e:
+        return _fail(e)
+    await audit_svc.log_event(
+        getattr(principal, "username", "") or "-", "dev_project_export",
+        user_id=getattr(principal, "id", None), resource="dev", method="GET",
+        path="/api/dev/projects/%d/export.zip" % project_id,
+        detail={"project_id": project_id, "filename": filename,
+                "bytes": len(data)})
+    return Response(content=data, media_type="application/zip",
+                    headers=_zip_headers(filename))

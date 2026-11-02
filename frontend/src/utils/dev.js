@@ -284,22 +284,45 @@ export function describeWarning(w) {
 
 /**
  * 作业进度：百分比 + 一句话状态。
- * 后端作业有 created/running/done/failed 几种状态，
- * 这里统一成「跑完了没有、跑到哪儿了」。
+ *
+ * ⚠️ 这里曾经有一个「假的 50% 兜底」：total 未知时返回 percent=50。
+ * 后果是 —— 后端把作业包在 { job: ... } 里，前端忘了取 .job，
+ * total 就永远是 undefined，于是进度条**永远停在 50%、文案永远是「进行中」**，
+ * 作业其实早就 failed 了，页面从头到尾不报错。
+ *
+ * 所以规矩是：
+ *   · total 未知 → 不给百分比，走**不确定态**（indeterminate），文案说「进行中…」；
+ *   · total 已知 → 一律按 processed/total 算，不许拍脑袋；
+ *   · failed → 终态，把 error 与 how_to_fix 交给界面显示，不能装作还在跑。
  */
 export function jobProgress(job) {
-  if (!job) return { percent: 0, text: '排队中', done: false, failed: false }
+  if (!job) {
+    return { percent: 0, text: '排队中', done: false, failed: false, indeterminate: false }
+  }
   const total = Number(job.total || 0)
   const processed = Number(job.processed || 0)
   const status = job.status || 'created'
   if (status === 'failed') {
-    return { percent: 100, text: job.error || '失败', done: true, failed: true }
+    return {
+      percent: 100,
+      text: job.error || '失败',
+      done: true,
+      failed: true,
+      indeterminate: false,
+    }
   }
   if (status === 'done' || status === 'completed') {
-    return { percent: 100, text: '已完成', done: true, failed: false }
+    return { percent: 100, text: '已完成', done: true, failed: false, indeterminate: false }
   }
   if (!total) {
-    return { percent: 50, text: job.current || '进行中', done: false, failed: false }
+    // 不知道总量就不给百分比 —— 给一个假的 50% 比不给更害人
+    return {
+      percent: 0,
+      text: job.current || '进行中…',
+      done: false,
+      failed: false,
+      indeterminate: true,
+    }
   }
   const percent = Math.min(99, Math.round((processed / total) * 100))
   return {
@@ -307,7 +330,335 @@ export function jobProgress(job) {
     text: job.current || (processed + '/' + total),
     done: false,
     failed: false,
+    indeterminate: false,
   }
+}
+
+/* ============ 四阶段流水线 ============ */
+
+/**
+ * 四个阶段的顺序与名字。
+ *
+ * 顺序是**产品决定的**，不是后端返回什么就按什么排 ——
+ * 「需求理解 → 需求补全 → 需求转化 → 项目生成」有严格的先后依赖，
+ * 界面上必须按这个顺序呈现，用户才知道自己现在在哪一步。
+ */
+export const STAGE_KEYS = ['clarify', 'specify', 'design', 'implement']
+
+export const STAGE_META = {
+  clarify: {
+    key: 'clarify',
+    title: '需求理解',
+    short: '理解',
+    subtitle: '让模型先真正读懂需求，并提出必须由人回答的问题',
+    action: '开始理解需求',
+    rerun: '重新理解',
+    deliverable: '需求理解摘要 + 澄清问题清单',
+  },
+  specify: {
+    key: 'specify',
+    title: '需求补全',
+    short: '补全',
+    subtitle: '把需求写成可验收的规格：用户故事、验收标准、数据模型与边界',
+    action: '生成需求规格',
+    rerun: '重新生成规格',
+    deliverable: '需求规格（用户故事 / 验收标准 / 非功能需求 / 数据模型 / 边界 / 不做范围）',
+  },
+  design: {
+    key: 'design',
+    title: '需求转化',
+    short: '转化',
+    subtitle: '把规格变成设计：架构、模块、数据表、接口清单与任务拆解',
+    action: '生成设计',
+    rerun: '重新生成设计',
+    deliverable: '架构设计 + 模块划分 + 数据表 + 接口清单 + 任务拆解',
+  },
+  implement: {
+    key: 'implement',
+    title: '项目生成',
+    short: '生成',
+    subtitle: '产出真正能跑的项目文件：源码、配置、README、测试与启动脚本',
+    action: '生成项目',
+    rerun: '重新生成项目',
+    deliverable: '可运行的项目文件（源码 / 依赖 / README / 测试 / 启动脚本）',
+  },
+}
+
+export function stageMeta(key) {
+  return STAGE_META[key] || { key: key || '', title: key || '未知阶段', short: '', subtitle: '', action: '运行', rerun: '重新运行', deliverable: '' }
+}
+
+/**
+ * 阶段状态。契约里定了五种，前端按这五种渲染，不自己发明。
+ * pending（没做）/ running（正在跑）/ needs_input（等用户输入）/
+ * done（做完了）/ failed（失败了，error 里说原因）。
+ */
+export const STAGE_STATUS = {
+  pending: { label: '未开始', type: 'info' },
+  running: { label: '进行中', type: 'primary' },
+  needs_input: { label: '待你回答', type: 'warning' },
+  done: { label: '已完成', type: 'success' },
+  failed: { label: '失败', type: 'danger' },
+}
+
+export function stageStatus(status) {
+  return statusInfo(STAGE_STATUS, status, '未开始')
+}
+
+/**
+ * 阶段的一行人话摘要（左栏导航上显示）。
+ *
+ * 为什么要专门写这个：后端给的是结构化产出（stories / modules / risks…），
+ * 直接甩给用户看等于没摘要。这里按阶段挑最能说明问题的一两样，
+ * 拼成一句话；挑不出来就说「已完成 / 还没产出」，不编。
+ */
+export function stageSummary(stage) {
+  if (!stage) return ''
+  const status = stage.status || 'pending'
+  if (status === 'failed') return stage.error || '这一步失败了'
+  if (status === 'needs_input') {
+    const n = clarifyQuestions(stage.data).length
+    return n ? ('有 ' + n + ' 个问题等你回答') : '等你补充信息'
+  }
+  if (status === 'running') return '正在' + stageMeta(stage.key).short + '…'
+  if (status !== 'done') return '还没开始'
+  const data = stage.data || {}
+  switch (stage.key) {
+    case 'clarify': {
+      const q = clarifyQuestions(data).length
+      if (q) return ('提出了 ' + q + ' 个澄清问题')
+      return '需求已经够清楚，无需澄清'
+    }
+    case 'specify': {
+      const n = (data.stories || []).length
+      return n ? (n + ' 条用户故事 · ' + (data.nonfunctional || []).length + ' 条非功能需求') : '规格已生成'
+    }
+    case 'design': {
+      const m = (data.modules || []).length
+      const t = (data.data_tables || []).length
+      return (m ? m + ' 个模块' : '') + (t ? (m ? ' · ' : '') + t + ' 张表' : '') || '设计已生成'
+    }
+    case 'implement': {
+      const n = (data.files || data.artifacts || []).length
+      return n ? (n + ' 个项目文件') : '项目文件已生成'
+    }
+    default: {
+      const text = planOutline(data)
+      return text ? text.slice(0, 60) : '已完成'
+    }
+  }
+}
+
+/**
+ * 澄清问题清单（契约：clarify.data.questions）。
+ *
+ * 每题带 id / question / why / options / allow_free。
+ * questions 为空是**合法状态**（模型认为需求已经够清楚）——
+ * 界面上要据此说「无需澄清」，不能当成出错。
+ */
+export function clarifyQuestions(data) {
+  if (!data) return []
+  const list = Array.isArray(data.questions) ? data.questions : []
+  return list
+    .filter((q) => q && (q.question || q.text))
+    .map((q) => ({
+      id: String(q.id || q.key || q.qid || ''),
+      question: String(q.question || q.text || ''),
+      why: String(q.why || q.reason || ''),
+      options: Array.isArray(q.options) ? q.options.map(String) : [],
+      allow_free: q.allow_free !== false,
+      answer: String(q.answer || ''),
+    }))
+}
+
+/** 需求规格的分区（契约：specify.data） */
+export function specifySections(data) {
+  const d = data || {}
+  return [
+    { key: 'stories', title: '用户故事与验收标准', type: 'stories', items: d.stories || [] },
+    { key: 'nonfunctional', title: '非功能需求', type: 'list', items: d.nonfunctional || [] },
+    { key: 'data_model', title: '数据模型', type: 'entities', items: d.data_model || [] },
+    { key: 'edge_cases', title: '边界与异常', type: 'list', items: d.edge_cases || [] },
+    { key: 'out_of_scope', title: '明确不做', type: 'list', items: d.out_of_scope || [] },
+  ].filter((s) => s.items && s.items.length)
+}
+
+/** 设计分区（契约：design.data） */
+export function designSections(data) {
+  const d = data || {}
+  return [
+    { key: 'architecture', title: '整体架构', type: 'text', items: d.architecture || '' },
+    { key: 'modules', title: '模块划分', type: 'modules', items: d.modules || [] },
+    { key: 'data_tables', title: '数据表', type: 'tables', items: d.data_tables || [] },
+    { key: 'apis', title: '接口清单', type: 'apis', items: d.apis || [] },
+    { key: 'risks', title: '风险与取舍', type: 'list', items: d.risks || [] },
+  ].filter((s) => s.items && s.items.length)
+}
+
+/**
+ * 闸门：某个阶段现在能不能跑。
+ *
+ * 契约里 gates 形如 { can_specify, can_design, can_implement }。
+ * 前端只负责**显示**能不能跑、为什么不能跑 ——
+ * 真正的判定在后端（前端看不到状态机的全部真相）。
+ */
+export function stageGate(stageKey, gates) {
+  const map = {
+    clarify: 'can_clarify',
+    specify: 'can_specify',
+    design: 'can_design',
+    implement: 'can_implement',
+  }
+  const key = map[stageKey]
+  if (!key || !gates) return { ok: true, reason: '' }
+  if (gates[key] === undefined) return { ok: true, reason: '' }
+  if (gates[key]) return { ok: true, reason: '' }
+  return { ok: false, reason: gateReason(stageKey) }
+}
+
+/**
+ * 闸门拦下来时，给一句「为什么不能跑」。
+ * 依据契约的状态机：上一阶段没完成就不许进下一阶段。
+ */
+export function gateReason(stageKey) {
+  switch (stageKey) {
+    case 'clarify':
+      return '需求理解还没跑过，先点上面的「开始理解需求」。'
+    case 'specify':
+      return '需求理解还没完成（可能还有澄清问题没回答），先回答完再生成规格。'
+    case 'design':
+      return '需求规格还没产出，先完成「需求补全」。'
+    case 'implement':
+      return '设计还没产出，先完成「需求转化」。'
+    default:
+      return '上一阶段还没完成。'
+  }
+}
+
+/**
+ * 作业包装对象解包。
+ *
+ * 后端所有返回 { job: ... } 的接口都得先取 .job ——
+ * 忘了取的后果很隐蔽：job.total 变成 undefined，
+ * 进度条于是永远停在 50%（这个 bug 已经坑过一次）。
+ * 这里统一收口，忘了 unpackJob 的地方一眼能看出来。
+ */
+export function unwrapJob(res) {
+  if (!res) return null
+  if (res.job) return res.job
+  return res
+}
+
+/**
+ * 作业失败时给用户看的处置建议。
+ * 后端可能给数组，也可能给一句话；两种都认。
+ */
+export function jobHowToFix(job) {
+  if (!job) return []
+  const raw = job.how_to_fix || job.howToFix || job.detail
+  if (!raw) return []
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean)
+  if (typeof raw === 'string') return raw ? [raw] : []
+  return []
+}
+
+/**
+ * 项目文件树（契约：implement 的产物是 dev_artifact 行，
+ * path = 项目内相对路径）。
+ *
+ * 这里把扁平的路径列表拼成目录树。
+ * 平铺的文件列表在几十个文件时根本没法看，
+ * 而「一个能跑的项目」动辄几十个文件。
+ */
+export function buildFileTree(files) {
+  const list = Array.isArray(files) ? files : []
+  const root = { name: '', path: '', type: 'dir', children: [], file: null }
+  const dirs = new Map([['', root]])
+  list.forEach((f) => {
+    const path = String(f.path || f.filename || '')
+    if (!path) return
+    const parts = path.split('/').filter(Boolean)
+    let parent = root
+    let acc = ''
+    parts.forEach((part, i) => {
+      acc = acc ? acc + '/' + part : part
+      const isFile = i === parts.length - 1
+      if (isFile) {
+        parent.children.push({
+          name: part,
+          path: acc,
+          type: 'file',
+          children: [],
+          file: f,
+        })
+      } else {
+        let dir = dirs.get(acc)
+        if (!dir) {
+          dir = { name: part, path: acc, type: 'dir', children: [], file: null }
+          dirs.set(acc, dir)
+          parent.children.push(dir)
+        }
+        parent = dir
+      }
+    })
+  })
+  const sort = (node) => {
+    node.children.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    node.children.forEach(sort)
+  }
+  sort(root)
+  return root.children
+}
+
+/* ============ 体检（doctor） ============ */
+
+/**
+ * 把 doctor 给的 missing 键翻译成人话。
+ *
+ * 为什么非要翻译：后端给的是 "model_endpoint" 这样的机器名，
+ * 直接甩给用户等于什么都没说。这里的目标是让用户看完就知道
+ * 「缺什么、为什么现在用不了、点了那个按钮之后会怎样」。
+ */
+const DOCTOR_MISSING_TEXT = {
+  model_endpoint: '没有可用的模型端点（本地模型没配，模块也认不了系统里已配好的云端大模型）',
+  model: '模型不可用',
+  local_model: '本地模型端点没配',
+  local_endpoint: '本地模型端点没配',
+  github: 'GitHub 仓库没配（只有在线协同模式用得上）',
+  'github.repos': 'GitHub 仓库没配（只有在线协同模式用得上）',
+  web_search: '网络搜索没配',
+  'web_search.endpoint': '网络搜索服务没配（不配就只用本地知识与 GitHub）',
+  repo: '开源项目仓库没配',
+}
+
+export function doctorMissingText(missing) {
+  const list = Array.isArray(missing) ? missing : (missing ? [missing] : [])
+  return list.map((k) => DOCTOR_MISSING_TEXT[k] || String(k))
+}
+
+/**
+ * doctor 的一句话结论。
+ * 离线模式下没配本地模型 → 说清「可以切在线协同」，别只说「不可用」。
+ */
+export function doctorSummary(doctor) {
+  if (!doctor) return ''
+  const mode = doctor.mode || ''
+  const missing = doctorMissingText(doctor.missing)
+  if (!missing.length) {
+    return mode === 'online'
+      ? '在线协同模式：大模型、外网检索与开源项目都可用。'
+      : '离线闭环模式：本地模型已就绪，全程不发外网请求。'
+  }
+  const head = mode === 'offline'
+    ? '离线闭环模式现在用不了：'
+    : '还差一些配置：'
+  const tail = mode === 'offline'
+    ? '系统里已经配好的云端大模型在在线协同模式下可直接用。'
+    : ''
+  return [head + missing.join('；'), tail].filter(Boolean).join(' ')
 }
 
 /* ============ 产出物 ============ */

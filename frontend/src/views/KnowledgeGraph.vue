@@ -55,6 +55,7 @@
       :truncated="!!graph.truncated"
       height="calc(100vh - 340px)"
       :color-by="colorBy"
+      title="知识图谱"
       empty-hint="还没有笔记，或者笔记之间还没有用 [[双链]] 互相引用"
       @select="openNote"
       @recenter="recenterOn"

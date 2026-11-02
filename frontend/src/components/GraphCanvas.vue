@@ -1,8 +1,18 @@
 <template>
-  <div class="gc">
+  <div class="gc" :class="{ 'is-fs': isFullscreen }">
     <!-- 工具条 -->
     <div class="gc-toolbar">
       <div class="gt-tools">
+        <el-tooltip :content="isFullscreen ? '退出全屏（Esc）' : '全屏显示'" placement="top">
+          <button
+            class="gt-btn"
+            :class="{ on: isFullscreen }"
+            aria-label="全屏显示"
+            @click="toggleFullscreen"
+          >
+            <el-icon><Rank /></el-icon>
+          </button>
+        </el-tooltip>
         <el-tooltip content="适应画布" placement="top">
           <button class="gt-btn" aria-label="适应画布" @click="fit"><el-icon><FullScreen /></el-icon></button>
         </el-tooltip>
@@ -39,7 +49,7 @@
       </div>
     </div>
 
-    <div class="gc-body" :style="{ height }">
+    <div class="gc-body" :style="bodyStyle">
       <div ref="host" class="gc-canvas" />
 
       <!--
@@ -115,6 +125,23 @@
       <div v-if="zoomClamped" class="gc-zoom-hint">
         <el-icon :size="12"><InfoFilled /></el-icon>放大后更清晰，可拖动查看全图
       </div>
+
+      <!--
+        文字档位提示
+        为什么藏字要说话：「字不见了」看起来像 bug，不像设计。
+        说清楚「放大就能看见」，用户才知道怎么找回。
+      -->
+      <div v-if="tierHintText" class="gc-zoom-hint">
+        <el-icon :size="12"><InfoFilled /></el-icon>{{ tierHintText }}
+      </div>
+    </div>
+
+    <!-- 全屏时的退出条：浮层会盖住工具条，得有个明显的地方能退出来 -->
+    <div v-if="isFullscreen" class="gc-fs-bar">
+      <span class="gc-fs-title">{{ fsTitle }}</span>
+      <button class="gc-fs-exit" @click="exitFullscreen">
+        <el-icon><Close /></el-icon>退出全屏（Esc）
+      </button>
     </div>
 
     <!-- 节点详情 -->
@@ -182,9 +209,11 @@ import { Network } from 'vis-network/standalone'
 import { DataSet } from 'vis-data/standalone'
 import { chartTheme, cssVar, isDark } from '../utils/theme'
 import {
-  viaMeta, labelBudget, minScaleFor,
+  viaMeta, minScaleFor,
   mix, lift, truncateLabel, textWidth,
+  LABEL_TIER, labelTierFor, labelCharsForTier, fontSizeForTier, tierHint,
 } from '../utils/graphStyle'
+import { useGraphFullscreen } from '../composables/useGraphFullscreen'
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
@@ -195,6 +224,8 @@ const props = defineProps({
   // 'type' 按数据模型着色（关联图谱），'tag' 按首个标签着色（知识图谱）
   colorBy: { type: String, default: 'type' },
   emptyHint: { type: String, default: '换个范围或先建立一些关联' },
+  // 全屏时左上角显示的名字（哪个图谱，得说清楚）
+  title: { type: String, default: '图谱' },
 })
 const emit = defineEmits(['select', 'recenter'])
 
@@ -216,6 +247,8 @@ const edgeTips = ref([])
 const tipSignature = ref('')
 // 缩放被下限卡住（也就是图太大、手机上看不全）
 const zoomClamped = ref(false)
+// 当前的「文字档位」：随缩放在 hidden/brief/full/large 之间跳
+const labelTier = ref(LABEL_TIER.full)
 
 const network = shallowRef(null)
 const nodesDS = shallowRef(null)
@@ -223,6 +256,69 @@ const edgesDS = shallowRef(null)
 const built = shallowRef({ nodes: [], edges: [] })
 
 const drawerSize = computed(() => (windowWidth.value < 760 ? '100%' : '360px'))
+
+/** 画布区域的高度：全屏时铺满，普通时用页面传进来的高度 */
+const bodyStyle = computed(() => ({ height: isFullscreen.value ? '100%' : props.height }))
+
+/** 当前档位要给用户的一句提示（藏字/只显示图标时才说） */
+const tierHintText = computed(() => tierHint(labelTier.value))
+
+/** 全屏条上显示的名字 */
+const fsTitle = computed(() => props.title)
+
+/**
+ * 按当前档位重算节点文字
+ *
+ * 为什么要单独一个函数、而不是在 zoom 回调里直接改：
+ *   zoom 事件在滚轮缩放时每帧都触发，一次图可能有几百个节点 ——
+ *   每帧都重写一遍节点数据会明显卡顿。
+ *   所以只在**档位真的变了**时才重算（跨过阈值是低频事件）。
+ */
+function applyLabelTier(force = false) {
+  const net = network.value
+  if (!net || !nodesDS.value) return
+  const tier = labelTierFor(net.getScale())
+  if (!force && tier === labelTier.value) return
+  labelTier.value = tier
+  // 整批重算：节点数据里字号、名字是一起决定的，
+  // 只改其中一半会出现「名字变了、字号没变」的半吊子状态
+  const nodes = buildNodes()
+  built.value = { ...built.value, nodes }
+  nodesDS.value.update(nodes)
+  // 边上的关系名也该跟着收：档位降下来时一屏挂几十个关系名反而看不清
+  applyEdgeLabels()
+}
+
+/** 缩放事件的节流：滚轮缩放时每帧都来，只在下一帧处理一次 */
+let tierRaf = 0
+function scheduleTierCheck() {
+  if (tierRaf) return
+  tierRaf = requestAnimationFrame(() => {
+    tierRaf = 0
+    applyLabelTier()
+  })
+}
+
+/**
+ * 全屏切换后：图必须重新量尺寸、重新对中
+ *
+ * 为什么不能只靠 resize 事件：
+ *   全屏是**布局变了但 window 没变**，resize 事件根本不会触发。
+ *   而且 vis-network 只在初始化时读一次容器尺寸 —— 不显式 setSize，
+ *   画布还停在旧大小，只是被 CSS 拉大了（画面会糊、位置会偏）。
+ */
+function onFullscreenChange() {
+  const net = network.value
+  const el = host.value
+  if (!net || !el) return
+  net.setSize(`${el.clientWidth}px`, `${el.clientHeight}px`)
+  // setSize 会按新旧画布的比例缩放视图 —— 必须重新对中，否则图会偏到一边
+  net.fit({ animation: false })
+  setTimeout(() => { applyMinScale(); applyLabelTier(true) }, 60)
+}
+
+const { isFullscreen, toggle: toggleFullscreen, exit: exitFullscreen } =
+  useGraphFullscreen(onFullscreenChange)
 
 /** 主题令牌：必须 touch isDark 才能让暗色切换重算 */
 const theme = computed(() => {
@@ -316,8 +412,22 @@ function degreeOf(id) {
 
 // ---------- 构建 vis 数据 ----------
 
+/**
+ * 节点上画什么字
+ *
+ * 三个因素共同决定：
+ *   1. 用户手动关了标签（showLabels）
+ *   2. 当前缩放档位（labelTier）—— 缩得太小就一个字都不画
+ *   3. 节点本身有没有图标
+ *
+ * 为什么「缩得太小」要一个字都不留：
+ *   canvas 上的字是跟着缩放一起变小的 —— 缩到 0.4 倍，
+ *   13px 的字只剩 5px，比一根头发粗不了多少，
+ *   这种字不是「看不清」，是「看起来像噪点」，反而把图弄脏。
+ */
 function labelOf(n) {
-  if (!showLabels.value) return n.icon || ''
+  if (labelTier.value === LABEL_TIER.hidden) return ''
+  if (!showLabels.value || labelTier.value === LABEL_TIER.brief) return n.icon || ''
   return `${n.icon || ''} ${n.label || ''}`.trim()
 }
 
@@ -337,7 +447,8 @@ function buildNodes() {
   const centerFill = cssVar('--primary-dark', '#474bb0')
   const card = t.card
   const textStrong = cssVar('--text-primary', '#17181d')
-  const maxChars = labelBudget(windowWidth.value)
+  const maxChars = labelCharsForTier(labelTier.value, windowWidth.value)
+  const tierFont = fontSizeForTier(labelTier.value, nodeFontSize(false))
   return props.nodes.map(n => {
     const c = colorOf(groupOfRaw(n))
     const isCenter = !!n.center
@@ -370,7 +481,7 @@ function buildNodes() {
       },
       font: {
         color: text,
-        size: nodeFontSize(isCenter),
+        size: isCenter ? tierFont + 3 : tierFont,
         face: 'system-ui, -apple-system, "PingFang SC", sans-serif',
         // 标签底板用节点自己的底色，边线不会从字底下透出来
         background: fill,
@@ -382,12 +493,12 @@ function buildNodes() {
       // 悬停淡化用的预置变体：避免每次 hover 都解析颜色
       _on: {
         color: { background: fill, border: stroke },
-        font: { color: text, size: nodeFontSize(isCenter), background: fill },
+        font: { color: text, size: isCenter ? tierFont + 3 : tierFont, background: fill },
         borderWidth: isCenter ? 3 : 2,
       },
       _off: {
         color: { background: mix(card, c, t.dark ? 0.1 : 0.07), border: mix(card, c, t.dark ? 0.12 : 0.1) },
-        font: { color: dimText, size: nodeFontSize(isCenter), background: 'transparent' },
+        font: { color: dimText, size: isCenter ? tierFont + 3 : tierFont, background: 'transparent' },
         borderWidth: 1,
       },
     }
@@ -469,6 +580,8 @@ async function draw() {
   physicsOn.value = true
   startTipTimer()
   net.fit({ animation: false })
+  // fit 之后的缩放可能落在「字该藏」的区间，先把档位对齐
+  applyLabelTier(true)
 }
 
 function applyVisibility() {
@@ -527,6 +640,8 @@ function applyMinScale() {
   } else {
     zoomClamped.value = false
   }
+  // 缩放被拉回来了，文字档位也得跟着重算（可能从 hidden 回到 brief/full）
+  applyLabelTier(true)
 }
 
 function createNetwork() {
@@ -558,6 +673,15 @@ function createNetwork() {
     edges: { selectionWidth: 1, hoverWidth: 0.4 },
   }
   const net = new Network(host.value, { nodes: nodesDS.value, edges: edgesDS.value }, options)
+  // 缩放变了 → 文字档位可能要跟着变（缩太小就把名字藏起来）
+  //
+  // 为什么两个事件都要挂：
+  //   vis 的 'zoom' 事件只在「鼠标滚轮 / 键盘快捷键」缩放时才发，
+  //   代码调用 moveTo({scale})（工具条的放大缩小按钮、fit）**不发**。
+  //   只挂 'zoom' 的话，点按钮放大缩小就不会跟着调文字。
+  //   'afterDrawing' 每次重绘都发，缩放必然引起重绘 —— 补上这一路才完整。
+  net.on('zoom', scheduleTierCheck)
+  net.on('afterDrawing', scheduleTierCheck)
   net.on('stabilizationIterationsDone', onStabilized)
   net.on('hoverNode', p => {
     // vis 的 hoverNode 事件里是 node（单个 id），不是 nodes 数组
@@ -645,6 +769,13 @@ const TIP_MAX = 160
 function updateEdgeTips() {
   const net = network.value
   if (!net) { edgeTips.value = []; return }
+  // 档位降到「字都藏了」时，关系名也不画：
+  // 名字在这个缩放下根本看不清，画一堆标签只是把图弄脏
+  if (labelTier.value === LABEL_TIER.hidden) {
+    edgeTips.value = []
+    tipSignature.value = ''
+    return
+  }
   const hoverE = hoverEdgeId.value
   const hoverN = hoverNodeId.value
   const all = showEdgeLabels.value
@@ -727,11 +858,8 @@ function relayout() {
 
 function toggleLabels() {
   showLabels.value = !showLabels.value
-  const maxChars = labelBudget(windowWidth.value)
-  nodesDS.value.update(built.value.nodes.map(n => ({
-    id: n.id,
-    label: truncateLabel(labelOf(rawById.value[n.id] || {}), maxChars),
-  })))
+  // 档位决定「留几个字」，所以整批重算而不是只换 label 字段
+  applyLabelTier(true)
 }
 
 function toggleEdgeLabels() {
@@ -783,6 +911,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', measure)
   stopTipTimer()
+  // 别把已销毁的 network 留在 window 上：
+  // 验收脚本会读它，拿到的却是上一张图的「尸体」，测出来的东西全是错的
+  if (window.__kbGraph === network.value) window.__kbGraph = null
   network.value?.destroy()
   network.value = null
 })
@@ -795,18 +926,8 @@ watch(() => props.colorBy, () => { hiddenGroups.value = new Set(); draw() })
 // 视口宽度变了：标签截断长度要跟着变（窄屏留短一点），
 // 顺便把缩放拉回可读区间 —— 旋转手机后 fit 出来的缩放往往又太小了
 watch(windowWidth, () => {
-  const maxChars = labelBudget(windowWidth.value)
-  if (nodesDS.value) {
-    nodesDS.value.update(built.value.nodes.map(n => {
-      const isCenter = !!rawById.value[n.id]?.center
-      return {
-        id: n.id,
-        label: truncateLabel(labelOf(rawById.value[n.id] || {}), maxChars),
-        // 字号也要跟着视口变，否则窄屏上还是小字
-        font: { ...n.font, size: nodeFontSize(isCenter) },
-      }
-    }))
-  }
+  // 档位里的字数预算跟视口宽度有关，整批重算
+  applyLabelTier(true)
   setTimeout(applyMinScale, 120)
 })
 
@@ -815,6 +936,66 @@ defineExpose({ fit, zoom, relayout })
 
 <style scoped>
 .gc { position: relative; }
+
+/* ---------- 全屏 ---------- */
+/*
+ * 铺满视口的浮层，而不是浏览器的 Fullscreen API：
+ *   API 在 iframe 里可能被拒、会把浏览器 UI 一起换掉（触屏上出不来）。
+ *   浮层方案在任何环境都成立，而且工具条、图例都还在。
+ */
+.gc.is-fs {
+  position: fixed;
+  inset: 0;
+  /* 1999：正好在 Element Plus 弹层基线（2000）之下。
+     节点详情抽屉是 append-to-body 的，z-index 由 Element Plus 统一发号，
+     浮层压得太高会把抽屉盖住 —— 全屏里点节点却看不见详情，最难排查。 */
+  z-index: 1999;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  padding: 12px;
+  box-sizing: border-box;
+}
+.gc.is-fs .gc-toolbar {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+}
+.gc.is-fs .gc-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.gc-fs-bar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 5px 6px 5px 12px;
+  box-shadow: var(--shadow-sm);
+}
+.gc-fs-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.gc-fs-exit {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.gc-fs-exit:hover { background: var(--primary-bg); color: var(--primary); }
 
 .gc-toolbar {
   display: flex; align-items: center; justify-content: space-between;

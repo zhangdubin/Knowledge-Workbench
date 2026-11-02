@@ -79,6 +79,7 @@
       :truncated="!!graph.truncated"
       height="calc(100vh - 340px)"
       color-by="type"
+      title="关联图谱"
       :empty-hint="emptyHint"
       @select="openNode"
       @recenter="recenterOn"

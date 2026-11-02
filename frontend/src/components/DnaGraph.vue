@@ -1,5 +1,5 @@
 <template>
-  <div class="dna-graph">
+  <div class="dna-graph" :class="{ 'is-fs': isFullscreen }">
     <!-- ================= 工具条 ================= -->
     <div class="dg-bar">
       <div class="dg-bar-main">
@@ -46,14 +46,28 @@
         </el-dropdown>
 
         <div class="dg-zoom">
-          <el-button size="small" text title="放大" @click="zoomBy(0.8)">
+          <!--
+            倍率方向以前是反的（放大写 0.8、缩小写 1.25）：
+            zoomBy 是「缩放比 × 倍率」，0.8 其实是缩小。
+            图上写着放大、点下去却变小 —— 必须改过来。
+          -->
+          <el-button size="small" text title="放大" @click="zoomBy(1.25)">
             <el-icon><ZoomIn /></el-icon>
           </el-button>
-          <el-button size="small" text title="缩小" @click="zoomBy(1.25)">
+          <el-button size="small" text title="缩小" @click="zoomBy(0.8)">
             <el-icon><ZoomOut /></el-icon>
           </el-button>
           <el-button size="small" text title="适应窗口" @click="resetView">
             <el-icon><FullScreen /></el-icon>
+          </el-button>
+          <el-button
+            size="small"
+            text
+            :title="isFullscreen ? '退出全屏（Esc）' : '全屏显示'"
+            class="dg-fs-btn"
+            @click="toggleFullscreen"
+          >
+            <el-icon><Rank /></el-icon>
           </el-button>
         </div>
 
@@ -111,7 +125,7 @@
 
     <!-- ================= 双螺旋画布 ================= -->
     <div ref="viewport" class="dg-viewport">
-      <div class="dg-stage" :style="stageStyle">
+      <div class="dg-stage" :class="{ 'lbl-off': labelTier === 'hidden' }" :style="stageStyle">
         <!-- 两条链的「骨架线」：跟着列位置走，不是写死百分比 -->
         <span v-if="showLeft" class="dg-rail dg-rail-l" :style="{ left: layout.xLeft + 'px' }" />
         <span v-if="showRight" class="dg-rail dg-rail-r" :style="{ left: layout.xRight + 'px' }" />
@@ -187,6 +201,14 @@
       </div>
     </transition>
 
+    <!--
+      文字档位提示
+      为什么藏字要说话：「字不见了」看起来像 bug，不像设计。
+    -->
+    <div v-if="tierHintText" class="dg-tier-hint">
+      <el-icon :size="12"><InfoFilled /></el-icon>{{ tierHintText }}
+    </div>
+
     <div v-if="!nodes.length" class="dg-empty">
       <el-icon class="dg-empty-icon"><DataLine /></el-icon>
       <div class="dg-empty-title">还没有可连起来的脉络</div>
@@ -233,6 +255,10 @@ import { Network } from 'vis-network/standalone'
 import { DataSet } from 'vis-data/standalone'
 import { ElMessage } from 'element-plus'
 import { cssVar, isDark } from '../utils/theme'
+import {
+  LABEL_TIER, labelTierFor, domLabelScaleFor, tierHint,
+} from '../utils/graphStyle'
+import { useGraphFullscreen } from '../composables/useGraphFullscreen'
 
 const props = defineProps({
   graph: { type: Object, default: () => ({ nodes: [], edges: [], stats: {} }) },
@@ -871,8 +897,70 @@ function computeLayout() {
 const stageStyle = computed(() => ({
   '--lbl-max-l': (layout.value.lblMaxL || 250) + 'px',
   '--lbl-max-r': (layout.value.lblMaxR || 260) + 'px',
+  // 文字随缩放同比放大：DOM 的字不会跟着画布缩放走，
+  // 不跟着放大就会「节点变大、字不变」，看着像字反而变小了
+  '--zoom': String(zoomScale.value),
   height: (layout.value.H || 460) + 'px',
 }))
+
+// ---------- 缩放 → 文字档位 ----------
+
+/** 当前缩放比 */
+const zoomScale = ref(1)
+/** 当前文字档位 */
+const labelTier = ref(LABEL_TIER.full)
+/** 档位提示（藏字/只显示图标时才说话） */
+const tierHintText = computed(() => tierHint(labelTier.value))
+
+/**
+ * 缩放变了 → 档位与文字大小跟着变
+ *
+ * 为什么这张图要单独处理：
+ *   这里��标题是 DOM 画的，**不会**跟着画布缩放走。
+ *   缩小时节点变小、字不变 → 一堆字压在一起（实测压字 962 处）；
+ *   放大时节点变大、字不变 → 字显得小而弱。
+ *   所以：缩得太小就把整层标题藏掉（并说明怎么找回），
+ *   其余情况让字按缩放同比放大。
+ */
+function applyZoomTier() {
+  if (!net) return
+  let scale = 1
+  try { scale = net.getScale() } catch (e) { return }
+  // 只有真变了才写：afterDrawing 每帧都调，
+  // 每帧都改 ref 会让整张图每帧重渲染一次 —— 直接把帧率拖死
+  const z = domLabelScaleFor(scale)
+  if (z !== zoomScale.value) zoomScale.value = z
+  const tier = labelTierFor(scale)
+  if (tier !== labelTier.value) labelTier.value = tier
+}
+
+/**
+ * 全屏切换后：画布要重新量尺寸、重新对中
+ *
+ * 为什么必须显式 setSize：
+ *   vis-network 只在初始化时读一次容器尺寸。全屏是**布局变了但窗口没变**，
+ *   resize 事件不会触发 —— 不量一次，画布就停在旧大小，只是被 CSS 拉大（画面糊、位置偏）。
+ *
+ * 为什么还要重新对中：
+ *   setSize 会按新旧画布的比例缩放视图，比例一变，整张图就偏到一边去了。
+ */
+function onFullscreenChange() {
+  if (!net) return
+  const el = host.value
+  const vp = viewport.value
+  if (el) net.setSize(`${el.clientWidth}px`, `${el.clientHeight}px`)
+  // 重新对中：回到布局中心，缩放回到 1
+  try {
+    const lay = layout.value
+    net.moveTo({ position: { x: lay.W / 2, y: lay.H / 2 }, scale: 1 })
+  } catch (e) { /* 没有节点 */ }
+  applyZoomTier()
+  scheduleSync()
+  // 视口尺寸变了，滚动位置也回到顶部
+  if (vp) vp.scrollTop = 0
+}
+
+const { isFullscreen, toggle: toggleFullscreen } = useGraphFullscreen(onFullscreenChange)
 
 /* ------------------------------------------------------------------ *
  * 悬停高亮：亮起整条链 + 相连的对侧节点，其余淡出
@@ -1285,6 +1373,8 @@ function draw(recenter = false) {
   nextTick(() => {
     syncCanvasSize()
     if (recenter) resetView()
+    // 画布尺寸变了，缩放与文字档位要重新对一次
+    applyZoomTier()
     scheduleSync()
   })
 }
@@ -1295,6 +1385,7 @@ function resetView() {
   try {
     net.moveTo({ position: { x: lay.W / 2, y: lay.H / 2 }, scale: 1 })
   } catch (e) { /* 没有节点 */ }
+  applyZoomTier()
   scheduleSync()
 }
 
@@ -1304,6 +1395,7 @@ function zoomBy(k) {
     const scale = net.getScale() * k
     net.moveTo({ scale: Math.max(0.25, Math.min(2.5, scale)) })
   } catch (e) { /* 视口挪不动也不该报错 */ }
+  applyZoomTier()
   scheduleSync()
 }
 
@@ -1377,8 +1469,9 @@ onMounted(() => {
       window.location.hash = `/library?doc=${n.ref_id}`
     }
   })
-  net.on('afterDrawing', scheduleSync)
-  net.on('zoom', scheduleSync)
+  net.on('afterDrawing', () => { applyZoomTier(); scheduleSync() })
+  // 缩放变了：文字档位与文字大小都要跟着变
+  net.on('zoom', () => { applyZoomTier(); scheduleSync() })
   net.on('drag', scheduleSync)
 
   // 容器尺寸变了要重排：列位置是按宽度算的百分比，宽度变了列就偏了。
@@ -1397,6 +1490,9 @@ onMounted(() => {
   // 开发期把 network 实例挂出去：自动化测试要拿到节点的真实坐标，
   // 才能点得准（坐标是算出来的，不是猜的）。
   if (import.meta.env.DEV) window.__dnaNet = net
+  // 验收脚本（?__e2e=1）也要拿得到：缩放档位是按缩放比算的，
+  // 没有实例就只能靠肉眼猜缩放到了哪一档。
+  if (window.location.href.includes('__e2e=1')) window.__dnaNet = net
   draw(true)
 })
 
@@ -1456,6 +1552,78 @@ const H = computed(() => layout.value.H)
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* ---------- 全屏 ---------- */
+/*
+ * 铺满视口的浮层，而不是浏览器的 Fullscreen API：
+ *   API 在 iframe 里可能被拒、会把浏览器 UI 一起换掉（触屏上出不来）。
+ */
+.dna-graph.is-fs {
+  position: fixed;
+  inset: 0;
+  /* 1999：正好在 Element Plus 弹层基线（2000）之下，
+     这样全屏里弹出来的提示、消息不会被浮层盖住 */
+  z-index: 1999;
+  gap: 10px;
+  padding: 12px;
+  box-sizing: border-box;
+  background: var(--bg-card);
+}
+.dna-graph.is-fs .dg-bar { flex: 0 0 auto; }
+.dna-graph.is-fs .dg-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+.dna-graph.is-fs .dg-detail {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: min(520px, calc(100vw - 32px));
+  max-height: 42vh;
+  overflow: auto;
+  z-index: 8;
+  box-shadow: var(--shadow-lg);
+}
+.dg-fs-btn { color: var(--text-tertiary); }
+
+/*
+ * 文字随缩放同比放大
+ *
+ * 为什么这张图要单独处理：
+ *   这里的标题是 DOM 画的，**不会**跟着画布缩放走。
+ *   放大时节点变大、字不变 → 字看着反而变小了；
+ *   缩小时节点变小、字不变 → 一堆字压在一起。
+ */
+/*
+ * 缩得太小时整层标题藏掉
+ *
+ * 为什么直接藏、而不是继续缩小：
+ *   缩到 0.5 倍以下，12px 的字只剩 6px —— 那不是「小」，
+ *   是「看不清」。这时候还留着标题，图面会变成一片噪点。
+ *   藏掉并告诉用户「放大就能看见」，比糊着强。
+ */
+.dg-stage.lbl-off .dg-lbl { opacity: 0; pointer-events: none; }
+
+.dg-tier-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 4px 11px;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  box-shadow: var(--shadow-xs);
+  pointer-events: none;
 }
 
 /* ---------- 工具条 ---------- */
@@ -1790,13 +1958,14 @@ const H = computed(() => layout.value.H)
 
 .dg-lbl-code {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--zoom, 1));
   font-weight: 700;
   letter-spacing: 0.4px;
   flex-shrink: 0;
 }
 .dg-lbl-text {
-  font-size: 12px;
+  /* 字号跟着缩放走：DOM 的字不会自己变大，放大后不跟就成了「小字」 */
+  font-size: calc(12px * var(--zoom, 1));
   line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1804,7 +1973,7 @@ const H = computed(() => layout.value.H)
 }
 .dg-lbl-gene .dg-lbl-text { color: var(--text-primary); font-weight: 600; }
 .dg-lbl-document .dg-lbl-text { color: var(--text-primary); font-weight: 600; }
-.dg-lbl-section .dg-lbl-text { color: var(--text-tertiary); font-size: 11px; }
+.dg-lbl-section .dg-lbl-text { color: var(--text-tertiary); font-size: calc(11px * var(--zoom, 1)); }
 .dg-lbl-record .dg-lbl-text { color: var(--text-secondary); }
 .dg-lbl-library .dg-lbl-text { color: var(--text-primary); font-weight: 600; }
 .dg-lbl:hover .dg-lbl-text { color: var(--primary); }
@@ -1946,7 +2115,7 @@ const H = computed(() => layout.value.H)
   .dg-search { width: 100%; }
   .dg-bar-main { gap: 8px; }
   .dg-select { width: 118px; }
-  .dg-lbl-text { font-size: 11px; }
+  .dg-lbl-text { font-size: calc(11px * var(--zoom, 1)); }
   .dg-lbl.l { transform: translate3d(var(--x), var(--y), 0) translate(calc(-100% - 30px), -50%); }
   .dg-lbl.r { transform: translate3d(var(--x), var(--y), 0) translate(16px, -50%); }
   .dg-viewport { max-height: 68vh; }

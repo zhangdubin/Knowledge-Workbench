@@ -390,11 +390,19 @@ class DnaGene(Base):
     source_ref = Column(String(64), default="", index=True)   # doc-3 / record-14 / code:<sha256>
     source_title = Column(String(256), default="")
     fingerprint = Column(String(64), default="", index=True)   # 内容指纹，去重与变更检测用
+    # 置信度：镜像自 dna_gene_score.confidence（权威值与分项在评分表里）。
+    # 这里留一列是为了让已有的排序/筛选代码不用改。
     confidence = Column(Float, default=0.7)
     # active 在用 / superseded 被更新的版本取代 / archived 归档 / destroyed 原文已销毁（基因本身还在）
     status = Column(String(16), default="active", index=True)
     superseded_by = Column(Integer, nullable=True)
-    # 表达度：这条基因被引用/直答过多少次。冷基因提示复核，热基因说明真在用
+    # 表达度：镜像自 dna_gene_score.expressiveness（权威值与分项在评分表里）
+    expressiveness = Column(Float, default=0.0)
+    # 评分模型版本：评分口径变了就 +1，回填脚本按它决定谁要重算
+    score_version = Column(Integer, default=0)
+    # usage_count：这条基因被检索/引用过多少次。
+    # 注意它只是「被用过」的计数，不是表达度本身 ——
+    # 表达度是「说清楚了没有」，由具体度/可执行性/可检索性/被复用度四个分项合成。
     usage_count = Column(Integer, default=0)
     last_used_at = Column(DateTime, nullable=True)
     meta = Column(JSON, default=dict)
@@ -404,6 +412,177 @@ class DnaGene(Base):
     __table_args__ = (
         Index("ix_gene_kind_status", "kind", "status"),
     )
+
+
+# ============ DNA 养料库：基因评分 ============
+class DnaGeneScore(Base):
+    """一条基因的评分明细 —— 分数 + 分项 + 依据
+
+    为什么要单独一张表，而不是在 dna_gene 上加几列：
+      - 分项是**结构化**的（四个维度各自有权重与依据），
+        塞进 meta JSON 会让「按表达度排序」「筛低置信」这类查询
+        只能全表扫；独立成表才能建索引。
+      - 计数（复用成功/失败、人工纠正）属于**这条基因的履历**，
+        与基因内容是两份数据：内容变了可以重算，履历不能重算。
+      - 老基因（v8 之前入库的）也要有评分；补列做不到「一行一人」，
+        新表可以。
+
+    dna_gene.confidence / dna_gene.expressiveness 是这两个值的**镜像**，
+    为了让已有的排序、筛选代码不用改。权威值以本表为准。
+    """
+    __tablename__ = "dna_gene_score"
+
+    id = Column(Integer, primary_key=True)
+    gene_id = Column(
+        Integer, ForeignKey("dna_gene.id", ondelete="CASCADE"),
+        nullable=False, unique=True, index=True)
+    # 表达度总分 0..1：「这条基因说清楚了没有」
+    expressiveness = Column(Float, default=0.0)
+    # 置信度总分 0..1：「这条基因有多可信」
+    confidence = Column(Float, default=0.0)
+    # 分项：{分项 key: {label, score, weight, detail}}
+    express_parts = Column(JSON, default=dict)
+    confidence_parts = Column(JSON, default=dict)
+    # 依据：完整的评分快照（分项 + 扣分项 + 版本）
+    evidence = Column(JSON, default=dict)
+    # 履历计数（不可重算，只增不减）
+    use_success = Column(Integer, default=0)     # 复用成功次数
+    use_fail = Column(Integer, default=0)       # 复用失败次数
+    corrections = Column(Integer, default=0)     # 人工纠正次数（负反馈，扣分）
+    corroborations = Column(Integer, default=0)  # 交叉印证次数
+    distinct_sources = Column(Integer, default=1)  # 说过同一件事的来源数
+    # 抽取时的启发式置信度（旧版那条裸 confidence）：
+    # 保留下来当独立信号参与「来源权威度」计算，不能被新分数顶掉
+    extraction_confidence = Column(Float, default=0.7)
+    version = Column(Integer, default=0)         # 评分模型版本
+    last_scored_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_gene_score_conf", "confidence"),
+        Index("ix_gene_score_expr", "expressiveness"),
+    )
+
+
+# ============ DNA 养料库：可复用产出（资产） ============
+class DnaAsset(Base):
+    """从高分基因里落出来的**可复用产出**
+
+    「学以致用」如果只停在「检索命中」，那还是知识，不是产出。
+    这一层把基因里的可执行部分抽出来，落成能直接用的东西：
+      code_snippet   可复制的代码片段
+      api_contract   接口契约（端点/字段/参数）
+      checklist      操作步骤（照着做的那几步）
+      note           结构化要点
+
+    为什么资产要跟基因分开存：
+      - 基因是「知道什么」，资产是「能直接拿走用什么」；
+      - 资产有**自己的**履历：被哪个项目用过、用了几次、成没成功；
+      - 基因被用会加分，但「用」这件事的主体是资产 ——
+        反馈要能精确落到「哪条知识、哪个项目、结果如何」。
+    """
+    __tablename__ = "dna_asset"
+
+    id = Column(Integer, primary_key=True)
+    uid = Column(String(64), nullable=False, unique=True, index=True)
+    # code_snippet / api_contract / checklist / note
+    kind = Column(String(24), default="note", index=True)
+    title = Column(String(256), default="")
+    content = Column(Text, default="")
+    language = Column(String(32), default="")
+    # 产出自哪条基因（可以为空：手工建的资产）
+    gene_id = Column(
+        Integer, ForeignKey("dna_gene.id", ondelete="SET NULL"),
+        nullable=True, index=True)
+    source_kind = Column(String(24), default="")
+    source_title = Column(String(256), default="")
+    # 被复用的次数与结果（成功/失败）—— 反馈置信度的原料
+    use_count = Column(Integer, default=0)
+    use_success = Column(Integer, default=0)
+    use_fail = Column(Integer, default=0)
+    # 最近一次被用在哪个项目/任务
+    last_project = Column(String(128), default="")
+    last_used_at = Column(DateTime, nullable=True)
+    meta = Column(JSON, default=dict)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_asset_kind_gene", "kind", "gene_id"),
+    )
+
+
+class DnaAssetUse(Base):
+    """资产被使用的一次事件 —— 闭环的证据链
+
+    这一行就是「学 → 用 → 更准」中间那个「用」的原始记录：
+      哪条基因 → 哪个资产 → 哪个项目/任务 → 成没成功 → 谁用的 → 什么时候
+
+    为什么单独记事件而不是只累加计数：
+      计数只能回答「用过几次」，回答不了「在哪儿用的、结果如何」。
+      而置信度里的「复用成功率」需要的是**结果**，
+      没有事件表就只能靠猜。
+    """
+    __tablename__ = "dna_asset_use"
+
+    id = Column(Integer, primary_key=True)
+    asset_id = Column(
+        Integer, ForeignKey("dna_asset.id", ondelete="CASCADE"),
+        nullable=False, index=True)
+    gene_id = Column(
+        Integer, ForeignKey("dna_gene.id", ondelete="SET NULL"),
+        nullable=True, index=True)
+    project = Column(String(128), default="", index=True)  # 用在哪个项目
+    task = Column(String(256), default="")                # 哪个任务
+    # success / fail / unknown
+    outcome = Column(String(16), default="unknown", index=True)
+    note = Column(Text, default="")
+    actor = Column(String(64), default="")                # 谁用的（审计用）
+    used_at = Column(DateTime, server_default=func.now(), index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+# ============ DNA 养料库：外部开源项目 ============
+class DnaOpenkbSource(Base):
+    """一次外部开源项目吸收的来源档案
+
+    「参考 openkb 这类开源项目」要能落地，先得说清楚三件事：
+      1. 这个仓库是谁、什么许可证 —— 能不能商用、要不要开源传染
+      2. 我们吸收了它的哪些部分（哪些文件、哪些接口）
+      3. 什么时候吸收的、吸收出多少知识
+
+    许可证信息放在这里而不是塞进基因的 meta，是因为**合规提示是整体性的**：
+    一个仓库的许可证对它所有基因是一样的，逐条复制一遍没有意义，
+    反而容易在基因被单独导出时丢掉。
+    """
+    __tablename__ = "dna_openkb_source"
+
+    id = Column(Integer, primary_key=True)
+    # owner/repo 或本地镜像目录名
+    repo = Column(String(256), nullable=False, index=True)
+    url = Column(String(512), default="")
+    # 许可证标识（MIT / Apache-2.0 / GPL-3.0 …）
+    license = Column(String(64), default="", index=True)
+    # 是否属于传染性许可证（GPL/AGPL/SSPL…）—— 界面要给出合规提示
+    copyleft = Column(Boolean, default=False)
+    star_count = Column(Integer, default=0)
+    default_branch = Column(String(64), default="")
+    commit = Column(String(64), default="")
+    # 本地镜像路径（离线导入时记录，方便复现）
+    local_path = Column(String(512), default="")
+    # pending / running / done / failed
+    status = Column(String(16), default="pending", index=True)
+    genes = Column(Integer, default=0)        # 吸收出多少基因
+    assets = Column(Integer, default=0)       # 落成多少资产
+    files = Column(Integer, default=0)        # 读了多少文件
+    error = Column(Text, default="")
+    # 合规提示文案（导入时算好，界面直接显示）
+    notice = Column(Text, default="")
+    meta = Column(JSON, default=dict)
+    principal = Column(String(64), default="")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
 # ============ DNA 养料库：后台任务 ============
@@ -624,10 +803,159 @@ class AuditLog(Base):
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
+# ============ 软件开发模块：项目 / 任务 / 产出物 / 会话 / 引用 ============
+#
+# 这一组表回答的是同一个问题的五个侧面：
+#   「这个项目是怎么做出来的，以及它凭什么这么说？」
+#   项目  = 目标与方案
+#   任务  = 可执行的步骤
+#   产出物 = 真的写出来的代码/配置/文档
+#   会话  = 每一次生成当时的上下文与回答（可追溯、可复现）
+#   引用  = 回答里的每一句话挂在哪几条知识上（可核对）
+#
+# 为什么「会话」和「引用」必须单独存表，不能塞进会话的一个 JSON 字段：
+# 引用要能被单独统计（哪条基因被引用得最多 → 表达度），
+# 也要能被单独展示（这句话到底依据了哪几行原文）。
+# 塞进 JSON 就只能整坨读出来，统计与展示都做不了。
+
+
+class DevProject(Base):
+    """一个开发项目 —— 从「想法」到「产出」的容器
+
+    mode 决定这个项目走哪条路：
+      offline 离线闭环：只用本机喂养的源码知识 + 本地模型，全程不出网
+      online  在线协同：AI + GitHub 开源项目 + 网络知识 + 喂养源码一起驱动
+    """
+    __tablename__ = "dev_project"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(128), nullable=False, index=True)
+    goal = Column(Text, default="")                 # 目标描述（要解决什么问题）
+    tech_stack = Column(JSON, default=list)        # 技术栈：["Python", "FastAPI"]
+    tech_notes = Column(Text, default="")           # 技术选型说明（为什么这么选）
+    # draft 草稿 / planning 规划中 / building 实现中 / produced 已产出 / archived 归档
+    status = Column(String(16), default="draft", index=True)
+    # offline 离线闭环 / online 在线协同
+    mode = Column(String(16), default="offline", index=True)
+    plan = Column(Text, default="")                 # 项目方案正文
+    plan_json = Column(JSON, default=dict)          # 方案的结构化部分（架构/风险/任务）
+    gene_refs = Column(JSON, default=list)          # 关联的基因 id（养料库条目）
+    library_refs = Column(JSON, default=list)       # 关联的文档 id（数据中心条目）
+    github_refs = Column(JSON, default=list)        # 关联的 GitHub 仓库（owner/repo/branch）
+    feedback_round = Column(Integer, default=0)     # 已经反哺过几轮（闭环计数）
+    principal = Column(String(64), default="", index=True)   # 创建者
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class DevTask(Base):
+    """项目下的一个可执行任务
+
+    depends_on 存的是任务 id 列表：任务之间有先后依赖，
+    没有依赖信息的话「逐任务生成」就不知道该先做哪个。
+    """
+    __tablename__ = "dev_task"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("dev_project.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    title = Column(String(200), default="")
+    description = Column(Text, default="")
+    acceptance = Column(Text, default="")           # 验收标准（可判定的条件）
+    # todo 待办 / doing 实现中 / done 已完成 / blocked 被阻塞
+    status = Column(String(16), default="todo", index=True)
+    depends_on = Column(JSON, default=list)         # 依赖的任务 id
+    order = Column(Integer, default=0)              # 项目内的排序
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class DevArtifact(Base):
+    """产出物：模型生成 / 知识库摘取 / 人工上传的代码、配置与文档
+
+    content 直接存正文而不是只存文件路径：
+    产出物要能被检索、被引用、被再次喂回模型，
+    存路径意味着「文件被删了这条产出就没了」。
+    """
+    __tablename__ = "dev_artifact"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("dev_project.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    task_id = Column(Integer, ForeignKey("dev_task.id", ondelete="SET NULL"),
+                     nullable=True, index=True)
+    filename = Column(String(256), default="")
+    path = Column(String(256), default="")          # 项目内的相对路径
+    content = Column(Text, default="")
+    language = Column(String(32), default="")
+    # code 代码 / config 配置 / doc 文档
+    artifact_type = Column(String(16), default="code", index=True)
+    # model 模型生成 / knowledge 知识库摘取 / manual 人工上传
+    source = Column(String(16), default="model", index=True)
+    size = Column(Integer, default=0)
+    warnings = Column(JSON, default=list)          # 安全检查告警
+    document_id = Column(Integer, nullable=True)    # 已入库到数据中心的文档 id
+    accepted = Column(Boolean, default=False)       # 是否已被验收（反哺只看已验收的）
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class DevSession(Base):
+    """一次生成过程的上下文与日志 —— 可追溯、可复现的那一份底稿
+
+    prompt / context / reply 三件套：
+    prompt 是当时发给模型的话，context 是当时检索到的知识引用，
+    reply 是模型原话。有了这三样，半年后回头看这个产出，
+    才知道「它凭什么这么写」，也能用同样的输入再跑一遍。
+    """
+    __tablename__ = "dev_session"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("dev_project.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    task_id = Column(Integer, ForeignKey("dev_task.id", ondelete="SET NULL"),
+                     nullable=True, index=True)
+    # plan 生成方案 / task 生成任务产出 / chat 自由问答
+    kind = Column(String(16), default="plan", index=True)
+    prompt = Column(Text, default="")
+    context = Column(JSON, default=dict)            # 检索到的知识（引用摘要）
+    reply = Column(Text, default="")                # 模型回复原文
+    model = Column(String(128), default="")         # 用了哪个模型
+    mode = Column(String(16), default="offline")    # 生成时所处的模式
+    status = Column(String(16), default="done", index=True)
+    notice = Column(Text, default="")               # 降级提示（例：没联网搜索）
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class DevCitation(Base):
+    """知识引用：模型的每一段输出挂在哪几条知识上
+
+    kind 区分来源：gene 养料库基因 / doc 文档块 / github 开源项目 / web 网络知识
+    confidence 是这条引用有多可信：
+    基因用自己的 confidence，文档与 GitHub 用检索得分归一化后的值。
+    """
+    __tablename__ = "dev_citation"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("dev_session.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    artifact_id = Column(Integer, ForeignKey("dev_artifact.id", ondelete="SET NULL"),
+                         nullable=True, index=True)
+    kind = Column(String(16), default="gene", index=True)
+    ref = Column(String(128), default="")           # gene:12 / doc:34 / repo:owner/repo
+    title = Column(String(256), default="")
+    snippet = Column(Text, default="")
+    confidence = Column(Float, default=0.5)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+
 __all__ = [
     "EntityType", "FieldDefinition", "EntityRecord",
     "RelationDef", "RelationRecord", "Attachment", "View", "App",
     "Document", "DocumentLink", "DocumentChunk", "SysMeta",
     "Dashboard", "Role", "User", "UserSession", "AuditLog",
     "NoteGroup", "NavItem", "DnaGene",
+    "DnaGeneScore", "DnaAsset", "DnaAssetUse", "DnaOpenkbSource",
+    "DevProject", "DevTask", "DevArtifact", "DevSession", "DevCitation",
 ]

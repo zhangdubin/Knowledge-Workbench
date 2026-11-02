@@ -117,9 +117,9 @@ async def genes(kind: str = Query("", description="按种类过滤"),
                 status: str = Query("active",
                                     description="active 当前 / superseded 已被取代 / all 全部"),
                 sort: str = Query("id",
-                                  description="id 默认 / usage 表达度 / updated 最近更新 / confidence 置信"),
+                                  description="id 默认 / usage 被用次数 / updated 最近更新 / confidence 置信 / expressiveness 表达度"),
                 flag: str = Query("",
-                                  description="体检筛选：cold 没人用 / used 用过 / no_source 没出处 / low_conf 置信低"),
+                                  description="体检筛选：cold 没人用 / used 用过 / no_source 没出处 / low_conf 置信低 / vague 表达度低"),
                 limit: int = Query(50, le=500),
                 offset: int = Query(0),
                 db: AsyncSession = Depends(get_db),
@@ -153,13 +153,17 @@ async def genes(kind: str = Query("", description="按种类过滤"),
     elif flag == "no_source":
         stmt = stmt.where(DnaGene.source_ref == "")
     elif flag == "low_conf":
-        stmt = stmt.where(DnaGene.confidence < 0.6)
+        stmt = stmt.where(DnaGene.confidence < 0.5)
+    elif flag == "vague":
+        # 表达度低 = 「说得不清楚」：需要重写，不是需要复核真假
+        stmt = stmt.where(DnaGene.expressiveness < 0.4)
     total = (await db.execute(
         select(func.count()).select_from(stmt.subquery()))).scalar_one()
     order = {
         "usage": (DnaGene.usage_count.desc(), DnaGene.id),
         "updated": (DnaGene.updated_at.desc(), DnaGene.id),
         "confidence": (DnaGene.confidence.desc(), DnaGene.id),
+        "expressiveness": (DnaGene.expressiveness.desc(), DnaGene.id),
     }.get(sort, (DnaGene.kind, DnaGene.id))
     rows = (await db.execute(
         stmt.order_by(*order)
@@ -171,12 +175,90 @@ async def genes(kind: str = Query("", description="按种类过滤"),
 @router.get("/genes/{gene_id}")
 async def gene_detail(gene_id: int, db: AsyncSession = Depends(get_db),
                        principal: Principal = Depends(current_principal)):
-    """单条基因的详情"""
+    """单条基因的详情（含评分分项与依据）"""
     g = (await db.execute(
         select(DnaGene).where(DnaGene.id == gene_id))).scalar_one_or_none()
     if g is None:
         raise HTTPException(404, "基因不存在")
-    return svc.serialize_gene(g)
+    return await svc.serialize_gene_detail(db, g)
+
+
+@router.get("/genes/{gene_id}/score")
+async def gene_score(gene_id: int, db: AsyncSession = Depends(get_db),
+                      principal: Principal = Depends(current_principal)):
+    """单条基因的评分明细
+
+    分数 + 分项 + 依据，是为了让「为什么这条只有 0.42」有答案。
+    """
+    g = (await db.execute(
+        select(DnaGene).where(DnaGene.id == gene_id))).scalar_one_or_none()
+    if g is None:
+        raise HTTPException(404, "基因不存在")
+    from ..services import dna_score
+    return {"gene_id": gene_id,
+            "score": await dna_score.get_score(db, gene_id)}
+
+
+class CorrectBody(BaseModel):
+    note: str = Field("", description="纠正说明（记在审计里）")
+
+
+@router.post("/genes/{gene_id}/correct")
+async def correct_gene(gene_id: int, body: CorrectBody,
+                        db: AsyncSession = Depends(get_db),
+                        principal: Principal = Depends(current_principal)):
+    """人工纠正一条基因 —— 负反馈必须真的扣分
+
+    「纠正」如果只是记一笔不改分数，那它就只是个按钮。
+    这里每纠正一次，置信度按次扣（封顶 0.4），
+    同时写进审计日志：谁在什么时候说这条不对。
+    """
+    g = (await db.execute(
+        select(DnaGene).where(DnaGene.id == gene_id))).scalar_one_or_none()
+    if g is None:
+        raise HTTPException(404, "基因不存在")
+    from ..services import dna_score
+    score = await dna_score.record_correction(db, gene_id, note=body.note)
+    await audit_svc.log_event(
+        getattr(principal, "username", "") or "-", "dna_gene_correct",
+        user_id=getattr(principal, "id", None),
+        resource="dna_library", method="POST",
+        path=f"/api/dna/library/genes/{gene_id}/correct",
+        detail={"gene_id": gene_id, "note": body.note,
+                "confidence": (score or {}).get("confidence")},
+    )
+    return {"ok": True, "score": score}
+
+
+class RescoreBody(BaseModel):
+    gene_ids: list[int] = Field(default_factory=list,
+                                 description="要重算的基因 id；留空表示全量回填")
+    all: bool = Field(False, description="是否全量回填（只算版本落后的）")
+    batch: int = Field(200, le=2000)
+
+
+@router.post("/score/rescore")
+async def rescore(body: RescoreBody, db: AsyncSession = Depends(get_db),
+                   principal: Principal = Depends(current_principal)):
+    """重算评分（回填）
+
+    日常的新增/使用/纠正都走增量重算，只有这一条是全量的 ——
+    它存在的意义是：给**存量**数据补上新分数。
+    """
+    from ..services import dna_score
+    if body.gene_ids:
+        res = await dna_score.rescore_genes(db, body.gene_ids)
+    else:
+        res = await dna_score.rescore_all(db, batch=body.batch,
+                                          only_stale=True)
+    await audit_svc.log_event(
+        getattr(principal, "username", "") or "-", "dna_rescore",
+        user_id=getattr(principal, "id", None),
+        resource="dna_library", method="POST",
+        path="/api/dna/library/score/rescore",
+        detail=res,
+    )
+    return {"ok": True, **res}
 
 
 class CiteBody(BaseModel):
@@ -222,6 +304,51 @@ async def cite(payload: CiteBody, db: AsyncSession = Depends(get_db),
 
 # ============ 后台吸收任务（源码树整体上传 / 进度 / 进化账本） ============
 
+
+class LimitsBody(BaseModel):
+    max_total_mb: int = Field(..., ge=ingest.MIN_TOTAL_MB, le=ingest.MAX_TOTAL_MB,
+                              description="上传总量上限（MB）")
+
+
+@router.get("/limits")
+async def get_limits(db: AsyncSession = Depends(get_db),
+                      principal: Principal = Depends(current_principal)):
+    """当前生效的源码上传限制
+
+    上限存在库里而不是配置文件里：源码上传是养料库自己的事，
+    限制也就该跟着养料库走；而且调大上限的人往往正是要传大源码树的人，
+    让他去改 .env 等于把事情推给别人。
+    """
+    limits = await ingest.get_ingest_limits(db)
+    mb = int(limits.get("max_total_mb") or 256)
+    return {"ok": True, "limits": {
+        "max_total_mb": mb,
+        "min_total_mb": ingest.MIN_TOTAL_MB,
+        "max_total_mb_limit": ingest.MAX_TOTAL_MB,
+        "max_files": ingest.MAX_FILES,
+        "max_file_mb": ingest.MAX_FILE_BYTES // 1024 // 1024,
+        "total_bytes": ingest.total_bytes_for(mb),
+    }}
+
+
+@router.put("/limits")
+async def put_limits(body: LimitsBody, db: AsyncSession = Depends(get_db),
+                      principal: Principal = Depends(current_principal)):
+    """调整源码上传总量上限（写库 + 审计）"""
+    try:
+        cfg = await ingest.set_ingest_limits(db, max_total_mb=body.max_total_mb)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await audit_svc.log_event(
+        getattr(principal, "username", "") or "-", "dna_ingest_limits_update",
+        user_id=getattr(principal, "id", None),
+        resource="dna_library", method="PUT",
+        path="/api/dna/library/limits",
+        detail={"max_total_mb": cfg.get("max_total_mb")},
+    )
+    return {"ok": True, "limits": {"max_total_mb": cfg.get("max_total_mb")}}
+
+
 @router.post("/jobs/source-tree")
 async def create_source_tree_job(
     files: list[UploadFile] = File(default=[]),
@@ -254,6 +381,11 @@ async def create_source_tree_job(
     staged = ingest.staging_root() / f"job-{job.id}"
     staged.mkdir(parents=True, exist_ok=True)
 
+    # 上限取运行时配置：可在「养料库 → 源码树」面板里调
+    # （上限不合适的人正是要传大源码树的人，让他去改 .env 等于把事推给别人）
+    limits = await ingest.get_ingest_limits(db)
+    max_bytes = ingest.total_bytes_for(limits.get("max_total_mb"))
+
     total_bytes = 0
     written = 0
     try:
@@ -265,10 +397,11 @@ async def create_source_tree_job(
             dest.parent.mkdir(parents=True, exist_ok=True)
             data = await up.read()
             total_bytes += len(data)
-            if total_bytes > ingest.MAX_TOTAL_BYTES:
+            # 上限取运行时配置（可在养料库面板里改），不是写死的常量
+            if total_bytes > max_bytes:
                 raise HTTPException(
                     status_code=413,
-                    detail=f"上传总量超过 {ingest.MAX_TOTAL_BYTES // 1024 // 1024} MB")
+                    detail=f"上传总量超过 {limits['max_total_mb']} MB（可在养料库 → 源码树里调整上限）")
             dest.write_bytes(data)
             written += 1
             await up.close()
@@ -613,6 +746,234 @@ async def set_offline(body: OfflineBody, db: AsyncSession = Depends(get_db),
     """
     on = await svc.set_offline(db, body.enabled)
     return {"offline": on, "ready": await _offline_ready(db)}
+
+
+# ============ 学以致用：可复用产出 ============
+
+class AssetFromGenesBody(BaseModel):
+    gene_ids: list[int] = Field(default_factory=list,
+                                 description="指定的基因 id；留空则自动挑高分基因")
+    min_score: float = Field(0.6, ge=0, le=1,
+                             description="自动挑选时的分数线（表达度与置信度都过线）")
+    limit: int = Field(20, le=200)
+
+
+@router.get("/assets")
+async def list_assets(gene_id: int = Query(0, description="按来源基因过滤"),
+                      kind: str = Query(""),
+                      limit: int = Query(50, le=200),
+                      offset: int = Query(0),
+                      db: AsyncSession = Depends(get_db),
+                      principal: Principal = Depends(current_principal)):
+    """可复用产出清单（代码片段 / 接口契约 / 操作步骤）"""
+    from ..services import dna_asset
+    return await dna_asset.list_assets(
+        db, gene_id=gene_id or None, kind=kind, limit=limit, offset=offset)
+
+
+@router.post("/assets/from-genes")
+async def assets_from_genes(body: AssetFromGenesBody,
+                             db: AsyncSession = Depends(get_db),
+                             principal: Principal = Depends(current_principal)):
+    """从高分基因里落出可复用产出
+
+    不给 gene_ids 时自动挑「表达度与置信度都过线」的前 N 条：
+    说得不清楚、又不可信的知识，抽出来的片段也用不了。
+    """
+    from ..services import dna_asset
+    gene_ids = list(body.gene_ids or [])
+    if not gene_ids:
+        stmt = (select(DnaGene)
+                .where(DnaGene.status == "active",
+                       DnaGene.expressiveness >= body.min_score,
+                       DnaGene.confidence >= body.min_score)
+                .order_by(DnaGene.expressiveness.desc(), DnaGene.id)
+                .limit(body.limit))
+        rows = (await db.execute(stmt)).scalars().all()
+        gene_ids = [g.id for g in rows]
+    created = await dna_asset.create_assets_from_genes(db, gene_ids)
+    await audit_svc.log_event(
+        getattr(principal, "username", "") or "-", "dna_asset_create",
+        user_id=getattr(principal, "id", None),
+        resource="dna_library", method="POST",
+        path="/api/dna/library/assets/from-genes",
+        detail={"genes": len(gene_ids), "assets": len(created)},
+    )
+    return {"genes": len(gene_ids), "assets": len(created),
+            "items": [dna_asset.serialize_asset(a) for a in created]}
+
+
+class UseAssetBody(BaseModel):
+    project: str = Field("", description="用在哪个项目")
+    task: str = Field("", description="哪个任务")
+    outcome: str = Field("unknown", description="success / fail / unknown")
+    note: str = Field("")
+
+
+@router.post("/assets/{asset_id}/use")
+async def use_asset(asset_id: int, body: UseAssetBody,
+                     db: AsyncSession = Depends(get_db),
+                     principal: Principal = Depends(current_principal)):
+    """记录一次「资产被用了」—— 闭环的关键一步
+
+    这一步之后：
+      - 写一条使用事件（谁、在哪个项目、什么任务、成没成功）
+      - 源基因的被复用度与置信度跟着变（成功加分、失败扣分）
+      - 写审计日志
+    """
+    from ..services import dna_asset
+    try:
+        res = await dna_asset.use_asset(
+            db, asset_id, project=body.project, task=body.task,
+            outcome=body.outcome, note=body.note,
+            actor=getattr(principal, "username", "") or "")
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    await audit_svc.log_event(
+        getattr(principal, "username", "") or "-", "dna_asset_use",
+        user_id=getattr(principal, "id", None),
+        resource="dna_library", method="POST",
+        path=f"/api/dna/library/assets/{asset_id}/use",
+        detail={"asset_id": asset_id, "project": body.project,
+                "task": body.task, "outcome": body.outcome},
+    )
+    return res
+
+
+@router.get("/assets/uses")
+async def asset_uses(gene_id: int = Query(0),
+                     asset_id: int = Query(0),
+                     limit: int = Query(50, le=200),
+                     db: AsyncSession = Depends(get_db),
+                     principal: Principal = Depends(current_principal)):
+    """使用事件流水（证据链）"""
+    from ..services import dna_asset
+    return await dna_asset.list_uses(
+        db, gene_id=gene_id or None, asset_id=asset_id or None, limit=limit)
+
+
+@router.get("/assets/stats")
+async def asset_stats(db: AsyncSession = Depends(get_db),
+                       principal: Principal = Depends(current_principal)):
+    """产出层统计：学以致用到底发生了没有"""
+    from ..services import dna_asset
+    return await dna_asset.asset_stats(db)
+
+
+# ============ 外部开源项目（openkb 类） ============
+
+class OpenkbImportBody(BaseModel):
+    repo: str = Field("", description="owner/repo 或 GitHub 网址")
+    local_path: str = Field("", description="本地镜像目录（离线导入用）")
+    branch: str = Field("")
+    max_files: int = Field(800, le=2000)
+
+
+@router.get("/openkb/preview")
+async def openkb_preview(repo: str = Query("", description="owner/repo 或网址"),
+                          local_path: str = Query("", description="本地镜像目录"),
+                          db: AsyncSession = Depends(get_db),
+                          principal: Principal = Depends(current_principal)):
+    """导入前的预检：认不认得这个仓库、许可证是什么、合规提示是什么
+
+    纯读，不写库 —— 让人在点「导入」之前就知道会有什么后果。
+    """
+    from ..services import dna_openkb
+    out = {"ok": False, "repo": "", "license": "", "notice": "",
+           "source": "", "error": ""}
+    if local_path.strip():
+        mirror = dna_openkb.find_local_mirror(local_path.strip())
+        if mirror is None:
+            out["error"] = f"本地目录不存在：{local_path}"
+            return out
+        out.update({"ok": True, "source": "local",
+                    "repo": mirror.name, "local_path": str(mirror),
+                    "notice": dna_openkb.license_notice("", mirror.name)})
+        return out
+    if not repo.strip():
+        out["error"] = "请给仓库地址或本地目录"
+        return out
+    try:
+        full = dna_openkb.repo_full_name(repo.strip())
+    except ValueError as e:
+        out["error"] = str(e)
+        return out
+    meta = await dna_openkb.fetch_repo_metadata(full)
+    license_id = meta.get("license") or ""
+    out.update({"ok": True, "source": "github", "repo": full,
+                "license": license_id,
+                "star_count": meta.get("star_count") or 0,
+                "url": meta.get("url") or "",
+                "notice": dna_openkb.license_notice(license_id, full)})
+    return out
+
+
+@router.post("/openkb/import")
+async def openkb_import(body: OpenkbImportBody,
+                         db: AsyncSession = Depends(get_db),
+                         principal: Principal = Depends(current_principal)):
+    """吸收一个外部开源项目（GitHub 或本地镜像）
+
+    两种走法产出同样的基因：
+      - 有网：给 owner/repo 或网址，走 GitHub 打包下载
+      - 没网：给本地镜像目录（用户预先 clone 好的仓库）
+
+    外部项目同样**不留源码原文**：只留方法、经验与接口契约，
+    并在来源档案里记下许可证与合规提示。
+    """
+    from ..services import dna_openkb
+    who = getattr(principal, "username", "") or ""
+    try:
+        if body.local_path.strip():
+            mirror = dna_openkb.find_local_mirror(body.local_path.strip())
+            if mirror is None:
+                raise HTTPException(404, f"本地目录不存在：{body.local_path}")
+            res = await dna_openkb.absorb_local_repo(
+                db, str(mirror), principal=who,
+                max_files=body.max_files)
+        elif body.repo.strip():
+            res = await dna_openkb.absorb_github_repo(
+                db, body.repo.strip(), branch=body.branch,
+                principal=who, max_files=body.max_files)
+        else:
+            raise HTTPException(400, "请给仓库地址或本地目录")
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"吸收开源项目失败：{e}")
+    await audit_svc.log_event(
+        who or "-", "dna_openkb_import",
+        user_id=getattr(principal, "id", None),
+        resource="dna_library", method="POST",
+        path="/api/dna/library/openkb/import",
+        detail={"repo": body.repo, "local_path": body.local_path,
+                "created": res.get("created"),
+                "license": res.get("license")},
+    )
+    return res
+
+
+@router.get("/openkb/sources")
+async def openkb_sources(limit: int = Query(50, le=200),
+                          db: AsyncSession = Depends(get_db),
+                          principal: Principal = Depends(current_principal)):
+    """外部来源档案（仓库 / 许可证 / 吸收统计）"""
+    from ..services import dna_openkb
+    return await dna_openkb.list_sources(db, limit=limit)
+
+
+@router.get("/openkb/sources/{source_id}")
+async def openkb_source_detail(source_id: int,
+                                db: AsyncSession = Depends(get_db),
+                                principal: Principal = Depends(current_principal)):
+    """某个外部来源吸收出来的基因"""
+    from ..services import dna_openkb
+    try:
+        return await dna_openkb.source_genes(db, source_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
 
 # ============ 打包 ============

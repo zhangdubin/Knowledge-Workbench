@@ -38,9 +38,19 @@ from .dna_library import KIND_EXPERIENCE, KIND_INTERFACE, KIND_METHOD, KIND_POLI
 log = logging.getLogger("kb.dna_ingest")
 
 # 一次上传最多收多少文件 / 多少字节
+#
+# MAX_TOTAL_BYTES 只是**兜底默认值**：真正的上限存在 sys_meta 里
+# （INGEST_LIMITS_KEY），可以在「养料库 → 源码树」面板里直接改，
+# 改完立即生效，不用重启容器、也不用改代码。
+# 为什么要有这个可调项：源码树是「拿来蒸馏成基因、原文用完即删」的东西，
+# 但真实仓库动辄几百 MB —— 上限写死 256 MB 就只能让人分批上传，
+# 分批之后「同一个系统的全貌」就被切碎了，基因之间的关联也断了。
 MAX_FILES = 2000
-MAX_TOTAL_BYTES = 256 * 1024 * 1024      # 256 MB
+MAX_TOTAL_BYTES = 256 * 1024 * 1024      # 默认 256 MB（可被界面覆盖）
 MAX_FILE_BYTES = 8 * 1024 * 1024        # 单文件 8 MB
+# 上传总量上限的可调范围（MB）
+MIN_TOTAL_MB = 16
+MAX_TOTAL_MB = 4096
 # 明细最多留多少条（数据库里也别堆成日志）
 MAX_DETAIL = 200
 
@@ -623,6 +633,70 @@ async def gap_summary(db: AsyncSession) -> dict:
         "filled_count": int(filled.scalar_one() or 0),
         "total_count": int(total.scalar_one() or 0),
     }
+
+
+# ============ 上传限制（可在界面上调） ============
+
+INGEST_LIMITS_KEY = "dna.ingest_limits"
+
+
+async def get_ingest_limits(db: AsyncSession) -> dict:
+    """读当前生效的上传限制
+
+    存在 sys_meta 里（不是配置文件、不是环境变量）：
+    源码上传是养料库自己的事，限制也就该跟着养料库走，
+    而且普通使用者不需要管理员权限就能调整 —— 上限不合适的人
+    正是要传大源码树的人，让他去改 .env 等于把事情推给别人。
+
+    读不出来（表里没有 / 值坏了）就用默认值，不要因此拒绝上传。
+    """
+    import json
+    from ..models import SysMeta
+    cfg: dict = {}
+    try:
+        raw = (await db.execute(
+            select(SysMeta).where(SysMeta.key == INGEST_LIMITS_KEY))).scalar_one_or_none()
+        if raw is not None and raw.value:
+            try:
+                cfg = dict(json.loads(raw.value))
+            except Exception:
+                cfg = {}
+    except Exception:
+        # 表还没建（极早期启动）不该让整个上传接口挂掉
+        cfg = {}
+    mb = cfg.get("max_total_mb")
+    try:
+        mb = int(mb)
+    except (TypeError, ValueError):
+        mb = MAX_TOTAL_BYTES // 1024 // 1024
+    cfg["max_total_mb"] = max(MIN_TOTAL_MB, min(mb, MAX_TOTAL_MB))
+    return cfg
+
+
+async def set_ingest_limits(db: AsyncSession, *, max_total_mb: int) -> dict:
+    """写上传限制（只允许改总量上限这一项）"""
+    import json
+    from ..models import SysMeta
+    try:
+        mb = int(max_total_mb)
+    except (TypeError, ValueError):
+        raise ValueError("上传总量上限必须是整数（MB）")
+    if mb < MIN_TOTAL_MB or mb > MAX_TOTAL_MB:
+        raise ValueError(f"上传总量上限取值范围 {MIN_TOTAL_MB} ~ {MAX_TOTAL_MB} MB")
+    row = (await db.execute(
+        select(SysMeta).where(SysMeta.key == INGEST_LIMITS_KEY))).scalar_one_or_none()
+    if row is None:
+        row = SysMeta(key=INGEST_LIMITS_KEY, value="")
+        db.add(row)
+    row.value = json.dumps({"max_total_mb": mb}, ensure_ascii=False)
+    await db.commit()
+    return {"max_total_mb": mb}
+
+
+def total_bytes_for(max_total_mb: int | None) -> int:
+    """把「MB 上限」换算成字节数"""
+    mb = max_total_mb if max_total_mb else MAX_TOTAL_BYTES // 1024 // 1024
+    return int(mb) * 1024 * 1024
 
 
 # ============ 自动喂养 ============

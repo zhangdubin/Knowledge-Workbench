@@ -1,129 +1,196 @@
 <template>
   <div class="dna-graph">
-    <!-- 图例 + 筛选 + 操作 -->
-    <div class="dg-toolbar">
-      <!-- 搜索：图上一两百个节点，靠肉眼找某个名字是不现实的 -->
-      <el-input
-        v-model="q"
-        size="small"
-        class="dg-search"
-        placeholder="在图里找：文件名、章节、基因"
-        clearable
-      >
-        <template #prefix><el-icon><Search /></el-icon></template>
-      </el-input>
-
-      <div class="dg-legend">
-        <button
-          v-for="l in legendItems"
-          :key="l.key"
-          type="button"
-          class="lg-item lg-btn"
-          :class="{ 'is-off': !l.on }"
-          :title="l.on ? `隐藏${l.label}` : `显示${l.label}`"
-          @click="toggleNodeKind(l.key)"
+    <!-- ================= 工具条 ================= -->
+    <div class="dg-bar">
+      <div class="dg-bar-main">
+        <el-input
+          v-model="q"
+          size="small"
+          class="dg-search"
+          placeholder="在图里找：文件名、章节、基因"
+          clearable
         >
-          <span class="lg-glyph" :class="l.key" />{{ l.label }}<span class="lg-n">{{ l.count }}</span>
-        </button>
-      </div>
+          <template #prefix><el-icon><Search /></el-icon></template>
+          <template #suffix>
+            <span v-if="q" class="dg-search-hit">{{ searchHit?.count || 0 }} 处命中</span>
+          </template>
+        </el-input>
 
-      <!-- 基因种类：按碱基色分四类，点一下就能筛掉一类 -->
-      <div class="dg-kinds">
-        <button
-          v-for="k in kindLegend"
-          :key="k.key"
-          class="lg-base"
-          :class="{ 'is-off': !k.on }"
-          :style="{ '--bc': k.color }"
-          type="button"
-          :title="k.on ? '点击隐藏这一类基因' : '点击显示这一类基因'"
-          @click="toggleKind(k.key)"
-        >
-          {{ k.letter }}
-        </button>
-        <span class="dg-kinds-label">基因种类</span>
-      </div>
+        <div class="dg-grow" />
 
-      <div class="dg-filters">
         <el-select v-model="geneLimit" size="small" class="dg-select" aria-label="基因显示数量">
           <el-option label="热门 12 条基因" :value="12" />
           <el-option label="热门 20 条基因" :value="20" />
           <el-option label="全部基因" :value="-1" />
           <el-option label="不显示基因" :value="0" />
         </el-select>
+
         <el-radio-group v-model="filter" size="small" aria-label="筛选链">
           <el-radio-button value="all">全部</el-radio-button>
           <el-radio-button value="knowledge">知识链</el-radio-button>
           <el-radio-button value="evidence">证据链</el-radio-button>
         </el-radio-group>
+
+        <el-dropdown trigger="click" @command="setDensity">
+          <el-button size="small" class="dg-density">
+            <el-icon><Operation /></el-icon>{{ densityLabel }}
+            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="tight">紧凑 · 行距 20</el-dropdown-item>
+              <el-dropdown-item command="normal">标准 · 行距 24</el-dropdown-item>
+              <el-dropdown-item command="loose">宽松 · 行距 32</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+
+        <div class="dg-zoom">
+          <el-button size="small" text title="放大" @click="zoomBy(0.8)">
+            <el-icon><ZoomIn /></el-icon>
+          </el-button>
+          <el-button size="small" text title="缩小" @click="zoomBy(1.25)">
+            <el-icon><ZoomOut /></el-icon>
+          </el-button>
+          <el-button size="small" text title="适应窗口" @click="resetView">
+            <el-icon><FullScreen /></el-icon>
+          </el-button>
+        </div>
+
         <el-button size="small" @click="reshuffle">
           <el-icon><Refresh /></el-icon>重排
         </el-button>
-        <el-button size="small" @click="resetView">
-          <el-icon><FullScreen /></el-icon>适应
-        </el-button>
+      </div>
+
+      <div class="dg-bar-sub">
+        <!-- 节点类型 -->
+        <div class="dg-group">
+          <span class="dg-group-title">节点</span>
+          <button
+            v-for="l in legendItems"
+            :key="l.key"
+            type="button"
+            class="lg-item lg-btn"
+            :class="{ 'is-off': !l.on }"
+            :title="l.on ? `隐藏${l.label}` : `显示${l.label}`"
+            @click="toggleNodeKind(l.key)"
+          >
+            <span class="lg-glyph" :class="l.key" />{{ l.label }}<span class="lg-n">{{ l.count }}</span>
+          </button>
+        </div>
+
+        <!-- 基因种类（按碱基色分四类） -->
+        <div class="dg-group">
+          <span class="dg-group-title">碱基</span>
+          <button
+            v-for="k in kindLegend"
+            :key="k.key"
+            class="lg-base"
+            :class="{ 'is-off': !k.on }"
+            :style="{ '--bc': k.color }"
+            type="button"
+            :title="k.on ? '点击隐藏这一类基因' : '点击显示这一类基因'"
+            @click="toggleKind(k.key)"
+          >
+            {{ k.letter }}
+          </button>
+        </div>
+
+        <!-- 连接类型：没有这个图例就分不清「骨架横档」和「碱基对」 -->
+        <div class="dg-group dg-group-edges">
+          <span class="dg-group-title">连接</span>
+          <span v-for="e in edgeLegend" :key="e.key" class="dg-edge-item" :class="e.key">
+            <i class="dg-edge-line" />{{ e.label }}<span class="lg-n">{{ e.count }}</span>
+          </span>
+        </div>
+
+        <div class="dg-grow" />
+        <div class="dg-stats">{{ statsText }}</div>
       </div>
     </div>
 
-    <!-- 双螺旋画布：两链固定坐标 + 碱基对曲线 -->
-    <div ref="stage" class="dg-stage" :style="stageStyle">
-      <!-- 两条链的「骨架线」：纯装饰，跟着列位置走 -->
-      <span v-if="showLeft" class="dg-rail dg-rail-l" />
-      <span v-if="showRight" class="dg-rail dg-rail-r" />
+    <!-- ================= 双螺旋画布 ================= -->
+    <div ref="viewport" class="dg-viewport">
+      <div class="dg-stage" :style="stageStyle">
+        <!-- 两条链的「骨架线」：跟着列位置走，不是写死百分比 -->
+        <span v-if="showLeft" class="dg-rail dg-rail-l" :style="{ left: layout.xLeft + 'px' }" />
+        <span v-if="showRight" class="dg-rail dg-rail-r" :style="{ left: layout.xRight + 'px' }" />
 
-      <div ref="host" class="dg-canvas" :style="{ height: H + 'px' }" />
+        <div ref="host" class="dg-canvas" :style="{ height: H + 'px' }" />
 
-      <!-- 标题层：文字用 DOM 画，不跟节点挤在同一张 canvas 上 -->
-      <div class="dg-overlay">
-        <!-- 选中节点的光标环：canvas 上的节点只有几十像素，
-             光靠底色变化在双链密集处还是认不出来，
-             这里再叠一个会呼吸的环，位置跟着节点走 -->
-        <span v-if="selMark" class="dg-sel-ring" :style="selMark.style" />
-        <button
-          v-for="lb in labels"
-          :key="lb.id"
-          :ref="el => setLbl(lb.id, el)"
-          class="dg-lbl"
-          :class="[lb.side, 'dg-lbl-' + lb.kind, { 'is-dim': lb.dim, 'is-sel': lb.sel }]"
-          type="button"
-          :title="lb.title"
-          @click.stop="selectById(lb.id)"
-        >
-          <span v-if="lb.code" class="dg-lbl-code" :style="{ color: lb.color }">{{ lb.code }}</span>
-          <span class="dg-lbl-text">{{ lb.text }}</span>
-        </button>
+        <!-- 标题层：文字用 DOM 画，不跟节点挤在同一张 canvas 上 -->
+        <div class="dg-overlay">
+          <!-- 选中节点的光标环：canvas 上的节点只有几十像素，
+               光靠底色变化在双链密集处还是认不出来，
+               这里再叠一个会呼吸的环，位置跟着节点走 -->
+          <span v-if="selMark" class="dg-sel-ring" :style="selMark.style" />
+          <button
+            v-for="lb in labels"
+            :key="lb.id"
+            :ref="el => setLbl(lb.id, el)"
+            class="dg-lbl"
+            :class="[lb.side, 'dg-lbl-' + lb.kind, { 'is-dim': lb.dim, 'is-sel': lb.sel, 'is-hit': lb.hit }]"
+            type="button"
+            :title="lb.title"
+            @click.stop="selectById(lb.id)"
+          >
+            <span v-if="lb.code" class="dg-lbl-code" :style="{ color: lb.color }">{{ lb.code }}</span>
+            <span class="dg-lbl-text">{{ lb.text }}</span>
+          </button>
+        </div>
+
+        <div v-if="showLeft" class="dg-strand dg-strand-l" :style="{ left: layout.xLeft + 'px' }">
+          <span class="dg-strand-dot" />知识链<span class="dg-strand-n">{{ layout.leftLen }}</span>
+        </div>
+        <div v-if="showRight" class="dg-strand dg-strand-r" :style="{ left: layout.xRight + 'px' }">
+          <span class="dg-strand-dot" />证据链<span class="dg-strand-n">{{ layout.rightLen }}</span>
+        </div>
       </div>
-
-      <div v-if="showLeft" class="dg-strand dg-strand-l">知识链</div>
-      <div v-if="showRight" class="dg-strand dg-strand-r">证据链</div>
     </div>
 
-    <!-- 选中节点的详情 -->
+    <!-- ================= 选中节点的详情 ================= -->
     <transition name="dg-slide">
       <div v-if="selected" class="dg-detail">
         <div class="dg-detail-head">
           <span class="dg-detail-kind" :style="detailKindStyle">{{ kindLabel(selected.kind) }}</span>
           <span class="dg-detail-title">{{ selected.label }}</span>
-          <el-button size="small" text @click="selected = null">
-            <el-icon><Close /></el-icon>
-          </el-button>
+          <span class="dg-detail-acts">
+            <el-button size="small" text title="复制标题" @click="copyTitle">
+              <el-icon><CopyDocument /></el-icon>
+            </el-button>
+            <el-button size="small" text title="关闭" @click="selected = null">
+              <el-icon><Close /></el-icon>
+            </el-button>
+          </span>
         </div>
-        <div class="dg-detail-meta">
-          <span v-for="(v, k) in detailMeta" :key="k" class="dg-meta-item">
-            {{ metaLabel(k) }}：{{ v }}
+        <div v-if="detailMetaList.length" class="dg-detail-meta">
+          <span v-for="m in detailMetaList" :key="m.k" class="dg-meta-item">
+            <span class="dg-meta-k">{{ m.label }}</span>
+            <span class="dg-meta-v">{{ m.value }}</span>
           </span>
         </div>
         <div v-if="selectedEdges.length" class="dg-detail-links">
           <span class="dg-links-label">连着 {{ selectedEdges.length }} 个：</span>
-          <span v-for="e in selectedEdges.slice(0, 10)" :key="e.id" class="dg-link-chip">
+          <button
+            v-for="e in selectedEdges.slice(0, 12)"
+            :key="e.id"
+            type="button"
+            class="dg-link-chip"
+            @click="jumpToEdge(e)"
+          >
             <i class="dg-link-kind" :class="e.kind" />{{ edgeLabel(e) }}
+          </button>
+          <span v-if="selectedEdges.length > 12" class="dg-links-more">
+            还有 {{ selectedEdges.length - 12 }} 个
           </span>
         </div>
       </div>
     </transition>
 
     <div v-if="!nodes.length" class="dg-empty">
-      还没有可连起来的脉络 —— 文件与记录之间还没有建立关联
+      <el-icon class="dg-empty-icon"><DataLine /></el-icon>
+      <div class="dg-empty-title">还没有可连起来的脉络</div>
+      <div class="dg-empty-sub">文件与记录之间还没有建立关联 —— 先去养料库吸收一批资料吧</div>
     </div>
   </div>
 </template>
@@ -144,6 +211,14 @@
  *   现在自己算坐标：两列固定 x，节点按 y 序排好，物理引擎整个关掉。
  *   位置是确定的 → 可读、可点、可截图。
  *
+ * ★ 排版事故的根因（2026-11 修复）：
+ *   computeLayout() 写好了却**从来没被调用**。
+ *   于是 layout 一直是初始值 { pos: {}, H: 460 }：
+ *     - pos 为空 → 每个节点都落到 (0, 0) → 六十二个标签全叠在左上角
+ *     - H 恒为 460 → 画布高度与节点数无关
+ *   实测 62 个标签产生 966 对压字（全部 100% 重叠）。
+ *   现在 draw() 每次都先算布局，并且按算出的高度同步画布尺寸。
+ *
  * 基因会很多（上限 60 条），全画出来会把结构埋掉，
  * 所以默认只放「热门」的一批，其余用工具栏的开关调。
  *
@@ -156,6 +231,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { Network } from 'vis-network/standalone'
 import { DataSet } from 'vis-data/standalone'
+import { ElMessage } from 'element-plus'
 import { cssVar, isDark } from '../utils/theme'
 
 const props = defineProps({
@@ -167,6 +243,7 @@ const props = defineProps({
 const emit = defineEmits(['select'])
 
 const host = ref(null)
+const viewport = ref(null)
 const filter = ref('all')
 const selected = ref(null)
 const seed = ref(0)
@@ -175,6 +252,19 @@ const geneLimit = ref(12)
 const offKinds = ref(new Set())
 const q = ref('')
 const offNodeKinds = ref(new Set())
+const density = ref('normal')
+
+/** 密度档：只改行距，不改别的 */
+const DENSITY = {
+  tight: { min: 20, max: 26, label: '紧凑' },
+  normal: { min: 24, max: 32, label: '标准' },
+  loose: { min: 32, max: 42, label: '宽松' },
+}
+const densityLabel = computed(() => DENSITY[density.value]?.label || '标准')
+
+function setDensity(k) {
+  if (DENSITY[k]) density.value = k
+}
 
 /** 图例：带计数，点一下切换这一类节点的显示 */
 const legendItems = computed(() => {
@@ -196,6 +286,29 @@ function toggleNodeKind(kind) {
   else s.add(kind)
   offNodeKinds.value = s
 }
+
+/** 连接类型图例：分不清「骨架横档」和「碱基对」，图就只是一堆线 */
+const EDGE_KINDS = [
+  { key: 'structure', label: '骨架' },
+  { key: 'attach', label: '挂载' },
+  { key: 'encode', label: '编码' },
+  { key: 'relation', label: '关联' },
+]
+const edgeLegend = computed(() => {
+  const edges = props.graph?.edges || []
+  return EDGE_KINDS.map((k) => ({
+    ...k,
+    count: edges.filter((e) => e.kind === k.key).length,
+  })).filter((e) => e.count > 0)
+})
+
+const statsText = computed(() => {
+  const n = nodes.value.length
+  const e = visibleEdges.value.length
+  const total = (props.graph?.nodes || []).length
+  if (!total) return '还没有数据'
+  return `显示 ${n}/${total} 个节点 · ${e} 条连接`
+})
 
 let net = null
 let nodesDS = null
@@ -237,7 +350,6 @@ function mix(a, b, t) {
 
 const BASES = ['A', 'T', 'G', 'C']
 const BASE_VAR = { A: '--primary', T: '--accent-green', G: '--warning', C: '--accent-slate' }
-const BASE_NAME = { A: '腺嘌呤', T: '胸腺嘧啶', G: '鸟嘌呤', C: '胞嘧啶' }
 
 /**
  * 四色碱基色板
@@ -338,20 +450,19 @@ function toggleKind(key) {
  * 数据准备
  * ------------------------------------------------------------------ */
 
-const counts = computed(() => {
-  const c = { document: 0, section: 0, record: 0, gene: 0, library: 0 }
-  for (const n of props.graph?.nodes || []) {
-    if (c[n.kind] !== undefined) c[n.kind]++
-  }
-  return c
-})
-
 const showLeft = computed(() => filter.value !== 'evidence')
 const showRight = computed(() => filter.value !== 'knowledge')
 
-/** 基因：先按种类筛，再按「表达度 + 置信度」取热门的一批 */
+/**
+ * 基因：先按种类筛，再按「表达度 + 置信度」取热门的一批
+ *
+ * 注意还要看图例开关（offNodeKinds）：
+ *   之前这里只看种类筛选，图例里把「基因」关掉之后，
+ *   visibleGenes 仍然有值 → 会被摊进左链 → 白占行、把别的行挤走。
+ */
 const visibleGenes = computed(() => {
   if (geneLimit.value === 0) return []
+  if (offNodeKinds.value.has('gene')) return []
   const all = (props.graph?.nodes || []).filter((n) => n.kind === 'gene')
   const kept = all.filter((n) => !offKinds.value.has(geneKindOf(n)))
   const sorted = kept.slice().sort((a, b) => {
@@ -383,7 +494,7 @@ const searchHit = computed(() => {
     if (hit.has(e.source)) keep.add(e.target)
     if (hit.has(e.target)) keep.add(e.source)
   }
-  return { ids: keep, count: hit.size }
+  return { ids: keep, count: hit.size, direct: hit }
 })
 
 const nodes = computed(() => {
@@ -440,13 +551,16 @@ function edgeLabel(e) {
   return `${tag}${e.label ? ' · ' + e.label : ''}${n?.label ? ' → ' + n.label : ''}`
 }
 
-const detailMeta = computed(() => {
+/** 详情里的元数据：键值对形式，便于排版 */
+const detailMetaList = computed(() => {
   const m = { ...(selected.value?.meta || {}) }
   if (selected.value?.kind === 'gene') {
     if (m.gene_kind) m.gene_kind = GENE_KIND_MAP[m.gene_kind]?.label || m.gene_kind
     if (m.destroyed) m.destroyed = '已销毁（蒸馏自源码）'
   }
-  return m
+  return Object.entries(m)
+    .filter(([k, v]) => v !== '' && v !== null && v !== undefined)
+    .map(([k, v]) => ({ k, label: metaLabel(k), value: String(v) }))
 })
 
 const detailKindStyle = computed(() => {
@@ -458,20 +572,40 @@ const detailKindStyle = computed(() => {
   return { '--ac-fg': p.text, '--ac-bg': p.fill, '--ac-line': p.line }
 })
 
+function copyTitle() {
+  const t = selected.value?.label || ''
+  if (!t) return
+  try {
+    navigator.clipboard?.writeText(t)
+    ElMessage.success('已复制标题')
+  } catch (e) {
+    ElMessage.warning('复制失败，请手动选中')
+  }
+}
+
+/** 点关联芯片 → 跳到另一端节点 */
+function jumpToEdge(e) {
+  const other = e.source === selected.value?.id ? e.target : e.source
+  if (other) selectById(other)
+}
+
 /* ------------------------------------------------------------------ *
  * 布局：两列固定坐标（不碰物理引擎）
  * ------------------------------------------------------------------ */
 
-const PAD_TOP = 50        // 顶部留白：给「知识链 / 证据链」两个链头
-const PAD_BOTTOM = 26
+const PAD_TOP = 52        // 顶部留白：给「知识链 / 证据链」两个链头
+const PAD_BOTTOM = 28
 const TARGET_H = 940      // 图区目标高度；行多的时候自动收窄行距
-// 行距下限 24px：标签行高约 17px（12px 字号 × 1.35 + 2px 内边距），
-// 行距 20px 时相邻标签会压字 4~5px —— 62 个标签里 36 对压在一起，
-// 双螺旋看起来像两串挤在一起的字。宁可让画布高一点。
-const MIN_PITCH = 24
-const MAX_PITCH = 28
+// 行距下限 20px：标签行高约 15px（12px 字号 × 1.25），
+// 行距 20px 时相邻标签还留 5px 缝，不会压字；
+// 再密就真的叠上去了（实测 20px 是压字与浪费空间之间的分界）。
+const MIN_PITCH = 20
+const MAX_PITCH = 32
 
-const layout = ref({ pos: {}, W: 900, H: 460, leftLen: 1, rightLen: 1, xLeft: 0, xRight: 0 })
+const layout = ref({
+  pos: {}, W: 900, H: 460, leftLen: 1, rightLen: 1,
+  xLeft: 0, xRight: 0, pitch: MIN_PITCH, lblMaxL: 250, lblMaxR: 260,
+})
 
 /**
  * 每个节点的「排版元数据」（碱基色 / 编号）
@@ -486,7 +620,7 @@ const nodeMeta = shallowRef({})
 const metaOf = (id) => nodeMeta.value[id] || { base: 'A', code: '' }
 
 function computeLayout() {
-  const W = Math.max(320, host.value?.clientWidth || 900)
+  const W = Math.max(560, host.value?.clientWidth || 900)
   const list = nodes.value
   const edges = visibleEdges.value
   const byId = new Map(list.map((n) => [n.id, n]))
@@ -663,8 +797,12 @@ function computeLayout() {
     leftRows.splice(at, 0, g)
   }
   // 没挂到任何文件下的章节也补进去
+  const inLeft = new Set(leftRows.map((n) => n.id))
   for (const n of list) {
-    if (n.kind === 'section' && !leftRows.includes(n)) leftRows.push(n)
+    if (n.kind === 'section' && !inLeft.has(n.id)) {
+      leftRows.push(n)
+      inLeft.add(n.id)
+    }
   }
 
   // ---- 编号（碱基编号） ----
@@ -694,20 +832,24 @@ function computeLayout() {
   }
   nodeMeta.value = meta
 
-
   const rightRows = recOrder
 
   // ---- 坐标 ----
   const leftLen = Math.max(leftRows.length, 1)
   const rightLen = Math.max(rightRows.length, 1)
   const rows = Math.max(leftLen, rightLen)
-  const pitch = Math.max(MIN_PITCH, Math.min(MAX_PITCH, (TARGET_H - PAD_TOP - PAD_BOTTOM) / rows))
-  const span = Math.max(leftLen, rightLen) * pitch
+  const dens = DENSITY[density.value] || DENSITY.normal
+  const pitch = Math.max(dens.min, Math.min(dens.max, (TARGET_H - PAD_TOP - PAD_BOTTOM) / rows))
+  const span = rows * pitch
   const H = PAD_TOP + PAD_BOTTOM + span
 
+  // 列位置：两链时左右分开；只看一条链时把它放在偏左 32% 处 ——
+  // 标题都是往右排的（证据链）或往左排的（知识链），
+  // 放在 42% 会让一大半画布空着，标签被挤在中间一小条里。
   const both = showLeft.value && showRight.value
-  const xLeft = both ? W * 0.30 : W * 0.42
-  const xRight = both ? W * 0.70 : W * 0.42
+  const xSingle = W * 0.32
+  const xLeft = both ? W * 0.30 : xSingle
+  const xRight = both ? W * 0.70 : xSingle
 
   const pos = {}
   leftRows.forEach((n, i) => {
@@ -720,8 +862,8 @@ function computeLayout() {
   layout.value = {
     pos, W, H, leftLen, rightLen, xLeft, xRight, pitch,
     // 标题层的可用宽度：左边的往左排，右边的往右排，都不许出界
-    lblMaxL: Math.max(64, Math.min(250, xLeft - 46)),
-    lblMaxR: Math.max(64, Math.min(260, W - xRight - 30)),
+    lblMaxL: Math.max(56, Math.min(250, xLeft - 44)),
+    lblMaxR: Math.max(56, Math.min(260, W - xRight - 28)),
   }
   return layout.value
 }
@@ -729,6 +871,7 @@ function computeLayout() {
 const stageStyle = computed(() => ({
   '--lbl-max-l': (layout.value.lblMaxL || 250) + 'px',
   '--lbl-max-r': (layout.value.lblMaxR || 260) + 'px',
+  height: (layout.value.H || 460) + 'px',
 }))
 
 /* ------------------------------------------------------------------ *
@@ -1026,6 +1169,7 @@ const labels = computed(() => {
   const hi = hiSet.value
   const dim = hoverId.value && hi.size > 0
   const selId = selected.value?.id || ''
+  const hits = searchHit.value?.direct || null
   const list = []
   for (const n of nodes.value) {
     const side = chainOf(n) === 'r' ? 'r' : 'l'
@@ -1043,6 +1187,7 @@ const labels = computed(() => {
       title: `${n.label}\n${metaText(n)}`,
       dim: (dim && !hi.has(n.id)) || (!!selId && n.id !== selId),
       sel: n.id === selId,
+      hit: !!hits && hits.has(n.id),
     })
   }
   return list
@@ -1092,23 +1237,56 @@ function scheduleSync() {
  * ------------------------------------------------------------------ */
 
 /**
+ * 把画布尺寸同步到布局算出来的高度
+ *
+ * 为什么必须显式调 setSize：
+ *   vis-network 只在初始化时读一次容器尺寸。
+ *   节点变多 → 布局算出的 H 变了 → 容器高度变了，
+ *   但 vis 的画布还是老高度 → 下面的节点被裁掉看不见。
+ */
+function syncCanvasSize() {
+  if (!net) return
+  const w = host.value?.clientWidth || layout.value.W
+  const h = layout.value.H
+  if (!w || !h) return
+  try {
+    net.setSize(`${w}px`, `${h}px`)
+  } catch (e) { /* 容器还没挂上 */ }
+}
+
+/**
  * 重画图（节点样式 / 连线）
  *
- * 注意：这里**不碰视口**。
+ * 注意：这里**默认不碰视口**。
  * 以前 draw() 顺手把视图拉回中心，于是「鼠标扫过一个节点」、
  * 「点一下选中」都会把用户已经平移好的视角弹回原处 ——
  * 一张能拖能缩放的图，老是自动跳回去等于不能拖。
- * 需要复位视角的地方显式调 resetView()。
+ * 需要复位视角的地方显式传 recenter = true。
+ *
+ * recenter 什么时候必须为 true：容器尺寸变了。
+ *   vis-network 的 setSize 会**按新旧画布的比例缩放视图**，
+ *   好让「看起来还是那么大」—— 于是相邻标签的间距也跟着按比例变窄
+ *   （实测 1256 → 936 宽时，行距 24px 被压成 18px），
+ *   而且 moveTo 的锚点还是旧中心，标签整体偏出画布。
+ *   所以尺寸变化后必须重新对中。
  */
-function draw() {
+function draw(recenter = false) {
   if (!net) return
+  // ★ 先算布局：以前这一步压根没做，所有节点都落在 (0,0)
+  computeLayout()
   const ns = buildNodes()
   const es = buildEdges()
   nodesDS.clear()
   edgesDS.clear()
   nodesDS.add(ns)
   edgesDS.add(es)
-  scheduleSync()
+  // 容器高度是绑定在 layout 上的，DOM 要等下一帧才更新，
+  // 所以 setSize 必须放到 nextTick 里，否则量到的还是旧高度。
+  nextTick(() => {
+    syncCanvasSize()
+    if (recenter) resetView()
+    scheduleSync()
+  })
 }
 
 function resetView() {
@@ -1120,11 +1298,19 @@ function resetView() {
   scheduleSync()
 }
 
+function zoomBy(k) {
+  if (!net) return
+  try {
+    const scale = net.getScale() * k
+    net.moveTo({ scale: Math.max(0.25, Math.min(2.5, scale)) })
+  } catch (e) { /* 视口挪不动也不该报错 */ }
+  scheduleSync()
+}
+
 function reshuffle() {
   seed.value += 1
-  draw()
   // 位置全变了，视角要跟着重新对中
-  nextTick(() => { resetView(); scheduleSync() })
+  draw(true)
 }
 
 function selectById(id) {
@@ -1195,14 +1381,15 @@ onMounted(() => {
   net.on('zoom', scheduleSync)
   net.on('drag', scheduleSync)
 
-  // 容器尺寸变了要重排：列位置是按宽度算的百分比，宽度变了列就偏了
+  // 容器尺寸变了要重排：列位置是按宽度算的百分比，宽度变了列就偏了。
+  // 而且必须 recenter —— vis 的 setSize 会按比例缩放视图，
+  // 不重新对中就会看到行距被压窄、标签整体偏出画布。
   if (typeof ResizeObserver !== 'undefined') {
     ro = new ResizeObserver(() => {
       if (!net) return
       const w = host.value?.clientWidth || 0
       if (!w) return
-      net.setSize(`${w}px`, `${layout.value.H}px`)
-      draw()
+      draw(true)
     })
     ro.observe(host.value)
   }
@@ -1210,18 +1397,18 @@ onMounted(() => {
   // 开发期把 network 实例挂出去：自动化测试要拿到节点的真实坐标，
   // 才能点得准（坐标是算出来的，不是猜的）。
   if (import.meta.env.DEV) window.__dnaNet = net
-  draw()
-  nextTick(() => { resetView(); scheduleSync() })
+  draw(true)
 })
 
 watch([nodes, visibleEdges, isDark], () => {
-  draw()
   // 数据换了（初次加载、筛选、暗色切换）——视角要重新对中一次
-  nextTick(() => { resetView(); scheduleSync() })
+  draw(true)
 }, { deep: true })
 watch(seed, () => {
-  draw()
-  nextTick(() => { resetView(); scheduleSync() })
+  draw(true)
+})
+watch(density, () => {
+  draw(true)
 })
 
 // 外部定位（比如染色体清单里点「在双螺旋里看」）：
@@ -1265,13 +1452,96 @@ const H = computed(() => layout.value.H)
 </script>
 
 <style scoped>
-.dg-toolbar {
+.dna-graph {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---------- 工具条 ---------- */
+.dg-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-xs);
+}
+.dg-bar-main {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  padding: 0 2px 12px;
 }
+.dg-grow { flex: 1 1 auto; min-width: 0; }
+.dg-search { width: 268px; }
+.dg-search-hit {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  padding-right: 2px;
+}
+.dg-select { width: 132px; }
+.dg-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+.dg-zoom .el-button { padding: 5px 7px; }
+.dg-density { min-width: 92px; }
+
+.dg-bar-sub {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding-top: 9px;
+  border-top: 1px dashed var(--border-light);
+}
+.dg-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.dg-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--text-tertiary);
+}
+.dg-group-edges { gap: 12px; }
+.dg-edge-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.dg-edge-line {
+  width: 16px;
+  height: 0;
+  border-top: 1.6px solid var(--border-strong);
+  display: inline-block;
+}
+.dg-edge-item.encode .dg-edge-line { border-top-color: var(--primary); border-top-width: 2px; }
+.dg-edge-item.attach .dg-edge-line { border-top-color: var(--primary); border-top-width: 2.4px; }
+.dg-edge-item.relation .dg-edge-line {
+  border-top-color: var(--accent-green);
+  border-top-style: dashed;
+}
+.dg-stats {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .dg-legend { display: flex; gap: 13px; flex-wrap: wrap; align-items: center; }
 .lg-item {
   display: inline-flex;
@@ -1280,6 +1550,17 @@ const H = computed(() => layout.value.H)
   font-size: 12px;
   color: var(--text-secondary);
 }
+.lg-btn {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  transition: opacity 0.15s var(--ease-out), background 0.15s var(--ease-out);
+}
+.lg-btn:hover { background: var(--bg-subtle); }
+.lg-btn.is-off { opacity: 0.35; }
 .lg-glyph { width: 10px; height: 10px; display: inline-block; }
 .lg-glyph.gene {
   width: 13px;
@@ -1320,11 +1601,6 @@ const H = computed(() => layout.value.H)
   align-items: center;
   gap: 4px;
 }
-.dg-kinds-label {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  margin-left: 3px;
-}
 .lg-base {
   width: 18px;
   height: 18px;
@@ -1345,17 +1621,27 @@ const H = computed(() => layout.value.H)
 .lg-base:hover { transform: translateY(-1px); }
 .lg-base.is-off { opacity: 0.25; }
 
-.dg-filters { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.dg-select { width: 132px; }
-
 /* ---------- 画布 ---------- */
+.dg-viewport {
+  /* 图区固定高度 + 内部滚动：
+     图有几十行时把整页撑到几千像素，谁都找不到中段。
+     视口自己滚，图内还能拖拽缩放。 */
+  max-height: 74vh;
+  min-height: 420px;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  overscroll-behavior: contain;
+}
 .dg-stage {
   position: relative;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background:
-    radial-gradient(circle at 1px 1px, var(--border-light) 1px, transparent 0) 0 0 / 24px 24px;
-  border: 1px solid var(--border-light);
-  overflow: hidden;
+    radial-gradient(circle at 1px 1px, var(--border-light) 1px, transparent 0) 0 0 / 24px 24px,
+    linear-gradient(180deg, var(--bg-card) 0%, var(--bg-subtle) 100%);
+  /* 窄屏也保持两列结构：宁可横向滚动，也不要把双螺旋压成一列 */
+  min-width: 660px;
 }
 .dg-canvas {
   width: 100%;
@@ -1364,17 +1650,17 @@ const H = computed(() => layout.value.H)
 }
 .dg-rail {
   position: absolute;
-  top: 40px;
+  top: 42px;
   bottom: 18px;
   width: 2px;
   border-radius: 2px;
   z-index: 0;
   background-image: linear-gradient(to bottom, var(--primary-200) 0 6px, transparent 6px 12px);
   opacity: 0.7;
+  transform: translateX(-1px);
 }
-.dg-rail-l { left: 30%; }
+.dg-rail-l { }
 .dg-rail-r {
-  left: 70%;
   background-image: linear-gradient(to bottom, var(--accent-slate) 0 6px, transparent 6px 12px);
   opacity: 0.35;
 }
@@ -1382,16 +1668,37 @@ const H = computed(() => layout.value.H)
 /* ---------- 链头 ---------- */
 .dg-strand {
   position: absolute;
-  top: 14px;
-  z-index: 2;
+  top: 12px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-xs);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 1.4px;
-  color: var(--text-tertiary);
+  letter-spacing: 0.8px;
+  color: var(--text-secondary);
   pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
-.dg-strand-l { left: 30%; transform: translateX(-50%); }
-.dg-strand-r { left: 70%; transform: translateX(-50%); }
+.dg-strand-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.dg-strand-r .dg-strand-dot { background: var(--accent-green); }
+.dg-strand-n {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  padding-left: 2px;
+}
 
 /* ---------- 标题层 ---------- */
 .dg-overlay {
@@ -1418,7 +1725,7 @@ const H = computed(() => layout.value.H)
   white-space: nowrap;
   overflow: hidden;
   /* 全局 button { min-height: 28px }（触控目标下限）会把每个标签撑到 28px，
-     行距 24px → 相邻标签压字 4px。
+     行距 20px → 相邻标签压字 8px。
      图里的标签是密集排布的文字行，不是触控按钮 ——
      真正的点击目标是画布上的节点圆点，所以这里解除高度下限。 */
   min-height: 0;
@@ -1447,6 +1754,14 @@ const H = computed(() => layout.value.H)
 }
 .dg-lbl.is-sel .dg-lbl-code {
   color: var(--primary) !important;
+}
+/* 搜索命中的标签：垫一层底色，从一堆灰字里一眼挑出来 */
+.dg-lbl.is-hit .dg-lbl-text {
+  background: var(--highlight-bg);
+  color: var(--highlight-color);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin: 0 -4px;
 }
 
 /* 选中节点的光标环：会呼吸的一圈，位置跟着节点走 */
@@ -1497,13 +1812,17 @@ const H = computed(() => layout.value.H)
 
 /* ---------- 详情 ---------- */
 .dg-detail {
-  margin-top: 12px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--bg-subtle);
+  padding: 13px 15px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
   border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-xs);
 }
-.dg-detail-head { display: flex; align-items: center; gap: 8px; }
+.dg-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
 .dg-detail-kind {
   font-size: 11px;
   font-weight: 600;
@@ -1515,7 +1834,7 @@ const H = computed(() => layout.value.H)
   flex-shrink: 0;
 }
 .dg-detail-title {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
   flex: 1;
@@ -1524,30 +1843,62 @@ const H = computed(() => layout.value.H)
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.dg-detail-acts { display: inline-flex; gap: 2px; flex-shrink: 0; }
 .dg-detail-meta {
   display: flex;
-  gap: 14px;
+  gap: 8px;
   flex-wrap: wrap;
-  margin-top: 7px;
+  margin-top: 10px;
+}
+.dg-meta-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 12px;
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-light);
+  max-width: 100%;
+}
+.dg-meta-k { color: var(--text-tertiary); flex-shrink: 0; }
+.dg-meta-v {
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dg-detail-links {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--border-light);
   font-size: 12px;
   color: var(--text-tertiary);
 }
-.dg-detail-links { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
 .dg-links-label { margin-right: 6px; }
 .dg-link-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   margin: 2px 4px 0 0;
-  padding: 2px 8px;
-  border-radius: 10px;
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
   background: var(--bg-card);
   border: 1px solid var(--border-light);
   color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
   max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: border-color 0.15s var(--ease-out), color 0.15s var(--ease-out);
+}
+.dg-link-chip:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 .dg-link-kind {
   width: 6px;
@@ -1560,26 +1911,44 @@ const H = computed(() => layout.value.H)
 .dg-link-kind.attach { background: var(--primary); }
 .dg-link-kind.relation { background: var(--accent-green); }
 .dg-link-kind.encode { background: var(--primary-200); }
+.dg-links-more {
+  margin-left: 6px;
+  color: var(--text-disabled);
+}
 
+/* ---------- 空状态 ---------- */
 .dg-empty {
-  padding: 26px 0;
+  padding: 34px 0;
   text-align: center;
   color: var(--text-tertiary);
   font-size: 13px;
+}
+.dg-empty-icon {
+  font-size: 26px;
+  color: var(--border-strong);
+  margin-bottom: 8px;
+}
+.dg-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.dg-empty-sub {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
 }
 
 .dg-slide-enter-active, .dg-slide-leave-active { transition: opacity .18s ease, transform .18s ease; }
 .dg-slide-enter-from, .dg-slide-leave-to { opacity: 0; transform: translateY(-4px); }
 
 @media (max-width: 768px) {
-  .dg-filters { margin-left: 0; width: 100%; }
+  .dg-search { width: 100%; }
+  .dg-bar-main { gap: 8px; }
   .dg-select { width: 118px; }
   .dg-lbl-text { font-size: 11px; }
-  .dg-lbl.l { transform: translate3d(var(--x), var(--y), 0) translate(calc(-100% - 26px), -50%); }
+  .dg-lbl.l { transform: translate3d(var(--x), var(--y), 0) translate(calc(-100% - 30px), -50%); }
   .dg-lbl.r { transform: translate3d(var(--x), var(--y), 0) translate(16px, -50%); }
-  .dg-rail-l { left: 28%; }
-  .dg-rail-r { left: 72%; }
-  .dg-strand-l { left: 28%; }
-  .dg-strand-r { left: 72%; }
+  .dg-viewport { max-height: 68vh; }
 }
 </style>

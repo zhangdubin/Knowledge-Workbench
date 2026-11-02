@@ -139,7 +139,23 @@ async def ensure_gene_fts(conn) -> bool:
 
     与 chunk_fts 用同一套分词（seg_bigram）：两边不一致的话，
     基因检索会静默失灵（查得到但排序全乱，或者干脆查不到）。
+
+    这里顺带把**评分表结构**补齐（dna_score.ensure_score_schema）：
+    dna_gene 是老表，create_all 不会给它加 expressiveness 列，
+    而模型里已经声明了这一列 —— 列不存在的话，
+    启动后第一条 SELECT DnaGene 就会「no such column」，
+    整个养料库都用不了。
+
+    为什么把迁移挂在「建索引」这个钩子上：
+    database.py 那边归别的同事管，不去动它；
+    而它启动时对养料库唯一调到的钩子就是 ensure_gene_fts。
+    这里做的事是幂等的，多跑几遍没有副作用。
     """
+    try:
+        from . import dna_score
+        await dna_score.ensure_score_schema(conn)
+    except Exception as e:
+        log.warning("基因评分表结构补齐失败，评分功能可能不可用：%s", e)
     try:
         await conn.execute(text(
             f"create virtual table if not exists {GENE_FTS_TABLE} using fts5("
@@ -278,11 +294,21 @@ async def upsert_gene(db: AsyncSession, *, kind: str, title: str, content: str,
                       summary: str = "", tags: list[str] | None = None,
                       source_kind: str = "", source_ref: str = "",
                       source_title: str = "", confidence: float = 0.7,
-                      meta: dict | None = None) -> tuple[DnaGene, bool]:
+                      meta: dict | None = None,
+                      rescore: bool = True) -> tuple[DnaGene, bool]:
     """写入一条基因（按 uid 幂等）
 
     返回 (基因, 是否新建)。已存在时更新内容与表达度计数 ——
     同一条知识被重新吸收，说明它更值得留在库里。
+
+    **confidence 在这里已经不是最终分数了**：它是「抽取这一步有多确定」的
+    原始判断，会被 dna_score 拿去参与「来源权威度」的计算。
+    最终的置信度由 dna_score 算完再写回 dna_gene.confidence（镜像）。
+    所以这里不再做 max() —— 旧逻辑只会让置信度只涨不跌，
+    错的知识永远降不下来。
+
+    rescore=False 供批量场景使用：先攒一批基因 id，最后统一重算一次，
+    避免每条基因都单独跑一趟评分。
     """
     title = (title or "").strip()[:250]
     content = (content or "").strip()
@@ -301,7 +327,6 @@ async def upsert_gene(db: AsyncSession, *, kind: str, title: str, content: str,
             existing.title = title
         existing.summary = summary or existing.summary
         existing.tags = _norm_tags(tags) or existing.tags
-        existing.confidence = max(existing.confidence, confidence)
         existing.source_kind = source_kind or existing.source_kind
         existing.source_ref = source_ref or existing.source_ref
         existing.source_title = source_title or existing.source_title
@@ -312,6 +337,7 @@ async def upsert_gene(db: AsyncSession, *, kind: str, title: str, content: str,
         existing.updated_at = _now()
         await db.flush()
         await index_gene(db, existing)
+        await _after_upsert(db, existing, confidence=confidence, rescore=rescore)
         return existing, False
 
     gene = DnaGene(
@@ -326,7 +352,47 @@ async def upsert_gene(db: AsyncSession, *, kind: str, title: str, content: str,
     # superseded_by 指向的是新基因，id 还没有的时候写进去是空。
     await _supersede_old(db, gene)
     await index_gene(db, gene)
+    await _after_upsert(db, gene, confidence=confidence, rescore=rescore)
     return gene, True
+
+
+async def _after_upsert(db: AsyncSession, gene: DnaGene, *,
+                        confidence: float, rescore: bool = True) -> None:
+    """写入之后的收尾：记来源 + 重算评分
+
+    两件事：
+    1. 把这次的来源记进 meta.sources —— 同一条知识被不同来源说过，
+       是「交叉验证」的原料（同一个来源说三遍不算印证）。
+    2. 重算这条基因的表达度与置信度。
+       评分失败不能拖垮吸收：知识已经存下来了，评分可以稍后再补。
+    """
+    from . import dna_score
+    try:
+        await dna_score.note_source(db, gene, gene.source_ref)
+    except Exception as e:
+        log.warning("记录基因来源失败 gene=%s：%s", gene.uid, e)
+    if not rescore:
+        return
+    try:
+        await dna_score.rescore_gene(db, gene.id, commit=False)
+    except Exception as e:
+        log.warning("基因评分重算失败 gene=%s：%s", gene.uid, e)
+
+
+async def _rescore_quietly(db: AsyncSession, gene_ids: list[int]) -> None:
+    """批量重算评分，失败不外抛
+
+    评分是「锦上添花」的一层：知识已经存下来了，评分算不出来
+    不该让整次吸收失败。所以这里吞掉异常，只记日志。
+    """
+    ids = [int(i) for i in (gene_ids or []) if i]
+    if not ids:
+        return
+    try:
+        from . import dna_score
+        await dna_score.rescore_genes(db, ids, commit=True)
+    except Exception as e:
+        log.warning("基因评分重算失败：%s", e)
 
 
 async def get_gene(db: AsyncSession, gene_id: int) -> DnaGene | None:
@@ -368,6 +434,11 @@ def short_summary(text: str, limit: int = 90) -> str:
 
 
 def serialize_gene(g: DnaGene) -> dict:
+    """基因的列表形状（不含评分分项）
+
+    列表里要的是**能排序的两个数**：表达度与置信度。
+    分项与依据只在详情里给（要查评分表，不能在列表里 N+1）。
+    """
     return {
         "id": g.id, "uid": g.uid, "kind": g.kind,
         "kind_label": KIND_LABEL.get(g.kind, g.kind), "title": g.title,
@@ -377,13 +448,30 @@ def serialize_gene(g: DnaGene) -> dict:
                     and "\n" not in g.summary else short_summary(g.content)),
         "tags": g.tags or [],
         "source_kind": g.source_kind, "source_ref": g.source_ref,
-        "source_title": g.source_title, "confidence": g.confidence,
+        "source_title": g.source_title,
+        # 置信度：dna_score 算出来的权威值（镜像列）
+        "confidence": round(float(g.confidence or 0), 3),
+        # 表达度：dna_score 算出来的权威值（镜像列）
+        "expressiveness": round(float(g.expressiveness or 0), 3),
+        "score_version": int(g.score_version or 0),
         "status": g.status, "usage_count": g.usage_count,
         "last_used_at": g.last_used_at.isoformat() if g.last_used_at else None,
         "meta": g.meta or {},
         "created_at": g.created_at.isoformat() if g.created_at else None,
         "updated_at": g.updated_at.isoformat() if g.updated_at else None,
     }
+
+
+async def serialize_gene_detail(db: AsyncSession, g: DnaGene) -> dict:
+    """基因的详情形状：列表形状 + 评分分项与依据
+
+    「分数 + 依据」是一起的：只给一个 0.42 没人知道为什么，
+    必须能展开成四个分项和它们的说明。
+    """
+    from . import dna_score
+    data = serialize_gene(g)
+    data["score"] = await dna_score.get_score(db, g.id)
+    return data
 
 
 # ============ 吸收：从资料到基因 ============
@@ -550,7 +638,8 @@ async def absorb_document(db: AsyncSession, doc: Document) -> dict:
                 db, kind=g["kind"], title=g["title"], content=g["content"],
                 tags=g.get("tags"), source_kind="document",
                 source_ref=f"doc-{doc.id}", source_title=doc.title or "",
-                confidence=g.get("confidence", 0.7), meta=g.get("meta") or {})
+                confidence=g.get("confidence", 0.7), meta=g.get("meta") or {},
+                rescore=False)
             touched.append(gene.id)
             created += 1 if is_new else 0
             updated += 0 if is_new else 1
@@ -561,6 +650,9 @@ async def absorb_document(db: AsyncSession, doc: Document) -> dict:
     stale = await _mark_stale_genes(db, source_ref=f"doc-{doc.id}",
                                    touched_ids=touched)
     await db.commit()
+    # 评分统一在最后重算一遍：一条文档几十条基因，
+    # 逐条重算是几十次往返，攒起来一次做掉。
+    await _rescore_quietly(db, touched)
     return {"document_id": doc.id, "genes": created + updated,
             "created": created, "updated": updated, "stale": stale}
 
@@ -597,8 +689,15 @@ async def _mark_stale_genes(db: AsyncSession, *, source_ref: str,
 
 async def absorb_text(db: AsyncSession, text_body: str, *, title: str = "",
                       source_kind: str = "manual", source_ref: str = "",
-                      source_title: str = "") -> dict:
-    """吸收一段手贴的文本（结构化或非结构化都行）"""
+                      source_title: str = "",
+                      extra_meta: dict | None = None) -> dict:
+    """吸收一段手贴的文本（结构化或非结构化都行）
+
+    extra_meta：额外写进每条基因 meta 的信息（来源仓库、许可证…）。
+    吸收外部开源项目时用它把出处带到底 ——
+    否则同一条知识，文档来的那条没有出处、代码来的那条有，
+    「来源权威度」就没法算了。
+    """
     genes = extract_genes_from_markdown(text_body, title=title)
     if not genes and len((text_body or "").strip()) >= 20:
         genes = [{
@@ -610,23 +709,33 @@ async def absorb_text(db: AsyncSession, text_body: str, *, title: str = "",
             "meta": {"origin": "manual"},
         }]
     created = updated = 0
+    touched: list[int] = []
     for g in genes:
         try:
-            _, is_new = await upsert_gene(
+            merged_meta = dict(g.get("meta") or {})
+            if extra_meta:
+                # 来源信息不许被正文里的 meta 覆盖掉
+                merged_meta.update(extra_meta)
+            gene, is_new = await upsert_gene(
                 db, kind=g["kind"], title=g["title"], content=g["content"],
                 tags=g.get("tags"), source_kind=source_kind, source_ref=source_ref,
                 source_title=source_title or title,
-                confidence=g.get("confidence", 0.7), meta=g.get("meta") or {})
+                confidence=g.get("confidence", 0.7), meta=merged_meta,
+                rescore=False)
+            touched.append(gene.id)
             created += 1 if is_new else 0
             updated += 0 if is_new else 1
         except ValueError:
             continue
     await db.commit()
+    await _rescore_quietly(db, touched)
     return {"genes": created + updated, "created": created, "updated": updated}
 
 
 async def absorb_code(db: AsyncSession, code: str, filename: str, *,
-                      destroy: bool = True) -> dict:
+                      destroy: bool = True,
+                      source_kind: str = "code",
+                      extra_meta: dict | None = None) -> dict:
     """吸收程序源码：蒸馏成方法与经验基因，**原文不留**
 
     「销毁原文」在这里落地：蒸馏完成后，本函数不把源码写进任何表，
@@ -638,6 +747,10 @@ async def absorb_code(db: AsyncSession, code: str, filename: str, *,
     注意：本函数只管「库里不留原文」。
     要把**磁盘上的源文件**也删掉，用 `absorb_source_file`
     （那边有越界校验与二次确认）。
+
+    source_kind 默认 "code"（本地源码）。吸收外部开源项目时传 "openkb"，
+    这样「来源权威度」能区分「我们自己的代码」与「别人的代码」——
+    后者没在本地验证过，只能当参考，权威度天然低一档。
     """
     from . import dna_distill
     res = dna_distill.distill_code(code, filename)
@@ -647,12 +760,14 @@ async def absorb_code(db: AsyncSession, code: str, filename: str, *,
         try:
             gene, is_new = await upsert_gene(
                 db, kind=g["kind"], title=g["title"], content=g["content"],
-                tags=g.get("tags"), source_kind="code",
+                tags=g.get("tags"), source_kind=source_kind,
                 source_ref=f"code:{res.sha256[:16]}",
                 source_title=filename,
                 confidence=g.get("confidence", 0.7),
                 meta={**(g.get("meta") or {}),
-                      "language": res.language, "file": filename})
+                      "language": res.language, "file": filename,
+                      **(extra_meta or {})},
+                rescore=False)
             created += 1 if is_new else 0
             updated += 0 if is_new else 1
             if gene is not None and gene.id:
@@ -660,6 +775,7 @@ async def absorb_code(db: AsyncSession, code: str, filename: str, *,
         except ValueError:
             continue
     await db.commit()
+    await _rescore_quietly(db, gene_ids)
     result = {
         "language": res.language, "summary": res.summary, "sha256": res.sha256,
         "lines": res.lines, "stats": res.stats, "warnings": res.warnings,
@@ -680,7 +796,7 @@ async def absorb_code(db: AsyncSession, code: str, filename: str, *,
                      f"原始内容指纹 sha256={res.sha256}，"
                      f"蒸馏时间 {_now().isoformat()}。"),
             tags=["源码", "销毁证明", "吸收"],
-            source_kind="code", source_ref=f"code:{res.sha256[:16]}",
+            source_kind=source_kind, source_ref=f"code:{res.sha256[:16]}",
             source_title=filename, confidence=0.9,
             meta={"destroyed": True, "sha256": res.sha256, "file": filename,
                   "destroyed_at": _now().isoformat(), "language": res.language})
@@ -918,11 +1034,16 @@ async def search_genes(db: AsyncSession, query: str, limit: int = 12,
     return out[:limit]
 
 
-async def mark_gene_used(db: AsyncSession, gene_ids: list[int]) -> None:
-    """基因被引用 → 表达度 +1
+async def mark_gene_used(db: AsyncSession, gene_ids: list[int], *,
+                        success: bool | None = None) -> None:
+    """基因被引用 → 表达度 +1，并让评分跟着变
 
-    表达度是「知识在用」的度量：一直没人用的基因要么该归档，
-    要么该换个说法重新写一遍。
+    这一层的老名字叫「表达度」，其实量的是「被用过几次」。
+    现在这个计数被并进了新的表达度模型（被复用度分项），
+    并且**真的会让分数变化** —— 被用过的知识，表达度与置信度都会动。
+
+    success=None：只是被检索命中，还不知道用得对不对；
+    success=True/False：复用后的真实结果（来自资产的复用事件）。
     """
     if not gene_ids:
         return
@@ -942,8 +1063,30 @@ async def mark_gene_used(db: AsyncSession, gene_ids: list[int]) -> None:
             .values(usage_count=DnaGene.usage_count + 1, last_used_at=_now())
             .execution_options(synchronize_session=False))
         await db.commit()
+        # 把会话里的对象同步成库里的新值：
+        # 批量 update 不会改内存中的属性（synchronize_session=False），
+        # 会话又关掉了 expire_on_commit —— 不同步的话，
+        # 后面读到的 usage_count 还是旧的：分数涨不上去，
+        # 调用方也会以为「这条知识没被用过」。
+        fresh = (await db.execute(
+            select(DnaGene.id, DnaGene.usage_count, DnaGene.last_used_at)
+            .where(DnaGene.id.in_(gene_ids)))).all()
+        for gid, usage, last_at in fresh:
+            obj = await db.get(DnaGene, gid)
+            if obj is not None:
+                obj.usage_count = int(usage or 0)
+                obj.last_used_at = last_at
+        await db.commit()
     except Exception as e:
         log.warning("基因表达度更新失败：%s", e)
+        return
+    # 评分跟着动：被用过是表达度「被复用度」分项与置信度「复用成功率」的原料。
+    # 这一步失败不影响检索本身（分数下次还会重算），所以单独兜住。
+    try:
+        from . import dna_score
+        await dna_score.record_use(db, gene_ids, success=success)
+    except Exception as e:
+        log.warning("基因评分更新失败：%s", e)
 
 
 async def answer_offline(db: AsyncSession, query: str, limit: int = 5,
@@ -1219,6 +1362,13 @@ async def gene_health(db: AsyncSession) -> dict:
     superseded_count = (await db.execute(
         select(func.count()).select_from(DnaGene)
         .where(DnaGene.status == "superseded"))).scalar_one()
+    # 评分维度上的体检（表达度 / 置信度）：
+    # 「有多少条说得清楚」「有多少条可信」这两个数，比「用了多少次」
+    # 更能说明这批知识的质量。
+    express = [float(g.expressiveness or 0) for g in genes]
+    confs = [float(g.confidence or 0) for g in genes]
+    vague = [g for g in genes if float(g.expressiveness or 0) < 0.4]
+    uncertain = [g for g in genes if float(g.confidence or 0) < 0.5]
     return {
         "total": len(genes),
         "superseded": int(superseded_count or 0),
@@ -1230,10 +1380,21 @@ async def gene_health(db: AsyncSession) -> dict:
         "low_confidence": len(low_conf),
         "duplicated": len(dup),
         "destroyed_sources": len(destroyed),
+        # 新评分：均值 + 分布 + 待复核的两类
+        "expressiveness_avg": round(sum(express) / len(express), 3) if express else 0.0,
+        "confidence_avg": round(sum(confs) / len(confs), 3) if confs else 0.0,
+        "vague": len(vague),
+        "uncertain": len(uncertain),
         "samples": {
             "no_source": [{"id": g.id, "title": g.title} for g in no_source[:8]],
             "cold": [{"id": g.id, "title": g.title, "kind": g.kind}
                      for g in sorted(cold, key=lambda x: x.id)[:8]],
             "duplicated": [{"id": g.id, "title": g.title} for g in dup[:8]],
+            "vague": [{"id": g.id, "title": g.title, "kind": g.kind,
+                       "expressiveness": round(float(g.expressiveness or 0), 3)}
+                      for g in sorted(vague, key=lambda x: x.id)[:8]],
+            "uncertain": [{"id": g.id, "title": g.title, "kind": g.kind,
+                           "confidence": round(float(g.confidence or 0), 3)}
+                          for g in sorted(uncertain, key=lambda x: x.id)[:8]],
         },
     }

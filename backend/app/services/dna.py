@@ -1698,7 +1698,9 @@ async def build_graph(db: AsyncSession, principal: Principal) -> dict:
                 "source_kind": g.source_kind or "",
                 "source_title": g.source_title or "",
                 "usage": int(g.usage_count or 0),
-                "confidence": round(float(g.confidence or 0), 2),
+                "confidence": round(float(g.confidence or 0), 3),
+                # 表达度：「这条知识说清楚了没有」（dna_score 算出来的镜像值）
+                "expressiveness": round(float(g.expressiveness or 0), 3),
                 "destroyed": bool((g.meta or {}).get("destroyed")),
             },
         })

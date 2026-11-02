@@ -184,7 +184,8 @@
             </el-select>
             <el-select v-model="geneSort" size="small" class="status-filter" @change="loadGenes(0)">
               <el-option label="按种类" value="id" />
-              <el-option label="按表达度" value="usage" />
+              <el-option label="按被用次数" value="usage" />
+              <el-option label="按表达度" value="expressiveness" />
               <el-option label="按最近更新" value="updated" />
               <el-option label="按置信度" value="confidence" />
             </el-select>
@@ -217,9 +218,20 @@
                 <span v-else class="gene-live">当前</span>
               </template>
             </el-table-column>
-            <el-table-column prop="usage_count" label="表达度" width="86" sortable class-name="num-cell" />
-            <el-table-column label="置信" width="76" class-name="num-cell">
-              <template #default="{ row }">{{ row.confidence }}</template>
+            <el-table-column prop="usage_count" label="被用" width="70" sortable class-name="num-cell" />
+            <el-table-column prop="expressiveness" label="表达度" width="90" sortable class-name="num-cell">
+              <template #default="{ row }">
+                <span class="score-cell" :class="scoreTone(row.expressiveness)">
+                  {{ fmtScore(row.expressiveness) }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="置信" width="86" class-name="num-cell">
+              <template #default="{ row }">
+                <span class="score-cell" :class="scoreTone(row.confidence)">
+                  {{ fmtScore(row.confidence) }}
+                </span>
+              </template>
             </el-table-column>
           </el-table>
           <div class="gene-pager">
@@ -491,6 +503,10 @@
                   </span>
                 </div>
 
+                <!-- 上传总量上限：默认 256 MB 对整棵仓库来说常常不够，
+                     而「分批上传」会把同一个系统的全貌切碎 —— 上限放在这里随时可调 -->
+                <IngestLimitControl :size-mb="treeSizeMb" />
+
                 <div v-if="treeFiles.length" class="tree-pending">
                   <div class="tp-count">
                     <span class="tp-num">{{ treeFiles.length }}</span>
@@ -759,6 +775,148 @@
       </section>
     </div>
 
+    <!-- ============ 07 学以致用：知识变成能用的东西 ============ -->
+    <section class="section">
+      <div class="sec-head">
+        <span class="sec-no">07</span>
+        <h3 class="sec-title">学以致用</h3>
+        <span class="sec-note">知识不只被存下来，还要变成能直接拿走的产出，并记录被谁用过</span>
+        <span class="sec-rule" />
+        <el-button size="small" :loading="makingAssets" @click="makeAssetsFromTop">
+          <el-icon><Files /></el-icon>从高分基因落产出
+        </el-button>
+      </div>
+
+      <div class="panel">
+        <div class="reuse-stats">
+          <div class="rs-cell">
+            <span class="rs-num">{{ assetStats.assets || 0 }}</span>
+            <span class="rs-label">条产出</span>
+          </div>
+          <div class="rs-cell">
+            <span class="rs-num">{{ assetStats.used || 0 }}</span>
+            <span class="rs-label">条真被用过</span>
+          </div>
+          <div class="rs-cell">
+            <span class="rs-num">{{ pct(assetStats.reuse_rate) }}</span>
+            <span class="rs-label">学以致用率</span>
+          </div>
+          <div class="rs-cell">
+            <span class="rs-num">{{ assetStats.success || 0 }}/{{ assetStats.fail || 0 }}</span>
+            <span class="rs-label">成功/失败</span>
+          </div>
+          <div class="reuse-note">
+            每记一次「用过」，源基因的表达度与置信度都会跟着变 ——
+            成功加分，失败扣分。这就是「学 → 用 → 更准」落地的地方。
+          </div>
+        </div>
+
+        <div v-if="!assets.length" class="reuse-empty">
+          还没有可复用产出 —— 从高分基因里抽一份代码片段或接口契约出来试试。
+        </div>
+
+        <ul v-else class="asset-list">
+          <li v-for="a in assets" :key="a.id" class="asset-row">
+            <div class="as-top">
+              <span class="as-kind">{{ a.kind_label }}</span>
+              <span class="as-title">{{ a.title }}</span>
+              <span class="as-use">用过 {{ a.use_count }} 次</span>
+            </div>
+            <pre class="as-content">{{ a.content }}</pre>
+            <div class="as-foot">
+              <span class="as-src">来自：{{ a.source_title || a.source_kind || '—' }}</span>
+              <span v-if="a.last_project" class="as-proj">最近用在：{{ a.last_project }}</span>
+              <el-input
+                v-model="useForm[a.id].project"
+                size="small" placeholder="用在哪个项目" class="as-inp"
+              />
+              <el-input
+                v-model="useForm[a.id].task"
+                size="small" placeholder="哪个任务" class="as-inp"
+              />
+              <el-select v-model="useForm[a.id].outcome" size="small" class="as-sel">
+                <el-option label="成功" value="success" />
+                <el-option label="失败" value="fail" />
+                <el-option label="还没结果" value="unknown" />
+              </el-select>
+              <el-button size="small" type="primary" @click="useAssetNow(a)">
+                记一次「用过」
+              </el-button>
+            </div>
+          </li>
+        </ul>
+
+        <div v-if="assetUses.length" class="use-log">
+          <div class="ul-head">复用记录（证据链）</div>
+          <ul class="ul-list">
+            <li v-for="u in assetUses" :key="u.id" class="ul-row">
+              <span class="ul-outcome" :class="u.outcome">{{ outcomeLabel(u.outcome) }}</span>
+              <span class="ul-project">{{ u.project || '未填项目' }}</span>
+              <span class="ul-task">{{ u.task || '—' }}</span>
+              <span class="ul-time">{{ fmtTime(u.used_at) }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 08 外部开源项目（openkb 类） ============ -->
+    <section class="section">
+      <div class="sec-head">
+        <span class="sec-no">08</span>
+        <h3 class="sec-title">外部开源项目</h3>
+        <span class="sec-note">参考 openkb 这类项目：只学方法与经验，不抄代码，不留原文</span>
+        <span class="sec-rule" />
+      </div>
+
+      <div class="panel">
+        <div class="okb-form">
+          <el-input
+            v-model="okb.repo"
+            placeholder="owner/repo 或 GitHub 网址，如 mem0ai/mem0"
+            class="okb-inp"
+          />
+          <span class="okb-or">或</span>
+          <el-input
+            v-model="okb.localPath"
+            placeholder="本地镜像目录（离线导入，如 /opt/repos/mem0）"
+            class="okb-inp"
+          />
+          <el-button size="small" @click="previewOpenkb">预检</el-button>
+          <el-button
+            size="small" type="primary"
+            :loading="okbImporting" :disabled="!okb.repo && !okb.localPath"
+            @click="importOpenkb"
+          >
+            吸收
+          </el-button>
+        </div>
+
+        <div v-if="okb.preview" class="okb-preview">
+          <div class="op-row">
+            <span class="op-repo">{{ okb.preview.repo }}</span>
+            <span v-if="okb.preview.license" class="op-lic">许可证 {{ okb.preview.license }}</span>
+            <span v-if="okb.preview.copyleft" class="op-copyleft">传染性许可</span>
+          </div>
+          <div class="op-notice">{{ okb.preview.notice }}</div>
+          <div v-if="okb.preview.error" class="op-err">{{ okb.preview.error }}</div>
+        </div>
+
+        <div v-if="okbSources.length" class="okb-list">
+          <div class="ol-head">已吸收的外部来源</div>
+          <ul>
+            <li v-for="s in okbSources" :key="s.id" class="ol-row">
+              <span class="ol-repo">{{ s.repo }}</span>
+              <span class="ol-lic">{{ s.license || '未识别许可证' }}</span>
+              <span class="ol-stat">{{ s.genes }} 条基因 · {{ s.files }} 个文件</span>
+              <span class="ol-status" :class="s.status">{{ s.status }}</span>
+              <span class="ol-notice">{{ s.notice }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <!-- 基因详情抽屉：点清单里的一行 -->
     <el-drawer
       v-model="geneDrawer"
@@ -769,10 +927,83 @@
       <div v-if="detail" class="gene-detail">
         <div class="gd-meta">
           <span class="chip">被用 {{ detail.usage_count }} 次</span>
-          <span class="chip">置信 {{ detail.confidence }}</span>
+          <span class="chip">置信 {{ fmtScore(detail.confidence) }}</span>
           <span class="chip">来源：{{ detail.source_title || detail.source_kind || '养料库' }}</span>
           <span v-if="detail.meta && detail.meta.destroyed" class="chip danger">原文已销毁</span>
           <span v-if="detail.status === 'superseded'" class="chip danger">已被取代</span>
+        </div>
+
+        <!-- 评分：分数 + 分项 + 依据。分数必须能展开，
+             否则「为什么这条只有 0.42」永远没有答案 -->
+        <div class="score-panel">
+          <div class="sp-head">
+            <span class="sp-title">这条知识有多好</span>
+            <span class="sp-note">分数只是结论，分项与依据才是原因</span>
+          </div>
+          <div class="sp-totals">
+            <div class="sp-total">
+              <span class="sp-k">表达度</span>
+              <span class="sp-v" :class="scoreTone(detail.expressiveness)">
+                {{ fmtScore(detail.expressiveness) }}
+              </span>
+              <span class="sp-hint">说清楚了没有</span>
+            </div>
+            <div class="sp-total">
+              <span class="sp-k">置信度</span>
+              <span class="sp-v" :class="scoreTone(detail.confidence)">
+                {{ fmtScore(detail.confidence) }}
+              </span>
+              <span class="sp-hint">有多可信</span>
+            </div>
+          </div>
+
+          <div v-for="grp in scoreGroups" :key="grp.key" class="sp-group">
+            <div class="spg-head">
+              <span class="spg-title">{{ grp.label }}</span>
+              <span class="spg-score" :class="scoreTone(grp.score)">
+                {{ fmtScore(grp.score) }}
+              </span>
+            </div>
+            <ul class="sp-parts">
+              <li v-for="p in grp.parts" :key="p.key" class="sp-part">
+                <div class="spp-top">
+                  <span class="spp-name">{{ p.label }}</span>
+                  <span class="spp-bar">
+                    <i class="spp-fill" :style="{ width: pct(p.score) }" />
+                  </span>
+                  <span class="spp-val">{{ fmtScore(p.score) }}</span>
+                  <span class="spp-w">×{{ p.weight }}</span>
+                </div>
+                <div class="spp-detail">{{ p.detail }}</div>
+              </li>
+            </ul>
+            <ul v-if="grp.penalties && grp.penalties.length" class="sp-penalties">
+              <li v-for="pen in grp.penalties" :key="pen.key" class="sp-penalty">
+                <span class="spp-name">{{ pen.label }}</span>
+                <span class="spp-detail">{{ pen.detail }}</span>
+                <span class="spp-val">−{{ fmtScore(pen.amount) }}</span>
+              </li>
+            </ul>
+          </div>
+
+          <div class="sp-hist">
+            <span class="sh-item">复用成功 {{ scoreHist.use_success }}</span>
+            <span class="sh-item">复用失败 {{ scoreHist.use_fail }}</span>
+            <span class="sh-item">人工纠正 {{ scoreHist.corrections }}</span>
+            <span class="sh-item">来源数 {{ scoreHist.distinct_sources }}</span>
+          </div>
+
+          <div class="sp-actions">
+            <el-button size="small" :loading="correcting" @click="correctCurrent">
+              <el-icon><WarningFilled /></el-icon>这条不对（纠正）
+            </el-button>
+            <el-button size="small" :loading="rescoring" @click="rescoreCurrent">
+              <el-icon><Refresh /></el-icon>重算评分
+            </el-button>
+            <el-button size="small" :loading="makingAssets" @click="makeAssetFromCurrent">
+              <el-icon><Files /></el-icon>落成可复用产出
+            </el-button>
+          </div>
         </div>
         <pre class="gd-content">{{ detail.content }}</pre>
         <div v-if="detail.tags && detail.tags.length" class="gd-tags">
@@ -816,6 +1047,15 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageTitle from '../components/PageTitle.vue'
 import { Api } from '../api'
+// 评分 / 可复用产出 / 外部开源项目：单独一个模块，避开 api/index.js 的并行改动
+import { DnaLearn } from '../api/dnaLearn'
+// 上传总量上限控件（自己取当前值、自己保存）
+import IngestLimitControl from '../components/IngestLimitControl.vue'
+// 评分的展示翻译（口径在后端，这里只翻译）
+import {
+  fmtScore, scoreTone, pct, outcomeLabel,
+  buildScoreGroups, scoreHistory,
+} from '../utils/dnaScore'
 
 const loading = ref(false)
 const error = ref('')
@@ -973,7 +1213,8 @@ async function loadAll() {
   }
   await loadSourceDocs()
   // 账本与任务跟着页面一起刷新；它们读不到也不影响主流程
-  await Promise.all([loadEvolution(), loadJobs(), loadGaps()])
+  await Promise.all([loadEvolution(), loadJobs(), loadGaps(),
+                     loadAssets(), loadOpenkbSources()])
 }
 
 // ============ 源码树（整系统） ============
@@ -1366,10 +1607,19 @@ async function loadGenes(page) {
   }
 }
 
-/** 点清单里的一行 → 右侧抽屉看全文 */
-function openGene(row) {
+/** 点清单里的一行 → 右侧抽屉看全文
+ *
+ * 列表里的行只有表达度与置信度两个数；抽屉里要看到分项与依据，
+ * 所以这里再取一次详情（详情接口带 score）。
+ */
+async function openGene(row) {
   detail.value = row
   geneDrawer.value = true
+  try {
+    detail.value = await Api.dnaLibraryGene(row.id)
+  } catch (e) {
+    // 取不到详情就先用列表里的行，别让抽屉空着
+  }
 }
 
 /**
@@ -1417,6 +1667,175 @@ async function copyText(text) {
 function gotoDocument(sourceRef) {
   const id = String(sourceRef).replace('doc-', '')
   window.location.hash = `/library?doc=${id}`
+}
+
+// ============ 评分：分数 + 分项 + 依据 ============
+// 翻译规则放在 utils/dnaScore.js —— 那里能单测钉住，改坏了会红
+
+/** 抽屉里的两组分项：表达度与置信度，各自带分项与扣分项 */
+const scoreGroups = computed(() => buildScoreGroups(detail.value?.score))
+
+/** 履历：复用成功/失败、人工纠正、来源数 */
+const scoreHist = computed(() => scoreHistory(detail.value?.score))
+
+const correcting = ref(false)
+const rescoring = ref(false)
+const makingAssets = ref(false)
+
+/** 人工纠正：负反馈必须真的扣分（后端会重算并扣） */
+async function correctCurrent() {
+  if (!detail.value?.id) return
+  correcting.value = true
+  try {
+    const r = await DnaLearn.correctGene(detail.value.id, '界面纠正')
+    if (r?.score) detail.value = { ...detail.value, score: r.score }
+    ElMessage.success('已记一次纠正 —— 置信度相应下调')
+    await loadGenes(genePage.value)
+  } catch (e) {
+    ElMessage.error('纠正失败：' + (e?.message || e))
+  } finally {
+    correcting.value = false
+  }
+}
+
+/** 重算这一条的评分（口径改了或内容变了） */
+async function rescoreCurrent() {
+  if (!detail.value?.id) return
+  rescoring.value = true
+  try {
+    await DnaLearn.rescore({ gene_ids: [detail.value.id] })
+    detail.value = await Api.dnaLibraryGene(detail.value.id)
+    ElMessage.success('已重算')
+    await loadGenes(genePage.value)
+  } catch (e) {
+    ElMessage.error('重算失败：' + (e?.message || e))
+  } finally {
+    rescoring.value = false
+  }
+}
+
+// ============ 学以致用：可复用产出 ============
+const assets = ref([])
+const assetStats = ref({})
+const assetUses = ref([])
+/** 每条资产一组「用过」的表单字段（项目 / 任务 / 结果） */
+const useForm = ref({})
+
+function ensureUseForm() {
+  const f = {}
+  for (const a of assets.value) {
+    f[a.id] = f[a.id] || { project: '', task: '', outcome: 'unknown' }
+  }
+  useForm.value = f
+}
+
+
+async function loadAssets() {
+  try {
+    const [a, st, uses] = await Promise.all([
+      DnaLearn.assets({ limit: 30 }),
+      DnaLearn.assetStats(),
+      DnaLearn.assetUses({ limit: 20 }),
+    ])
+    assets.value = a?.items || []
+    assetStats.value = st || {}
+    assetUses.value = uses?.items || []
+    ensureUseForm()
+  } catch (e) {
+    // 产出层读不到不影响养料库本体
+  }
+}
+
+/** 记一次「用过」—— 这一步之后源基因的分数会变 */
+async function useAssetNow(a) {
+  const f = useForm.value[a.id] || { project: '', task: '', outcome: 'unknown' }
+  try {
+    const r = await DnaLearn.useAsset(a.id, {
+      project: f.project, task: f.task, outcome: f.outcome,
+    })
+    ElMessage.success('已记一次复用 —— 源基因的评分已更新')
+    await loadAssets()
+    if (r?.asset?.gene_id) {
+      // 顺带把抽屉里的评分刷新（如果正好开着这条基因）
+      if (detail.value?.id === r.asset.gene_id) {
+        detail.value = await Api.dnaLibraryGene(r.asset.gene_id)
+      }
+      await loadGenes(genePage.value)
+    }
+  } catch (e) {
+    ElMessage.error('记录复用失败：' + (e?.message || e))
+  }
+}
+
+/** 从高分基因里落一批产出（说得清楚又可信的知识，才抽得出能用的东西） */
+async function makeAssetsFromTop() {
+  makingAssets.value = true
+  try {
+    const r = await DnaLearn.assetsFromGenes({ min_score: 0.6, limit: 30 })
+    ElMessage.success(`落出 ${r?.assets || 0} 条可复用产出`)
+    await loadAssets()
+  } catch (e) {
+    ElMessage.error('落产出失败：' + (e?.message || e))
+  } finally {
+    makingAssets.value = false
+  }
+}
+
+/** 把当前这条基因落成产出 */
+async function makeAssetFromCurrent() {
+  if (!detail.value?.id) return
+  makingAssets.value = true
+  try {
+    const r = await DnaLearn.assetsFromGenes({ gene_ids: [detail.value.id] })
+    ElMessage.success(r?.assets ? `落出 ${r.assets} 条产出` : '这条基因里没抽得出可复用的产出')
+    await loadAssets()
+  } catch (e) {
+    ElMessage.error('落产出失败：' + (e?.message || e))
+  } finally {
+    makingAssets.value = false
+  }
+}
+
+// ============ 外部开源项目 ============
+const okb = ref({ repo: '', localPath: '', preview: null })
+const okbSources = ref([])
+const okbImporting = ref(false)
+
+async function loadOpenkbSources() {
+  try {
+    const r = await DnaLearn.openkbSources({ limit: 30 })
+    okbSources.value = r?.items || []
+  } catch (e) {
+    okbSources.value = []
+  }
+}
+
+/** 预检：认不认得这个仓库、许可证是什么、有什么合规提示 */
+async function previewOpenkb() {
+  try {
+    const r = await DnaLearn.openkbPreview({
+      repo: okb.value.repo, local_path: okb.value.localPath,
+    })
+    okb.value = { ...okb.value, preview: r }
+  } catch (e) {
+    okb.value = { ...okb.value, preview: { error: e?.message || String(e) } }
+  }
+}
+
+async function importOpenkb() {
+  okbImporting.value = true
+  try {
+    const r = await DnaLearn.openkbImport({
+      repo: okb.value.repo, local_path: okb.value.localPath,
+    })
+    ElMessage.success(`吸收完成：${r?.created || 0} 条新基因`)
+    okb.value = { ...okb.value, preview: null }
+    await Promise.all([loadOpenkbSources(), loadAll()])
+  } catch (e) {
+    ElMessage.error('吸收开源项目失败：' + (e?.message || e))
+  } finally {
+    okbImporting.value = false
+  }
 }
 
 function fmtTime(v) {
@@ -2866,4 +3285,109 @@ onUnmounted(() => {
   .feed-row { gap: 9px; }
   .jd-file { min-width: 120px; }
 }
+/* ============ 评分面板：分数 + 分项 + 依据 ============ */
+.score-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
+.score-good { color: var(--el-color-success, #3f9c6d); }
+.score-mid { color: var(--el-color-warning, #b8860b); }
+.score-low { color: var(--el-color-danger, #c0504d); }
+.score-none { color: var(--text-3, #999); }
+
+.score-panel {
+  margin: 12px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-light, #e6e6e6);
+  border-radius: 10px;
+  background: var(--bg-2, #fafafa);
+}
+.sp-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.sp-title { font-size: 13px; font-weight: 600; }
+.sp-note { font-size: 11px; color: var(--text-3, #999); }
+.sp-totals { display: flex; gap: 10px; margin-bottom: 10px; }
+.sp-total {
+  flex: 1; display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px; border-radius: 8px;
+  background: var(--bg-1, #fff); border: 1px solid var(--border-light, #eee);
+}
+.sp-k { font-size: 11px; color: var(--text-3, #999); }
+.sp-v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sp-hint { font-size: 11px; color: var(--text-3, #999); }
+.sp-group { margin-top: 10px; }
+.spg-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.spg-title { font-size: 12px; font-weight: 600; }
+.spg-score { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sp-parts, .sp-penalties { list-style: none; margin: 0; padding: 0; }
+.sp-part { padding: 5px 0; border-top: 1px dashed var(--border-light, #eee); }
+.spp-top { display: flex; align-items: center; gap: 8px; }
+.spp-name { font-size: 12px; min-width: 68px; }
+.spp-bar {
+  flex: 1; height: 5px; border-radius: 3px; overflow: hidden;
+  background: var(--border-light, #eee);
+}
+.spp-fill { display: block; height: 100%; background: var(--el-color-primary, #4a7dbd); }
+.spp-val { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
+.spp-w { font-size: 11px; color: var(--text-3, #999); min-width: 38px; }
+.spp-detail { font-size: 11px; color: var(--text-3, #888); margin-top: 2px; line-height: 1.5; }
+.sp-penalty { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; }
+.sp-penalty .spp-val { color: var(--el-color-danger, #c0504d); font-weight: 700; }
+.sp-hist { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 11px; color: var(--text-3, #888); }
+.sp-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+/* ============ 学以致用 ============ */
+.reuse-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; margin-bottom: 12px; }
+.rs-cell { display: flex; flex-direction: column; gap: 2px; }
+.rs-num { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rs-label { font-size: 11px; color: var(--text-3, #999); }
+.reuse-note { flex: 1; min-width: 240px; font-size: 11px; color: var(--text-3, #888); line-height: 1.6; }
+.reuse-empty { font-size: 12px; color: var(--text-3, #999); padding: 14px 0; }
+.asset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.asset-row { padding: 10px 12px; border: 1px solid var(--border-light, #eee); border-radius: 8px; }
+.as-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.as-kind {
+  font-size: 11px; padding: 1px 7px; border-radius: 10px;
+  background: var(--el-color-primary-light-9, #ecf3fb); color: var(--el-color-primary, #4a7dbd);
+}
+.as-title { flex: 1; font-size: 13px; font-weight: 600; }
+.as-use { font-size: 11px; color: var(--text-3, #999); }
+.as-content {
+  margin: 0 0 8px; padding: 8px 10px; font-size: 12px; line-height: 1.55;
+  background: var(--bg-2, #f6f6f6); border-radius: 6px;
+  max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+.as-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11px; color: var(--text-3, #888); }
+.as-inp { width: 130px; }
+.as-sel { width: 108px; }
+.use-log { margin-top: 14px; }
+.ul-head { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.ul-list { list-style: none; margin: 0; padding: 0; }
+.ul-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 11px; border-bottom: 1px dashed var(--border-light, #eee); }
+.ul-outcome { padding: 0 7px; border-radius: 9px; background: var(--bg-2, #f0f0f0); }
+.ul-outcome.success { background: var(--el-color-success-light-9, #eaf6ef); color: var(--el-color-success, #3f9c6d); }
+.ul-outcome.fail { background: var(--el-color-danger-light-9, #fdeeee); color: var(--el-color-danger, #c0504d); }
+.ul-project { min-width: 110px; }
+.ul-task { flex: 1; }
+.ul-time { color: var(--text-3, #999); }
+
+/* ============ 外部开源项目 ============ */
+.okb-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.okb-inp { width: 300px; }
+.okb-or { font-size: 11px; color: var(--text-3, #999); }
+.okb-preview { padding: 10px 12px; border-radius: 8px; background: var(--bg-2, #fafafa); margin-bottom: 10px; }
+.op-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.op-repo { font-size: 13px; font-weight: 600; }
+.op-lic { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--bg-1, #fff); border: 1px solid var(--border-light, #eee); }
+.op-copyleft { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--el-color-danger-light-9, #fdeeee); color: var(--el-color-danger, #c0504d); }
+.op-notice { font-size: 11px; color: var(--text-3, #888); line-height: 1.6; }
+.op-err { font-size: 12px; color: var(--el-color-danger, #c0504d); margin-top: 4px; }
+.okb-list { margin-top: 10px; }
+.ol-head { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.okb-list ul { list-style: none; margin: 0; padding: 0; }
+.ol-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 6px 0; font-size: 11px; border-bottom: 1px dashed var(--border-light, #eee); }
+.ol-repo { font-size: 12px; font-weight: 600; min-width: 160px; }
+.ol-lic { color: var(--text-3, #888); }
+.ol-stat { color: var(--text-3, #999); }
+.ol-status { padding: 0 7px; border-radius: 9px; background: var(--bg-2, #f0f0f0); }
+.ol-status.done { background: var(--el-color-success-light-9, #eaf6ef); color: var(--el-color-success, #3f9c6d); }
+.ol-status.failed { background: var(--el-color-danger-light-9, #fdeeee); color: var(--el-color-danger, #c0504d); }
+.ol-notice { flex: 1; min-width: 200px; color: var(--text-3, #999); line-height: 1.5; }
+
 </style>

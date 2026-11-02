@@ -185,6 +185,11 @@ export const Api = {
     { params: jobId ? { job_id: jobId } : {}, timeout: 10000, silent: true }),
   // 等待后端恢复用的健康探针（同样 silent）
   upgradeHealth: () => api.get('/api/health', { timeout: 5000, silent: true }),
+  // 服务端权威核验：现在跑的到底是不是目标版本。
+  // 带时间戳参数破缓存 —— 任何一层缓存都会让「版本没变」的错觉一直存在。
+  updateVerify: (target = '', repair = false) => api.post('/api/system/update/verify',
+    { target, repair },
+    { params: { t: Date.now() }, timeout: 30000, silent: true }),
 
   // ============ 可视化驾驶舱 ============
   listDashboards: () => api.get('/api/dashboards'),
@@ -400,20 +405,26 @@ export const Api = {
       auto_retrieve: opts.auto_retrieve !== false,
       // 钉住的养料库基因；不钉的话服务端会自己挑相关的
       gene_ids: opts.gene_ids || null,
+      // 续写：把已写出的（被截断的）答案回灌，服务端从断点接着写
+      continuation: opts.continuation || '',
     }, { timeout: 120000 }),
 
   // AI 操作中枢：自然语言 → 工具调用（查询当场执行，写入先出待确认清单）
-  aiAgent: (question, history) =>
-    api.post('/api/ai/agent', { question, history }, { timeout: 180000 }),
+  // opts.continuation：续写时回灌已写内容，避免模型从头再答一遍
+  aiAgent: (question, history, opts = {}) =>
+    api.post('/api/ai/agent', { question, history,
+      continuation: opts.continuation || '',
+    }, { timeout: 180000 }),
 
   // 用户点「确认执行」后真正落库；参数由后端重新校验一遍
-  aiAgentConfirm: ({ question, history, pending }) =>
+  aiAgentConfirm: ({ question, history, pending, continuation }) =>
     api.post('/api/ai/agent/confirm', {
       question,
       history,
       tool: pending.tool,
       args: pending.args,
       digest: pending.digest || [],
+      continuation: continuation || '',
     }, { timeout: 180000 }),
 
   // ---- 养料 DNA ----
@@ -438,6 +449,12 @@ export const Api = {
   dnaLibraryGene: (id) => api.get(`/api/dna/library/genes/${id}`),
   dnaLibrarySearch: (params) => api.get('/api/dna/library/search', { params }),
   dnaLibraryCite: (data) => api.post('/api/dna/library/cite', data),
+
+  // ---- 源码上传限制（总量上限可在界面上调） ----
+  // 上限存在后端 sys_meta 里，改完立即生效，不需要重启容器
+  dnaLibraryLimits: () => api.get('/api/dna/library/limits'),
+  dnaLibrarySetLimits: (maxTotalMb) =>
+    api.put('/api/dna/library/limits', { max_total_mb: maxTotalMb }),
 
   // ---- 后台吸收任务（源码树整体上传 / 进度） ----
   // 上传整个目录或一个 zip：FormData 里 files[] 是多文件，zip 是单文件

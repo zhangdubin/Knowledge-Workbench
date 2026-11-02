@@ -227,6 +227,11 @@ async def _collect_genes(db) -> tuple[list[dict], bool]:
       带着走会让两台机器互相污染；
       superseded_by 存的是行号（跨库必然对不上），status=superseded 已经
       表达了「被取代了」这个事实，够用了。
+
+    评分（表达度/置信度及分项依据）也不在这里：
+      分数是本机口径算出来的（依赖本机的来源、时间、复用记录），
+      跨机搬一个数字过去只会对不上；
+      导入时按本机口径重算一遍更准（见 import_bundle 里的重算步骤）。
     """
     if not await _table_exists(db, "dna_gene"):
         return [], False
@@ -917,6 +922,8 @@ async def import_bundle(db, path: str, *, mode: str = "merge") -> dict:
         genes = []
     gene_by_uid: dict[str, int] = {}
     gene_by_fp: dict[str, int] = {}
+    # 这次导入碰过的基因（导入或更新）：导入完要按本机口径重算分数
+    gene_ids_touched: list[int] = []
     for g in genes:
         uid = (g.get("uid") or "").strip()
         fp = (g.get("fingerprint") or "").strip()
@@ -948,6 +955,7 @@ async def import_bundle(db, path: str, *, mode: str = "merge") -> dict:
             else:
                 await _update_gene(db, int(existing[0]), g)
                 updated += 1
+                gene_ids_touched.append(int(existing[0]))
             continue
 
         new_id, fts_ok = await _insert_gene(db, g)
@@ -955,10 +963,23 @@ async def import_bundle(db, path: str, *, mode: str = "merge") -> dict:
             gene_by_uid[uid] = new_id
         if fp:
             gene_by_fp[fp] = new_id
+        gene_ids_touched.append(new_id)
         imported += 1
         counts["genes"] += 1
         if fts_ok:
             counts["fts_gene"] += 1
+
+    # ---- 基因评分：导进来的基因立刻要有分 ----
+    # 包里只带知识本身（约定的字段是固定的，不多不少），不带分数：
+    # 分数是本机口径算出来的，带着走会跟本机对不上。
+    # 但导完不重算也不行 —— 这批基因在新界面里会全是 0 分，
+    # 看起来像「刚导进来的都不合格」。这里按本机口径重算一遍。
+    if gene_ids_touched:
+        try:
+            from . import dna_score
+            await dna_score.rescore_genes(db, gene_ids_touched)
+        except Exception as e:
+            log.warning("导入后重算基因评分失败（不影响导入本身）：%s", e)
 
     # ---- 证据层 ----
     doc_ids: set[int] = set()

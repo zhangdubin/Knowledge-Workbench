@@ -2027,10 +2027,21 @@ async def export_project_zip(db: AsyncSession, project: DevProject):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         has_readme = False
+        # 同一个路径只写一份。
+        # 为什么：模型给不同任务选文件名时经常撞车
+        # （实测 backend/app/main.py 在一个项目里出现过 3 次），
+        # ZIP 里就会有三个同名条目 —— 解压时只有最后一个算数，
+        # 用户看着一坨重复文件会以为出错了。保留最后生成的那份。
+        latest: dict = {}
         for a in rows:
             path = _safe_rel_path(a.path or a.filename or "file.txt")
             if not path:
                 continue
+            latest[path] = a
+        if len(latest) != len([r for r in rows
+                               if _safe_rel_path(r.path or r.filename or "file.txt")]):
+            log.info("导出 %s：同名路径的文件只保留最新的一份", project.name)
+        for path, a in latest.items():
             if path.lower().rsplit("/", 1)[-1].startswith("readme"):
                 has_readme = True
             zf.writestr("%s/%s" % (top, path), a.content or "")

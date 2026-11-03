@@ -76,6 +76,8 @@ def check(cond, label):
 
 MOCK_CALLS = []
 MOCK_MODE = {"fail": False}
+# 项目生成阶段的调用计数：用来验「一个文件一次调用」。
+MOCK_STATS = {"implement": 0, "implement_one": 0, "implement_repair": 0}
 
 CLARIFY_OUT = {
     "understanding": "给客服用的工单系统：录入工单、跟踪状态、统计工作量",
@@ -117,6 +119,12 @@ DESIGN_OUT = {
          "acceptance": "能存能取", "depends_on": [0]},
         {"title": "实现接口", "description": "写路由",
          "acceptance": "POST 能建工单", "depends_on": [1]},
+        # 第四个任务是有意加的：
+        #   「第 3 个文件失败时前 2 个还在」这个用例需要**连续两个**文件失败，
+        #   而实现的口径是「连续 2 个失败才判阶段失败」——
+        #   任务只有 3 个的话只会失败 1 个，测不到那条路径。
+        {"title": "写使用说明", "description": "补文档",
+         "acceptance": "README 写清怎么跑", "depends_on": [2]},
     ],
 }
 
@@ -136,6 +144,31 @@ IMPLEMENT_OUT = {
     ],
     "notes": "最小可运行骨架",
 }
+
+
+def _implement_reply(user_text):
+    """项目生成阶段回一个文件。
+
+    为什么只回一个文件：
+        新的实现是「一个文件一次调用」（文件清单来自设计阶段拆出来的任务）。
+        mock 要是每次都回一整套文件，测试就测不出「一次一个文件」这件事了。
+        提示词里写了「要写的文件：<任务标题>」—— 就照它回一个同名文件。
+        万一没解析出来（提示词改了），退回回一整套 —— 旧实现也能测。
+    """
+    title = ""
+    for line in (user_text or "").splitlines():
+        line = line.strip()
+        if line.startswith("要写的文件："):
+            title = line[len("要写的文件："):].strip()
+            break
+    if not title:
+        return IMPLEMENT_OUT
+    return {
+        "files": [{"path": "%s.py" % title, "language": "python",
+                   "content": "# %s\n\ndef main():\n    return '%s'\n"
+                              % (title, title)}],
+        "notes": "按任务「%s」生成" % title,
+    }
 
 
 class _MockHandler(BaseHTTPRequestHandler):
@@ -161,9 +194,12 @@ class _MockHandler(BaseHTTPRequestHandler):
                 pass
             return
         system = ""
+        user = ""
         for m in payload.get("messages") or []:
             if m.get("role") == "system":
                 system += str(m.get("content") or "")
+            if m.get("role") == "user":
+                user += str(m.get("content") or "")
         if MOCK_MODE.get("fail"):
             content = "这完全不是 JSON，只是一段闲聊。"
         elif "做需求理解" in system:
@@ -173,7 +209,29 @@ class _MockHandler(BaseHTTPRequestHandler):
         elif "资深软件架构师" in system:
             content = json.dumps(DESIGN_OUT, ensure_ascii=False)
         elif "真实可运行" in system:
-            content = json.dumps(IMPLEMENT_OUT, ensure_ascii=False)
+            MOCK_STATS["implement"] += 1
+            nth = MOCK_STATS["implement"]
+            fail_from = int(MOCK_MODE.get("implement_fail_from") or 0)
+            if fail_from and nth >= fail_from:
+                # 模拟「第 N 个文件开始，模型调不通」：
+                # 真实的模型服务出错时就是这样返回的。
+                err = json.dumps({"error": {"message": "model overloaded"}},
+                                 ensure_ascii=False).encode("utf-8")
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+            # 分开记两类调用：
+            #   「要写的文件：」= 主流程一个文件一次调用；
+            #   「只补一个文件」 = 补齐必需文件那几类。
+            #   混在一起数就看不出「一个文件一次调用」了。
+            if "要写的文件：" in user:
+                MOCK_STATS["implement_one"] += 1
+            else:
+                MOCK_STATS["implement_repair"] += 1
+            content = json.dumps(_implement_reply(user), ensure_ascii=False)
         else:
             content = json.dumps({"answer": "不知道"}, ensure_ascii=False)
         body = json.dumps({
@@ -401,6 +459,57 @@ def pure_logic_checks(path):
     st["answers"]["q2"] = ""
     check(len(un(st)) == 0, "选了「都不需要」（空串）也算答了")
 
+    implement_per_file_checks(path)
+
+
+def implement_per_file_checks(path):
+    """项目生成阶段是不是「一个文件一次调用」。
+
+    为什么钉这一条：
+        之前的实现是「一次问模型要一整套项目文件」（两批，每批 5 个文件）。
+        推理型模型在那种调用里 1200 秒都回不来 —— 阶段必然失败，
+        用户等半小时拿到一句「模型 1200 秒没有返回，已中止」。
+        改成「文件清单从设计任务里取 → 一个文件一次调用 → 每个文件立刻落库」之后：
+          · 每次调用小而快；
+          · 单个文件失败不整段作废（已生成的文件还在）。
+        这条断言就是防止以后又退回「一次要一整套」。
+
+    怎么看出来的（不跑模型，只看源码结构）：
+        · 模型调用（call_json…）必须出现在某个循环体里 —— 说明它按文件一个个问；
+        · 不许再有「for ask in (IMPLEMENT_BATCH_CODE, IMPLEMENT_BATCH_SUPPORT)」
+          这种「把几个大提示词轮流问一遍」的写法。
+    """
+    src = open(path, encoding="utf-8").read()
+    tree = ast.parse(src)
+    fn = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_stage_implement":
+            fn = node
+            break
+    if fn is None:
+        check(False, "找得到项目生成阶段的实现（_stage_implement）")
+        return
+
+    per_file = False
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                        and "call_json" in sub.func.id):
+                    per_file = True
+    check(per_file,
+          "项目生成的模型调用在循环里（不是一口气问完）")
+
+    batch_loop = False
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.For, ast.AsyncFor)) and isinstance(node.iter, ast.Tuple):
+            names = [e.id for e in node.iter.elts if isinstance(e, ast.Name)]
+            if any(n.startswith("IMPLEMENT_BATCH") for n in names):
+                batch_loop = True
+    check(not batch_loop,
+          "没有退回「for ask in (批量提示词, 批量提示词)」的老写法"
+          "（改成按文件逐个生成之后自然变绿）")
+
 
 def wait_job(client, job_id, timeout=60.0):
     """轮询作业直到结束，返回 (作业字典, 观察到的 processed 序列)"""
@@ -417,6 +526,25 @@ def wait_job(client, job_id, timeout=60.0):
             return job, seen
         time.sleep(0.15)
     return job, seen
+
+
+def run_to_design(client, pid):
+    """把一个项目跑到「需求转化」完成 —— 只有跑完设计才有任务，任务才是文件清单。
+
+    单独拎出来是因为「单个文件失败」那个用例要一个**干净的新项目**：
+    拿用过的项目重跑会走「续跑」分支（已生成的文件跳过），
+    那样就测不到「第 3 个文件失败时前 2 个还在」了。
+    """
+    r = client.post("/api/dev/projects/%d/stages/clarify/run" % pid,
+                    json={"extra": "内网使用"})
+    wait_job(client, r.json()["job"]["id"])
+    client.post("/api/dev/projects/%d/stages/clarify/answer" % pid,
+                json={"answers": {"q1": "人工录入", "q2": "客服主管"}})
+    r = client.post("/api/dev/projects/%d/stages/specify/run" % pid, json={})
+    wait_job(client, r.json()["job"]["id"])
+    r = client.post("/api/dev/projects/%d/stages/design/run" % pid, json={})
+    job, _seen = wait_job(client, r.json()["job"]["id"])
+    return job
 
 
 def main() -> int:
@@ -534,6 +662,9 @@ def main() -> int:
         job, seen = wait_job(client, r.json()["job"]["id"])
         check(job.get("status") == "done",
               "需求补全跑完（%s / %s）" % (job.get("status"), job.get("error")))
+        check(job.get("processed") == job.get("total"),
+              "需求补全结束时 processed == total（%s/%s）"
+              % (job.get("processed"), job.get("total")))
         pl = client.get("/api/dev/projects/%d/pipeline" % pid).json()
         spec = pl["pipeline"]["stages"]["specify"]["data"]
         check(len(spec.get("stories") or []) == 1, "用户故事落库")
@@ -548,6 +679,9 @@ def main() -> int:
         job, seen = wait_job(client, r.json()["job"]["id"])
         check(job.get("status") == "done",
               "需求转化跑完（%s / %s）" % (job.get("status"), job.get("error")))
+        check(job.get("processed") == job.get("total"),
+              "需求转化结束时 processed == total（%s/%s）"
+              % (job.get("processed"), job.get("total")))
         pl = client.get("/api/dev/projects/%d/pipeline" % pid).json()
         design = pl["pipeline"]["stages"]["design"]["data"]
         check(isinstance(design.get("architecture"), str),
@@ -557,12 +691,14 @@ def main() -> int:
         check("tasks" not in design,
               "任务拆解不放 design.data（契约要求落 dev_task）")
         tasks = client.get("/api/dev/projects/%d" % pid).json()["tasks"]
-        check(len(tasks) == 3, "任务拆解写进 dev_task（%d 条）" % len(tasks))
-        if len(tasks) == 3:
+        check(len(tasks) == 4, "任务拆解写进 dev_task（%d 条）" % len(tasks))
+        if len(tasks) == 4:
             check(tasks[1]["depends_on"] == [tasks[0]["id"]],
                   "depends_on 是真实 task id（%s）" % tasks[1]["depends_on"])
             check(tasks[2]["depends_on"] == [tasks[1]["id"]],
                   "链式依赖正确（%s）" % tasks[2]["depends_on"])
+            check(tasks[3]["depends_on"] == [tasks[2]["id"]],
+                  "第四个任务也挂在第三个后面（%s）" % tasks[3]["depends_on"])
 
         print("== 8. 项目生成 ==")
         r = client.post("/api/dev/projects/%d/stages/implement/run" % pid, json={})
@@ -570,6 +706,9 @@ def main() -> int:
         job, seen = wait_job(client, r.json()["job"]["id"])
         check(job.get("status") == "done",
               "项目生成跑完（%s / %s）" % (job.get("status"), job.get("error")))
+        check(job.get("processed") == job.get("total"),
+              "项目生成结束时 processed == total（%s/%s）"
+              % (job.get("processed"), job.get("total")))
         arts = client.get("/api/dev/projects/%d" % pid).json()["artifacts"]
         names = [a["filename"] for a in arts]
         check("README.md" in names, "产出里有 README.md（%s）" % names)
@@ -584,6 +723,77 @@ def main() -> int:
             bodies.append(rd["artifact"].get("content") or "")
         check(all(bodies), "每个产出都有正文（清单接口不带正文，详情接口带）")
         check(all(a.get("language") for a in arts), "每个产出都标了语言")
+
+        print("== 8b. 一个文件一次调用；单个文件失败不整段作废 ==")
+        # 为什么单独钉这几条：
+        #   旧实现是「一口气问模型要一整套文件」，推理型模型 1200 秒都回不来 ——
+        #   「项目生成」阶段在真模型上必然失败（实测就是这么挂的）。
+        #   改成「一个文件一次调用、每个文件立刻落库」之后，
+        #   单个文件失败只损失在飞的那一个，已生成的文件还能导出。
+        #   这几条断言就是防止以后又退回老写法，又防止「整段作废」。
+        impl_calls = MOCK_STATS.get("implement", 0)
+        one_calls = MOCK_STATS.get("implement_one", 0)
+        model_arts = [a for a in arts if a.get("source") == "model"]
+        check(one_calls == 4,
+              "每个设计任务单独问一次模型（主流程调用 %d 次，设计任务 4 个）"
+              % one_calls)
+        check(impl_calls >= one_calls,
+              "模型调用次数不少于文件数（调用 %d 次，其中按文件 %d 次）"
+              % (impl_calls, one_calls))
+        check(len(model_arts) >= 4,
+              "模型产出的文件不少于任务数（%d 个）" % len(model_arts))
+
+        # 用一个干净的新项目测「单个文件失败不整段作废」：
+        #   拿用过的项目重跑会走「续跑」分支（已生成的文件跳过），
+        #   那样就测不到「第 3 个文件失败时前 2 个还在」了。
+        pid3 = client.post("/api/dev/projects", json={
+            "name": "单文件失败测试", "goal": "验证单个文件失败不整段作废",
+            "tech_stack": ["Python"], "mode": "offline"}).json()["project"]["id"]
+        jobd = run_to_design(client, pid3)
+        check(jobd.get("status") == "done",
+              "新项目跑到设计阶段完成（%s）" % jobd.get("status"))
+
+        # 让第 3 个文件开始失败：
+        #   前 2 个文件必须还在产出物里（还能导出），
+        #   而且话要说清「已经生成了几个、怎么接着补」。
+        MOCK_MODE["implement_fail_from"] = 3
+        MOCK_STATS["implement"] = 0
+        r = client.post("/api/dev/projects/%d/stages/implement/run" % pid3, json={})
+        job2, seen2 = wait_job(client, r.json()["job"]["id"], timeout=180)
+        MOCK_MODE["implement_fail_from"] = 0
+        arts2 = client.get("/api/dev/projects/%d" % pid3).json()["artifacts"]
+        names2 = [a["filename"] for a in arts2]
+        check(job2.get("status") == "failed",
+              "连续 2 个文件失败时阶段判失败（%s / %s）"
+              % (job2.get("status"), str(job2.get("error"))[:50]))
+        check(len(arts2) >= 2,
+              "第 3 个文件起失败时，前 2 个文件仍在产出物里（%s）" % names2)
+        fix2 = " ".join(job2.get("how_to_fix") or [])
+        check("已生成 2/4 个文件" in fix2,
+              "话要说清已经生成了几个、怎么接着补：%s" % fix2[:120])
+        check("已生成 2/4 个文件" in (job2.get("error") or ""),
+              "错误信息里也写清已生成几个：%s" % str(job2.get("error"))[:80])
+        # 已生成的文件要还能导出 —— 这正是「不整段作废」的意义
+        r = client.get("/api/dev/projects/%d/export.zip" % pid3)
+        check(r.status_code == 200,
+              "阶段失败时已生成的文件仍可导出（HTTP %d）" % r.status_code)
+
+        # 重跑只补剩下的：已生成的那两个不重做（产出物 id 不变）
+        ids_before = {a["filename"]: a["id"] for a in arts2}
+        r = client.post("/api/dev/projects/%d/stages/implement/run" % pid3,
+                        json={"force": True})
+        job3, seen3 = wait_job(client, r.json()["job"]["id"], timeout=180)
+        arts3 = client.get("/api/dev/projects/%d" % pid3).json()["artifacts"]
+        ids_after = {a["filename"]: a["id"] for a in arts3}
+        kept = [f for f in ids_before
+                if f in ids_after and ids_after[f] == ids_before[f]]
+        check(job3.get("status") == "done",
+              "重跑补齐后阶段成功（%s / %s）"
+              % (job3.get("status"), str(job3.get("error"))[:50]))
+        check(len(kept) >= 2,
+              "重跑只补剩下的：已生成的 %d 个文件没重做（产出物 id 没变）" % len(kept))
+        check(len(arts3) > len(arts2),
+              "重跑后文件变多了（%d → %d）" % (len(arts2), len(arts3)))
 
         print("== 9. 导出 ZIP ==")
         r = client.get("/api/dev/projects/%d/export.zip" % pid)

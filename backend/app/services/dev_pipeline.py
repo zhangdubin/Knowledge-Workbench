@@ -66,7 +66,7 @@ STAGE_STEPS = {
                 "校验结构", "保存阶段产出"],
     "design": ["检索相关知识", "调用模型生成设计与任务拆解",
                "校验结构", "写入任务表", "保存阶段产出"],
-    "implement": ["组装上下文与文件清单", "调用模型生成项目文件",
+    "implement": ["组装上下文与文件清单", "逐个生成文件",
                   "补齐缺失的必需文件", "校验文件与安全", "保存产出物"],
 }
 
@@ -397,23 +397,23 @@ IMPLEMENT_SYSTEM = """你是一位资深工程师，正在为一个项目生成*
 # 为什么要分批：一次要一整套文件，推理型模型很容易把输出预算花光、
 # 正文只写一半甚至一个字没写（实测 MiniMax-M3.1-Flash 预算不够时正文 0 字）。
 # 分批之后每次问的都是小任务：更稳、更快，失败也只需要重问一小批。
-IMPLEMENT_BATCH_CODE = """
+IMPLEMENT_ONE_FILE = """
+【这一次只写这一个文件】
+要写的文件：%s
+这个文件要做什么：%s
+验收标准：%s
 
-【这一批只要「能跑起来的那部分」】
-请给出这些文件（最多 5 个）：项目入口文件（main.py / app.py / index.js 之一）、
-核心业务模块、数据访问层、配置或依赖声明。
-README、测试、启动脚本这一批先不要写（下一批再写）。
-每个文件都要给完整内容，不要省略号。
+只输出一个 JSON 对象：{"files": [{"path": "...", "content": "..."}]}
+files 里最多两个文件，而且必须包含上面这个文件；path 用项目内相对路径；
+content 给完整内容，不要省略号、不要写「此处省略」。
 """
 
-IMPLEMENT_BATCH_SUPPORT = """
+IMPLEMENT_KIND_FILE = """
+【这一次只补一个文件：%s】
+%s
 
-【这一批只要「跑起来需要的配套」】
-请给出这些文件（最多 5 个）：README.md（怎么装、怎么跑、怎么测）、
-依赖清单（requirements.txt 或 package.json）、
-至少一个测试文件、启动脚本（start.sh）、Dockerfile。
-核心业务代码这一批先不要重写（前面已经给过）。
-每个文件都要给完整内容，不要省略号。
+只输出一个 JSON 对象：{"files": [{"path": "...", "content": "..."}]}
+path 用项目内相对路径；content 给完整内容，不要省略号。
 """
 
 
@@ -667,7 +667,8 @@ async def call_json(mode: str, system: str, user: str, cfg: dict, *,
 
 async def call_json_with_timeout(mode: str, system: str, user: str,
                                 cfg: dict, *, what: str,
-                                max_tokens: int | None = None) -> tuple:
+                                max_tokens: int | None = None,
+                                timeout: int | None = None) -> tuple:
     """带超时的模型调用。
 
     为什么要有超时：
@@ -675,8 +676,13 @@ async def call_json_with_timeout(mode: str, system: str, user: str,
         用户只能干等 —— 那不叫「进度可见」，叫「假装在忙」。
         超时之后如实报失败，并说清楚可以怎么办：
         重跑、调小产出规模、或者换个更快的模型。
+
+    timeout：单次调用的时限（秒）。
+        不传就用阶段时限（stage_timeout）。但「一次生成一个文件」这种
+        细活儿有自己的时限（implement_file_timeout）——
+        一个文件超时就跳过它，不该把整个阶段都拖死。
     """
-    limit = int(cfg.get("stage_timeout") or 600)
+    limit = int(timeout or cfg.get("stage_timeout") or 600)
     try:
         return await asyncio.wait_for(
             call_json(mode, system, user, cfg, what=what,
@@ -1130,17 +1136,19 @@ def _synthesize_files(project: DevProject, pipeline: dict, files: list,
             "- 本文件是自动补齐的骨架，细节以实际代码为准。",
             "",
         ])
-        out.append({"path": "README.md", "language": "markdown",
+        out.append({"path": "README.md",
+                    "filename": "README.md", "language": "markdown",
                     "content": content, "artifact_type": "doc",
-                    "synthesized": True})
+                    "source": "model", "synthesized": True})
 
     if "deps" in missing:
         deps = _scan_imports(files)
         content = ("\n".join(deps) + "\n" if deps else
                    "# 依赖清单由流水线自动补齐：当前代码未引入第三方依赖\n")
-        out.append({"path": "requirements.txt", "language": "text",
+        out.append({"path": "requirements.txt",
+                    "filename": "requirements.txt", "language": "text",
                     "content": content, "artifact_type": "config",
-                    "synthesized": True})
+                    "source": "model", "synthesized": True})
 
     if "entry" in missing:
         langs = set(_language_of(f.get("path") or "") for f in files)
@@ -1160,9 +1168,10 @@ def _synthesize_files(project: DevProject, pipeline: dict, files: list,
                 "    main()",
                 "",
             ])
-            out.append({"path": "main.py", "language": "python",
+            out.append({"path": "main.py",
+                        "filename": "main.py", "language": "python",
                         "content": content, "artifact_type": "code",
-                        "synthesized": True})
+                        "source": "model", "synthesized": True})
         else:
             content = "\n".join([
                 "// 项目入口（流水线自动补齐的最小骨架）",
@@ -1171,9 +1180,10 @@ def _synthesize_files(project: DevProject, pipeline: dict, files: list,
                 'console.log("%s —— 入口待实现");' % name,
                 "",
             ])
-            out.append({"path": "index.js", "language": "javascript",
+            out.append({"path": "index.js",
+                        "filename": "index.js", "language": "javascript",
                         "content": content, "artifact_type": "code",
-                        "synthesized": True})
+                        "source": "model", "synthesized": True})
 
     if "test" in missing:
         content = "\n".join([
@@ -1198,9 +1208,10 @@ def _synthesize_files(project: DevProject, pipeline: dict, files: list,
             "    unittest.main()",
             "",
         ])
-        out.append({"path": "tests/test_smoke.py", "language": "python",
+        out.append({"path": "tests/test_smoke.py",
+                    "filename": "test_smoke.py", "language": "python",
                     "content": content, "artifact_type": "code",
-                    "synthesized": True})
+                    "source": "model", "synthesized": True})
 
     if "start" in missing:
         content = "\n".join([
@@ -1212,9 +1223,10 @@ def _synthesize_files(project: DevProject, pipeline: dict, files: list,
             'elif [ -f index.js ]; then node index.js; else echo "没有找到入口文件"; exit 1; fi',
             "",
         ])
-        out.append({"path": "start.sh", "language": "shell",
+        out.append({"path": "start.sh",
+                    "filename": "start.sh", "language": "shell",
                     "content": content, "artifact_type": "config",
-                    "synthesized": True})
+                    "source": "model", "synthesized": True})
     return out
 
 
@@ -1327,6 +1339,7 @@ async def _stage_clarify(db: AsyncSession, project: DevProject,
     await save_pipeline(db, project, pipeline)
     await _record_session(db, project, "clarify", prompt, raw,
                           "", project.mode or "", cites)
+    await step.end()
     return {"questions": len(norm.get("questions") or []),
             "citations": len(cites), "warnings": warnings}
 
@@ -1364,6 +1377,7 @@ async def _stage_specify(db: AsyncSession, project: DevProject,
     await save_pipeline(db, project, pipeline)
     await _record_session(db, project, "specify", prompt, raw,
                           "", project.mode or "", cites)
+    await step.end()
     return {"stories": len(norm.get("stories") or []),
             "citations": len(cites), "warnings": warnings}
 
@@ -1411,6 +1425,7 @@ async def _stage_design(db: AsyncSession, project: DevProject,
     await save_pipeline(db, project, pipeline)
     await _record_session(db, project, "design", prompt, raw,
                           "", project.mode or "", cites)
+    await step.end()
     return {"modules": len(norm.get("modules") or []),
             "tasks": len(task_ids), "citations": len(cites),
             "warnings": warnings}
@@ -1495,8 +1510,25 @@ def _files_from_model(data: dict) -> list[dict]:
 
 async def _stage_implement(db: AsyncSession, project: DevProject,
                            pipeline: dict, extra: str, step: _Stepper) -> dict:
-    """阶段四：项目生成 —— 产出真能跑起来的项目文件"""
+    """阶段四：项目生成 —— 一次一个文件、边生成边落盘
+
+    为什么改成「一次一个文件」：
+        之前的实现是一口气问模型要「一整套项目文件」（两批，每批 5 个）。
+        推理型模型会把输出预算先花在思考上，正文写到一半就被截断
+        （实测预算不够时 content 长度 0、finish_reason=length）——
+        调大额度只是让它想得更久，用户等二十分钟拿一句「已中止」，
+        体验上和坏掉没区别。
+        改成一个文件一次调用之后：
+          · 每次调用小而快，模型不容易被截断；
+          · 每生成完一个立刻落库，中途失败只损失在飞的那一个；
+          · 进度能说人话：「已生成 3/8 个文件：src/xxx.py」。
+
+    文件清单从哪来：
+        设计阶段拆出来的开发任务（dev_task 行）—— 任务就是文件，
+        任务标题/说明/验收标准正好是「这个文件要写成什么样」的交代。
+    """
     st = pipeline["stages"]["implement"]
+    prev_status = st.get("status")
     st["status"] = "running"
     st["error"] = ""
     await save_pipeline(db, project, pipeline)
@@ -1505,39 +1537,132 @@ async def _stage_implement(db: AsyncSession, project: DevProject,
     cites = await dev_svc.retrieve_knowledge(
         db, _project_query(project, extra), limit=6)
     prompt = build_stage_prompt(project, "implement", cites, pipeline, extra)
+    tasks = await dev_svc.list_tasks(db, project.id)
+    plan = _plan_items_from_tasks(tasks)
+    # 上一轮留下的产出物：
+    #   上一次是失败 → 续跑（已生成的文件留着，只补没生成的那几个）；
+    #   上一次跑完了 → 重来（先清干净，别把两轮混在一起）。
+    old_rows = await dev_svc.list_artifacts(db, project.id)
+    resumed = prev_status == "failed" and bool(old_rows)
+    done_task_ids = set()
+    if resumed:
+        done_task_ids = {r.get("task_id") for r in old_rows if r.get("task_id")}
+    else:
+        for r in old_rows:
+            try:
+                old = await dev_svc.get_artifact(db, int(r.get("id")))
+            except Exception:
+                old = None
+            if old is None:
+                continue
+            try:
+                await dev_svc.delete_artifact(db, old)
+            except Exception as e:
+                log.warning("删除旧产出物失败 #%s：%s", r.get("id"), type(e).__name__)
     await step.end()
 
-    await step.begin("调用模型生成项目文件")
     cfg = dev_config.load_config()
-    mx = int(cfg.get("implement_max_tokens") or 16384)
     mode = project.mode or dev_config.MODE_OFFLINE
-    files = []
+    # 单文件的额度与时限都单独配：一次问得越小，模型越不容易把预算花在思考上。
+    mx = int(cfg.get("implement_file_max_tokens") or 8192)
+    tmo = int(cfg.get("implement_file_timeout") or 300)
     raw = ""
     notes = ""
-    # 分两批问模型。
-    #
-    # 为什么分批：
-    #   一次要「一整套项目文件」，推理型模型很可能把输出预算全花在思考上，
-    #   正文写到一半就被截断（实测 MiniMax-M3.1-Flash 预算不够时正文 0 字），
-    #   于是整批文件都拿不到。拆成「代码一批、配套一批」之后，
-    #   每次问的都是小任务：更稳、更快，失败也只需要重问一小批。
-    for ask in (IMPLEMENT_BATCH_CODE, IMPLEMENT_BATCH_SUPPORT):
-        if all(_required_kinds(files).values()):
+    files: list = []
+    artifact_ids: list = []
+    generated = 0
+    consecutive_failures = 0
+    failures: list = []
+    total = len(plan)
+    # 作业的总步数要跟着文件数走，否则进度条会走到 100% 以外。
+    await _update_job(db, step.job_id,
+                      total=len(STAGE_STEPS.get("implement") or []) + total)
+
+    await step.begin("逐个生成文件")
+    for idx, item in enumerate(plan, start=1):
+        if files and all(_required_kinds(files).values()):
+            # 必需文件齐了就不必再问模型（模型有时一次给好几个文件）
             break
-        data, raw_batch = await call_json_with_timeout(
-            mode, IMPLEMENT_SYSTEM, prompt + ask,
-            cfg, what="项目生成阶段", max_tokens=mx)
-        raw = raw + raw_batch
+        if item.get("task_id") in done_task_ids:
+            # 续跑：上一个文件已经生成过了，跳过
+            continue
+        ask = IMPLEMENT_ONE_FILE % (item["title"], item["description"],
+                                    item["acceptance"])
+        await _update_job(
+            db, step.job_id, processed=step.processed,
+            current="生成第 %d/%d 个文件：%s" % (idx, total, item["title"]))
+        try:
+            data, raw_one = await call_json_with_timeout(
+                mode, IMPLEMENT_SYSTEM, prompt + ask, cfg,
+                what="生成文件「%s」" % item["title"],
+                max_tokens=mx, timeout=tmo)
+        except Exception as e:
+            consecutive_failures += 1
+            failures.append({"title": item["title"], "error": _err_text(e)})
+            log.warning("生成文件失败 %s：%s", item["title"], type(e).__name__)
+            if consecutive_failures >= 2:
+                break
+            continue
+        consecutive_failures = 0
+        raw += raw_one
         notes = notes or _as_text(data.get("notes"))
-        files.extend(_files_from_model(data))
+        produced = _files_from_model(data)
+        if not produced:
+            consecutive_failures += 1
+            failures.append({"title": item["title"], "error": "模型没有返回文件内容"})
+            if consecutive_failures >= 2:
+                break
+            continue
+        # 立刻落库：超时只损失在飞的那一个文件，之前生成的全保住。
+        for f in produced:
+            row = await dev_svc.create_artifact(db, project.id, {
+                "filename": f["filename"],
+                "path": f["path"],
+                "content": f["content"],
+                "language": f["language"],
+                "artifact_type": f["artifact_type"],
+                "source": "model",
+                "warnings": f.get("warnings") or [],
+            }, task_id=item.get("task_id"))
+            f["artifact_id"] = row.id
+            artifact_ids.append(row.id)
+            files.append(f)
+        generated += 1
+        step.processed += 1
+        await _update_job(
+            db, step.job_id, processed=step.processed,
+            current="已生成 %d/%d 个文件：%s" % (generated, total, item["title"]))
     await step.end()
+
+    if consecutive_failures >= 2:
+        # 单个文件失败不作废整段：已生成的文件留在产出物里（还能导出），
+        # 阶段判失败，但要说清「已经拿到多少、怎么接着补」。
+        st["data"] = _implement_data(files, artifact_ids, [], blocked=None,
+                                     failures=failures, notes=notes,
+                                     version=int((st.get("data") or {}).get("version") or 0) + 1)
+        st["summary"] = stage_summary("implement", st)
+        await save_pipeline(db, project, pipeline)
+        raise PipelineError(
+            "项目生成阶段：连续 %d 个文件没生成出来（已生成 %d/%d 个文件）"
+            % (consecutive_failures, generated, total),
+            status=500, missing=["implement_files"],
+            how_to_fix=[
+                "已生成 %d/%d 个文件，重跑只补剩下的（已生成的不会重做）"
+                % (generated, total),
+                "没生成出来的文件：%s"
+                % "、".join(str(f.get("title") or "") for f in failures[-3:]),
+                "模型慢的话把开发设置里的 implement_file_timeout 调大一点",
+                "也可以在开发工作台里手工补这几个文件",
+            ],
+            detail={"generated": generated, "total": total,
+                    "failed": failures})
 
     await step.begin("补齐缺失的必需文件")
     kinds = _required_kinds(files)
     missing = [k for k, ok in kinds.items() if not ok]
     synthesized = []
     if missing:
-        # 先让模型补一次（它可能只是漏了几份），补不上再合成骨架
+        # 先让模型补（一个文件一次调用），补不上再合成骨架
         files.extend(await _repair_missing(project, pipeline, prompt, missing, cfg))
         kinds = _required_kinds(files)
         missing = [k for k, ok in kinds.items() if not ok]
@@ -1552,55 +1677,51 @@ async def _stage_implement(db: AsyncSession, project: DevProject,
     blocked = []
     kept = []
     for f in files:
-        warns = dev_svc.scan_code(f["content"], f["filename"])
+        fname = f.get("filename") or (f.get("path") or "").rsplit("/", 1)[-1]
+        warns = dev_svc.scan_code(f["content"], fname)
         if dev_svc.has_blocking(warns):
-            # 含硬编码密钥/危险命令的文件不落库 —— 跟模块里其它生成路径同一口径
-            blocked.append({"path": f["path"], "filename": f["filename"],
+            blocked.append({"path": f["path"], "filename": fname,
                             "warnings": warns})
+            # 已经有硬编码密钥的文件刚才是落过库的，这里要把它撤掉 ——
+            # 产出物里不留带密钥的代码。
+            aid = f.get("artifact_id")
+            if aid:
+                try:
+                    old = await dev_svc.get_artifact(db, int(aid))
+                    if old is not None:
+                        await dev_svc.delete_artifact(db, old)
+                except Exception as e:
+                    log.warning("删除不安全产出物失败 #%s：%s", aid, type(e).__name__)
             continue
         f["warnings"] = warns
         kept.append(f)
     await step.end()
 
     await step.begin("保存产出物")
-    old_ids = ((pipeline["stages"]["implement"].get("data") or {}).get("artifact_ids")
-               or [])
-    for aid in old_ids:
-        try:
-            old = await dev_svc.get_artifact(db, int(aid))
-        except Exception:
-            old = None
-        if old is not None:
-            try:
-                await dev_svc.delete_artifact(db, old)
-            except Exception as e:
-                log.warning("删除旧产出物失败 #%s：%s", aid, type(e).__name__)
-
-    artifact_ids = []
+    # 模型生成的文件是边生成边落库的；
+    # 「补齐」和「合成骨架」出来的那几个还没落库 —— 这里补上，
+    # 少了它们，导出 ZIP 就会缺文件（少了 README，用户拿到手是个空壳）。
+    kept_ids = []
     for f in kept:
-        row = await dev_svc.create_artifact(db, project.id, {
-            "filename": f["filename"],
-            "path": f["path"],
-            "content": f["content"],
-            "language": f["language"],
-            "artifact_type": f["artifact_type"],
-            "source": "model",
-            "warnings": f.get("warnings") or [],
-        })
-        artifact_ids.append(row.id)
+        aid = f.get("artifact_id")
+        if not aid:
+            row = await dev_svc.create_artifact(db, project.id, {
+                "filename": f.get("filename")
+                or (f.get("path") or "").rsplit("/", 1)[-1],
+                "path": f["path"],
+                "content": f["content"],
+                "language": f.get("language") or "",
+                "artifact_type": f.get("artifact_type") or "code",
+                "source": f.get("source") or "model",
+                "warnings": f.get("warnings") or [],
+            })
+            aid = row.id
+            f["artifact_id"] = aid
+        kept_ids.append(aid)
     await step.end()
-
-    st["data"] = {
-        "files": [{"path": f["path"], "filename": f["filename"],
-                   "language": f["language"], "artifact_type": f["artifact_type"],
-                   "size": len(f["content"].encode("utf-8", "replace"))}
-                  for f in kept],
-        "artifact_ids": artifact_ids,
-        "synthesized": synthesized,
-        "blocked": blocked,
-        "version": int((st.get("data") or {}).get("version") or 0) + 1,
-        "notes": notes,
-    }
+    st["data"] = _implement_data(files, kept_ids, synthesized, blocked,
+                                 failures=failures, notes=notes,
+                                 version=int((st.get("data") or {}).get("version") or 0) + 1)
     st["at"] = _now_iso()
     st["status"] = "done"
     st["summary"] = stage_summary("implement", st)
@@ -1611,12 +1732,63 @@ async def _stage_implement(db: AsyncSession, project: DevProject,
     await _record_session(db, project, "implement", prompt, raw,
                           "", project.mode or "", cites)
     return {"files": len(kept), "synthesized": len(synthesized),
-            "blocked": len(blocked), "citations": len(cites)}
+            "blocked": len(blocked), "citations": len(cites),
+            "generated": generated, "failed": len(failures)}
+
+
+def _implement_data(files: list, artifact_ids: list, synthesized: list,
+                    blocked, *, failures: list, notes: str, version: int) -> dict:
+    """项目生成阶段的产出数据（清单 + 产出物 id + 失败的文件）。"""
+    return {
+        "files": [{"path": f["path"], "filename": f["filename"],
+                   "language": f["language"], "artifact_type": f["artifact_type"],
+                   "size": len(f["content"].encode("utf-8", "replace"))}
+                  for f in files],
+        "artifact_ids": [i for i in artifact_ids if i],
+        "synthesized": synthesized,
+        "blocked": blocked or [],
+        "failed_files": failures or [],
+        "version": version,
+        "notes": notes,
+    }
+
+
+def _plan_items_from_tasks(tasks: list) -> list:
+    """把设计阶段拆出来的开发任务变成「要生成的文件清单」。
+
+    为什么用任务而不是让模型自己列文件：
+        任务就是文件（一个任务对应一个可交付的文件），
+        任务标题、说明、验收标准正好是「这个文件要写成什么样」的交代 ——
+        一次只交代一件事，模型不容易跑偏，也不容易写一半。
+    """
+    items = []
+    for t in tasks or []:
+        title = (t.get("title") or "").strip()
+        if not title:
+            continue
+        items.append({
+            "task_id": t.get("id"),
+            "title": title,
+            "description": (t.get("description") or "").strip(),
+            "acceptance": (t.get("acceptance") or "").strip(),
+        })
+    return items
+
+
+def _err_text(e: Exception) -> str:
+    """把异常说成人话（错误体里要能看到到底卡在哪）。"""
+    msg = getattr(e, "message", None) or str(e) or type(e).__name__
+    return str(msg)[:200]
+
 
 
 async def _repair_missing(project: DevProject, pipeline: dict, prompt: str,
                            missing: list, cfg: dict) -> list:
-    """让模型只补齐缺的那几类文件。
+    """让模型补齐缺的那几类文件 —— 一类一次调用。
+
+    为什么一类一次：
+        跟主流程一个道理：一次只交代一件事，模型不容易写一半、
+        不容易把预算花在思考上。缺几类就问几次，某一次失败不影响别的。
 
     为什么先补再合成：模型多半只是漏了几份，
     让它自己补出来的比流水线合成的更贴项目；
@@ -1629,34 +1801,42 @@ async def _repair_missing(project: DevProject, pipeline: dict, prompt: str,
         "test": "至少一个测试文件",
         "start": "启动脚本或 Dockerfile",
     }
-    want = "、".join(kind_labels.get(k, k) for k in missing)
-    ask = ("\n\n【补充要求】上一次的文件里缺了：%s。"
-           "这一次只输出缺的这几类文件，路径用项目内相对路径，"
-           "content 给完整内容，不要重复已经有的文件。" % want)
-    try:
-        data, _raw = await call_json_with_timeout(
-            project.mode or dev_config.MODE_OFFLINE, IMPLEMENT_SYSTEM,
-            prompt + ask, cfg, what="补齐必需文件",
-            max_tokens=int(cfg.get("implement_max_tokens") or 16384))
-    except Exception as e:
-        log.warning("补齐必需文件失败，改用合成骨架：%s", type(e).__name__)
-        return []
+    kind_hints = {
+        "readme": "写清楚：项目做什么、怎么装依赖、怎么启动、怎么跑测试。",
+        "deps": "列出运行这个项目需要的第三方依赖，一行一个。",
+        "entry": "一个能直接跑起来的入口文件。",
+        "test": "至少一个能跑的测试文件（内容要真的能跑）。",
+        "start": "一个启动脚本或 Dockerfile，能把项目跑起来。",
+    }
+    mx = int(cfg.get("implement_file_max_tokens") or 8192)
+    tmo = int(cfg.get("implement_file_timeout") or 300)
     out = []
-    for f in (data.get("files") or []):
-        if not isinstance(f, dict):
+    for kind in missing:
+        label = kind_labels.get(kind, kind)
+        ask = IMPLEMENT_KIND_FILE % (label, kind_hints.get(kind, ""))
+        try:
+            data, _raw = await call_json_with_timeout(
+                project.mode or dev_config.MODE_OFFLINE, IMPLEMENT_SYSTEM,
+                prompt + ask, cfg, what="补齐%s" % label,
+                max_tokens=mx, timeout=tmo)
+        except Exception as e:
+            log.warning("补齐%s失败：%s", label, type(e).__name__)
             continue
-        path = _safe_rel_path(f.get("path") or "")
-        content = str(f.get("content") or "")
-        if not path or not content.strip():
-            continue
-        out.append({
-            "path": path,
-            "filename": path.rsplit("/", 1)[-1],
-            "content": content,
-            "language": (f.get("language") or _language_of(path))[:32],
-            "artifact_type": _artifact_type_of(path),
-            "source": "model",
-        })
+        for f in (data.get("files") or []):
+            if not isinstance(f, dict):
+                continue
+            path = _safe_rel_path(f.get("path") or "")
+            content = str(f.get("content") or "")
+            if not path or not content.strip():
+                continue
+            out.append({
+                "path": path,
+                "filename": path.rsplit("/", 1)[-1],
+                "content": content,
+                "language": (f.get("language") or _language_of(path))[:32],
+                "artifact_type": _artifact_type_of(path),
+                "source": "model",
+            })
     return out
 
 
@@ -1708,7 +1888,7 @@ async def run_stage_job(job_id: int, project_id: int, stage: str, *,
             runner = _STAGE_RUNNERS[stage]
             summary = await runner(db, project, pipeline, extra, step)
             await _update_job(
-                db, job_id, status="done", processed=len(steps), current="",
+                db, job_id, status="done", processed=step.processed, current="",
                 finished_at=_now(),
                 created=int(summary.get("files") or summary.get("tasks") or 0),
                 detail=summary)

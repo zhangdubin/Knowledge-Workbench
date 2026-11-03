@@ -257,8 +257,15 @@ def main() -> int:
     print("== 0. 配置 ==")
     check(int(cfg.get("implement_file_max_tokens") or 0) <= 8192,
           "单文件额度不超过 8192（实际 %s）" % cfg.get("implement_file_max_tokens"))
-    check(int(cfg.get("implement_file_timeout") or 0) <= 300,
-          "单文件时限不超过 300 秒（实际 %s）" % cfg.get("implement_file_timeout"))
+    # 单文件时限：不能太短（实测一个文件 3~9 分钟，太紧会把慢文件判死 ——
+    # 实测 300 秒时限下 8 个文件里有 2 个被判超时，阶段因此失败），
+    # 也不能比阶段时限还长（否则阶段先超时，文件级时限形同虚设）。
+    _file_tmo = int(cfg.get("implement_file_timeout") or 0)
+    _stage_tmo = int(cfg.get("stage_timeout") or 0)
+    check(_file_tmo >= 600,
+          "单文件时限至少 600 秒（实测一个文件 3~9 分钟，实际 %s）" % _file_tmo)
+    check(_file_tmo <= (_stage_tmo or 1800),
+          "单文件时限不超过阶段时限（实际 %s / 阶段 %s）" % (_file_tmo, _stage_tmo))
 
     with TestClient(app) as client:
         print("== 1. 跑完前三个阶段 ==")

@@ -45,6 +45,11 @@ const POLL_INTERVAL = 400
 // 宁可多等一会儿看到后端自己报的「模型超时」，也不要自己先放弃 ——
 // 自己放弃就分不清是「模型慢」还是「作业卡死」了。
 const POLL_TIMEOUT = Number(process.env.KB_POLL_TIMEOUT || 1500)
+// 「项目生成」阶段要另算上界：它现在是「一个文件一次模型调用」，
+// 文件数跟着设计阶段拆出来的任务走（实测 8 个文件）。
+// 一次调用实测 2~5 分钟，8 个文件就是 20~40 分钟 ——
+// 拿别的阶段那 25 分钟上界去等它，只会看到「轮询超时」这种假故障。
+const POLL_TIMEOUT_IMPLEMENT = Number(process.env.KB_POLL_TIMEOUT_IMPLEMENT || 4200)
 
 const ERRORS = []
 let CHECKS = 0
@@ -130,9 +135,9 @@ async function api(method, apiPath, body, attempt) {
  * 轮询作业直到终态。
  * 记下每一步的 processed，用来证明「进度是真的在走」，而不是一直 0。
  */
-async function pollJob(jobId) {
+async function pollJob(jobId, timeoutSec) {
   const samples = []
-  const deadline = Date.now() + POLL_TIMEOUT * 1000
+  const deadline = Date.now() + (timeoutSec || POLL_TIMEOUT) * 1000
   let last = null
   while (Date.now() < deadline) {
     const r = await api('GET', '/api/dev/jobs/' + jobId)
@@ -395,7 +400,8 @@ async function main() {
         res = null
         break
       }
-      res = await pollJob(runRes.body.job.id)
+      res = await pollJob(runRes.body.job.id,
+        stage === 'implement' ? POLL_TIMEOUT_IMPLEMENT : POLL_TIMEOUT)
       const st = res.final && res.final.status
       if (st !== 'failed' && st !== 'error') break
       const err = String((res.final && res.final.error) || '')

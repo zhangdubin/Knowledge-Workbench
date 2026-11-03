@@ -1597,6 +1597,12 @@ async def _stage_implement(db: AsyncSession, project: DevProject,
                 what="生成文件「%s」" % item["title"],
                 max_tokens=mx, timeout=tmo)
         except Exception as e:
+            # 一个文件失败不重试，直接跳过它去下一个。
+            #
+            # 为什么不重试：单文件时限已经按实测调宽（implement_file_timeout，
+            # 实测一个文件 3~9 分钟），到这里基本是模型真的卡住了；
+            # 再等一轮只是把「进度卡住」的时间翻倍。
+            # 跳过的文件由「重跑只补剩下的」兜住 —— 那一轮只问缺的那几个。
             consecutive_failures += 1
             failures.append({"title": item["title"], "error": _err_text(e)})
             log.warning("生成文件失败 %s：%s", item["title"], type(e).__name__)

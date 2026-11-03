@@ -31,6 +31,17 @@
           <el-radio-button value="evidence">证据链</el-radio-button>
         </el-radio-group>
 
+        <!--
+          证据链的范围：聚焦 = 只画跟当前这批基因有关的证据（默认）。
+          全链 = 50 个证据节点全摊开（想通览全局时用）。
+          以前默认是全摊开 —— 画布 1256×1280、视口才 900 高，
+          一屏看不全，而且大半证据跟正在读的基因没关系，纯噪音。
+        -->
+        <el-radio-group v-model="evidenceScope" size="small" aria-label="证据范围">
+          <el-radio-button value="focus" title="只画跟当前这批基因有关的证据：一屏能看完">聚焦</el-radio-button>
+          <el-radio-button value="all" title="把全部证据节点都摊开（50 个），适合通览全局">全链</el-radio-button>
+        </el-radio-group>
+
         <el-dropdown trigger="click" @command="setDensity">
           <el-button size="small" class="dg-density">
             <el-icon><Operation /></el-icon>{{ densityLabel }}
@@ -149,7 +160,14 @@
             @click.stop="selectById(lb.id)"
           >
             <span v-if="lb.code" class="dg-lbl-code" :style="{ color: lb.color }">{{ lb.code }}</span>
-            <span class="dg-lbl-text">{{ lb.text }}</span>
+            <span class="dg-lbl-text" :style="lb.depth ? { paddingLeft: lb.depth * 14 + 'px' } : null">{{ lb.text }}</span>
+            <!-- 文件下面挂着多少章节/记录：折叠时给个徽章 -->
+            <span
+              v-if="lb.kids"
+              class="dg-lbl-badge"
+              :title="(lb.kids + ' 个章节/记录，点开看看')"
+              @click.stop="toggleDoc(lb.id)"
+            >{{ lb.kids }}</span>
           </button>
         </div>
 
@@ -281,11 +299,21 @@ const filter = ref('all')
 const selected = ref(null)
 const seed = ref(0)
 const hoverId = ref(null)
-const geneLimit = ref(12)
+const geneLimit = ref(20)
 const offKinds = ref(new Set())
 const q = ref('')
 const offNodeKinds = ref(new Set())
 const density = ref('normal')
+
+// 证据链的范围：
+//   focus（默认）：右链只画「当前显示的基因引用到的证据」——
+//     54 个基因对应 50 个证据节点，全摊开就是一面 50 行的墙，
+//     一屏放不下（实测画布 1256×1280，视口才 900 高），
+//     而且那一大半证据跟当前读的基因根本没关系 —— 纯噪音。
+//   all：右链画全部证据（想通览全局时用）。
+const evidenceScope = ref('focus')
+// 聚焦模式下，被点开的文件（把它的章节铺开）
+const expandedDocs = ref(new Set())
 
 /** 密度档：只改行距，不改别的 */
 const DENSITY = {
@@ -297,6 +325,23 @@ const densityLabel = computed(() => DENSITY[density.value]?.label || '标准')
 
 function setDensity(k) {
   if (DENSITY[k]) density.value = k
+}
+
+/**
+ * 点文件上的徽章：展开 / 收起它下面的章节与挂载记录
+ *
+ * 为什么要有这个：
+ *   聚焦模式下右链只留「基因引用到的证据」，一个文件底下可能还挂着
+ *   十几个章节 —— 全摊开又是那面墙，全收起来又看不见文件里有什么。
+ *   徽章写清楚「下面还有几个」，想看再点开，是最省事的两段式。
+ */
+function toggleDoc(id) {
+  const next = new Set(expandedDocs.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expandedDocs.value = next
+  selected.value = graphById.value.get(id) || null
+  draw(true)
 }
 
 /** 图例：带计数，点一下切换这一类节点的显示 */
@@ -340,7 +385,14 @@ const statsText = computed(() => {
   const e = visibleEdges.value.length
   const total = (props.graph?.nodes || []).length
   if (!total) return '还没有数据'
-  return `显示 ${n}/${total} 个节点 · ${e} 条连接`
+  const allGenes = (props.graph?.nodes || []).filter((x) => x.kind === 'gene').length
+  const shown = visibleGenes.value.length
+  // 基因总数要写出来：以前默认只显示 12 条，剩下 42 条悄悄消失，
+  // 「知识链」看上去就那么点东西 —— 用户根本不知道漏了多少。
+  const geneNote = allGenes && shown < allGenes
+    ? `（基因 ${shown}/${allGenes}）`
+    : ''
+  return `显示 ${n}/${total} 个节点${geneNote} · ${e} 条连接`
 })
 
 let net = null
@@ -486,6 +538,65 @@ function toggleKind(key) {
 const showLeft = computed(() => filter.value !== 'evidence')
 const showRight = computed(() => filter.value !== 'knowledge')
 
+/** id → 节点（图里到处都要反查，建一次就够） */
+const graphById = computed(() => {
+  const m = new Map()
+  for (const n of (props.graph?.nodes || [])) m.set(n.id, n)
+  return m
+})
+
+/**
+ * 基因 → 它的出处（encode 边：gene → document / record）
+ *
+ * 为什么要有它：
+ *   「基因从哪儿来」是这张图唯一真正要读的关系。
+ *   聚焦模式下，右链只留被显示的基因引用到的那几个节点 ——
+ *   先知道谁引用了谁，才知道该留谁。
+ */
+const geneSourceOf = computed(() => {
+  const m = new Map()
+  for (const e of (props.graph?.edges || [])) {
+    if (e.kind !== 'encode') continue
+    const s = graphById.value.get(e.source)
+    const t = graphById.value.get(e.target)
+    const gene = s?.kind === 'gene' ? s : (t?.kind === 'gene' ? t : null)
+    const src = gene === s ? t : s
+    if (gene && src) m.set(gene.id, src.id)
+  }
+  return m
+})
+
+/** 章节 / 记录 → 所属文件（structure / attach 边） */
+const ownerDocOf = computed(() => {
+  const m = new Map()
+  for (const e of (props.graph?.edges || [])) {
+    if (e.kind !== 'structure' && e.kind !== 'attach') continue
+    const s = graphById.value.get(e.source)
+    const t = graphById.value.get(e.target)
+    const doc = s?.kind === 'document' ? s : (t?.kind === 'document' ? t : null)
+    const child = s?.kind === 'document' ? t : (t?.kind === 'document' ? s : null)
+    if (doc && child && child.kind !== 'document') m.set(child.id, doc.id)
+  }
+  return m
+})
+
+/** 文件 → 它下面的章节与挂载记录（点开文件时铺开） */
+const childrenOf = computed(() => {
+  const m = new Map()
+  for (const e of (props.graph?.edges || [])) {
+    if (e.kind !== 'structure' && e.kind !== 'attach') continue
+    const s = graphById.value.get(e.source)
+    const t = graphById.value.get(e.target)
+    const doc = s?.kind === 'document' ? s : (t?.kind === 'document' ? t : null)
+    const child = s?.kind === 'document' ? t : (t?.kind === 'document' ? s : null)
+    if (!doc || !child || child.kind === 'document') continue
+    if (!m.has(doc.id)) m.set(doc.id, [])
+    const arr = m.get(doc.id)
+    if (!arr.includes(child.id)) arr.push(child.id)
+  }
+  return m
+})
+
 /**
  * 基因：先按种类筛，再按「表达度 + 置信度」取热门的一批
  *
@@ -530,6 +641,30 @@ const searchHit = computed(() => {
   return { ids: keep, count: hit.size, direct: hit }
 })
 
+/**
+ * 聚焦模式下要保留的节点
+ *
+ * 规则：
+ *   1. 每个可见基因的出处，必须在（这是要读的主线）；
+ *   2. 出处是章节时，连它所属的文件一起在 —— 脱离文件的章节没有意义；
+ *   3. 点开的文件（expandedDocs）：把它的章节与挂载记录一起铺开。
+ */
+const focusKeep = computed(() => {
+  const keep = new Set()
+  for (const g of visibleGenes.value) {
+    const sid = geneSourceOf.value.get(g.id)
+    if (!sid) continue
+    keep.add(sid)
+    const owner = ownerDocOf.value.get(sid)
+    if (owner) keep.add(owner)
+  }
+  for (const d of expandedDocs.value) {
+    if (!keep.has(d)) continue
+    for (const c of childrenOf.value.get(d) || []) keep.add(c)
+  }
+  return keep
+})
+
 const nodes = computed(() => {
   const all = props.graph?.nodes || []
   let out
@@ -549,6 +684,22 @@ const nodes = computed(() => {
   }
   // 图例关掉的类别不画
   out = out.filter((n) => !offNodeKinds.value.has(n.kind))
+  // 聚焦模式：右链只留「当前显示的基因引用到的证据」
+  //
+  // 为什么默认这么收：
+  //   54 个基因对 50 个证据节点，全摊开就是一面 50 行的墙 ——
+  //   实测画布 1256×1280，视口只有 900 高，一屏根本看不全；
+  //   行距压到 24px 时中文标签几乎贴着下一行，扫读全靠猜。
+  //   而且那一大半证据跟当前这批基因没关系 —— 是噪音不是信息。
+  //   收成「一个基因对面就是它的出处」，图才真的像双螺旋。
+  // 搜索时不再收窄：用户搜的就是全局的东西（多半是当前没显示的那 34 条基因之一），
+  // 要是先收窄再搜，搜出来的永远是空的。
+  if (evidenceScope.value === 'focus' && filter.value !== 'knowledge' && !searchHit.value) {
+    const keep = focusKeep.value
+    // 只收「证据链那侧」：基因与养料库是左链的主体，不能被一起收掉
+    out = out.filter((n) =>
+      (n.kind === 'gene' || n.kind === 'library') || keep.has(n.id))
+  }
   // 搜索：只留命中节点与它的一跳邻居
   if (searchHit.value) out = out.filter((n) => searchHit.value.ids.has(n.id))
   return out
@@ -792,48 +943,118 @@ function computeLayout() {
       (a, b) => (score.get(a.id) - score.get(b.id)) || String(a.id).localeCompare(String(b.id)))
   }
 
-  // ---- 右链的行：文件（带自己的章节）与记录 ----
-  const rightRows = []
-  const placedRight = new Set()
-  for (const n of rightItems) {
-    rightRows.push(n)
-    placedRight.add(n.id)
-    if (n.kind === 'document') {
-      for (const sid of secOfDoc.get(n.id) || []) {
-        const s = byId.get(sid)
-        if (s) { rightRows.push(s); placedRight.add(s.id) }
+  // ---- 两种排版 ----
+  //
+  // 聚焦模式（默认）：一个基因的对面就是它的出处。
+  //   把基因按「出处」分块，块里的基因挨着排，出处节点落在这一块的**正中间**
+  //   —— 横档（碱基对）就成了一把收拢的扇子，而不是从左上到右下乱窜的斜线。
+  //
+  // 全链模式：右链摆全部证据（文件带章节、记录），左链按来源位置排。
+  const focusMode = evidenceScope.value === 'focus' && filter.value !== 'knowledge'
+  let rightRows = []
+  let leftRows = []
+  // 聚焦模式下的视觉行：{ id, side }；出处的 y 单独算（落在块中间）
+  const rowSeq = []
+  const blockRanges = []
+
+  if (focusMode) {
+    // --- 按出处把可见基因分块 ---
+    const bySrc = new Map()
+    for (const g of visibleGenes.value) {
+      const sid = geneTarget.get(g.id)
+      const key = sid || `__no_source__:${g.id}`
+      if (!bySrc.has(key)) bySrc.set(key, { srcId: sid || null, genes: [] })
+      bySrc.get(key).genes.push(g)
+    }
+    const blockList = [...bySrc.values()]
+    for (const b of blockList) {
+      b.genes.sort((a, c) => (c.meta?.usage || 0) - (a.meta?.usage || 0))
+      b.heat = Math.max(0, ...b.genes.map((g) => g.meta?.usage || 0))
+    }
+    // 块的顺序：块里最热门的基因说了算 —— 最该先读的排最前
+    blockList.sort((a, b) => b.heat - a.heat || String(a.srcId || '').localeCompare(String(b.srcId || '')))
+    // 「重排」按钮在聚焦模式下也得有事做：轮换起点，
+    // 让「先看哪一块」可以换着来（不然这按钮在这个模式下点了没反应）。
+    if (blockList.length > 1 && seed.value) {
+      const at = seed.value % blockList.length
+      blockList.push(...blockList.splice(0, at))
+    }
+
+    // --- 铺视觉行：基因占行；点开的文件把章节/记录排在它后面 ---
+    for (const b of blockList) {
+      const start = rowSeq.length
+      for (const g of b.genes) rowSeq.push({ id: g.id, side: 'l' })
+      const end = rowSeq.length - 1
+      blockRanges.push({ b, start, end })
+      if (b.srcId && expandedDocs.value.has(b.srcId)) {
+        const kids = [...(secOfDoc.get(b.srcId) || []), ...(docRecs.get(b.srcId) || [])]
+        for (const cid of kids) {
+          const c = byId.get(cid)
+          if (c) rowSeq.push({ id: c.id, side: 'r' })
+        }
       }
     }
-  }
-  // 没挂到任何文件下的章节：也得有个位置（跟文件走才说得通）
-  for (const n of list) {
-    if (n.kind === 'section' && !placedRight.has(n.id)) {
+    leftRows = blockList.flatMap((b) => b.genes)
+    for (const { b } of blockRanges) {
+      if (!b.srcId) continue
+      const src = byId.get(b.srcId)
+      if (src) rightRows.push(src)
+    }
+    // 展开出来的章节/记录也在右链上
+    for (const r of rowSeq) {
+      if (r.side !== 'r') continue
+      const n = byId.get(r.id)
+      if (n && !rightRows.includes(n)) rightRows.push(n)
+    }
+  } else {
+    // ---- 右链的行：文件（带自己的章节）与记录 ----
+    const placedRight = new Set()
+    for (const n of rightItems) {
       rightRows.push(n)
       placedRight.add(n.id)
+      if (n.kind === 'document') {
+        for (const sid of secOfDoc.get(n.id) || []) {
+          const s = byId.get(sid)
+          if (s) { rightRows.push(s); placedRight.add(s.id) }
+        }
+      }
     }
-  }
+    // 没挂到任何文件下的章节：也得有个位置（跟文件走才说得通）
+    for (const n of list) {
+      if (n.kind === 'section' && !placedRight.has(n.id)) {
+        rightRows.push(n)
+        placedRight.add(n.id)
+      }
+    }
 
-  // ---- 左链的行：知识（基因） ----
-  //
-  // 基因按「它来自右边哪一项」排位 —— 这样基因与它的出处上下对齐，
-  // 碱基对就是一根**横档**，而不是斜的、绕来绕去的曲线。
-  const uRight = new Map(rightItems.map((n, i) => [n.id, i / Math.max(1, rightItems.length)]))
-  const leftEntries = []
-  for (const g of visibleGenes.value) {
-    const src = geneTarget.get(g.id)
-    const u = src !== undefined && uRight.has(src) ? uRight.get(src) : 0.5
-    leftEntries.push({ u, node: g })
+    // ---- 左链的行：知识（基因） ----
+    //
+    // 基因按「它来自右边哪一项」排位 —— 这样基因与它的出处上下对齐，
+    // 碱基对就是一根**横档**，而不是斜的、绕来绕去的曲线。
+    //
+    // 注意这里必须用**最终的行号**（rightRows 里的下标）来算位置：
+    // 以前用的是 rightItems（还没插章节的旧顺序），
+    // 而 y 是按 rightRows 算的 —— 两套坐标对不上，横档全是歪的。
+    const rowIndexOf = new Map(rightRows.map((n, i) => [n.id, i]))
+    const uRight = new Map(rightRows.map((n, i) => [n.id, i / Math.max(1, rightRows.length)]))
+    const leftEntries = []
+    for (const g of visibleGenes.value) {
+      const src = geneTarget.get(g.id)
+      const u = src !== undefined && uRight.has(src) ? uRight.get(src) : 0.5
+      leftEntries.push({ u, node: g })
+    }
+    // 养料库是知识的组织单位，留在左链；位置取它那些基因的中点
+    for (const lib of libs) {
+      const mine = leftEntries.filter((e) => (genesOf.get(lib.id) || []).includes(e.node.id))
+      const u = mine.length
+        ? mine.reduce((s, e) => s + e.u, 0) / mine.length
+        : 0.5
+      leftEntries.push({ u, node: lib })
+    }
+    leftEntries.sort((a, b) => a.u - b.u || String(a.node.id).localeCompare(String(b.node.id)))
+    leftRows = leftEntries.map((e) => e.node)
+    void rowIndexOf
   }
-  // 养料库是知识的组织单位，留在左链；位置取它那些基因的中点
-  for (const lib of libs) {
-    const mine = leftEntries.filter((e) => (genesOf.get(lib.id) || []).includes(e.node.id))
-    const u = mine.length
-      ? mine.reduce((s, e) => s + e.u, 0) / mine.length
-      : 0.5
-    leftEntries.push({ u, node: lib })
-  }
-  leftEntries.sort((a, b) => a.u - b.u || String(a.node.id).localeCompare(String(b.node.id)))
-  const leftRows = leftEntries.map((e) => e.node)
 
   // ---- 编号（碱基编号） ----
   // 只写进 meta（普通对象），不碰响应式的节点本身 —— 详见 nodeMeta 的注释
@@ -865,27 +1086,55 @@ function computeLayout() {
   // ---- 坐标 ----
   const leftLen = Math.max(leftRows.length, 1)
   const rightLen = Math.max(rightRows.length, 1)
-  const rows = Math.max(leftLen, rightLen)
   const dens = DENSITY[density.value] || DENSITY.normal
-  const pitch = Math.max(dens.min, Math.min(dens.max, (TARGET_H - PAD_TOP - PAD_BOTTOM) / rows))
-  const span = rows * pitch
-  const H = PAD_TOP + PAD_BOTTOM + span
-
+  const both = showLeft.value && showRight.value
   // 列位置：两链时左右分开；只看一条链时把它放在偏左 32% 处 ——
   // 标题都是往右排的（证据链）或往左排的（知识链），
   // 放在 42% 会让一大半画布空着，标签被挤在中间一小条里。
-  const both = showLeft.value && showRight.value
   const xSingle = W * 0.32
   const xLeft = both ? W * 0.30 : xSingle
   const xRight = both ? W * 0.70 : xSingle
 
   const pos = {}
-  leftRows.forEach((n, i) => {
-    pos[n.id] = { x: xLeft, y: PAD_TOP + (i + 0.5) * (span / leftLen) }
-  })
-  rightRows.forEach((n, i) => {
-    pos[n.id] = { x: xRight, y: PAD_TOP + (i + 0.5) * (span / rightLen) }
-  })
+  let pitch = 24
+  let H = PAD_TOP + PAD_BOTTOM + 24
+  if (focusMode) {
+    // 聚焦模式：两条链**共用同一个行距**。
+    //   之前是各链各用自己的缩放比例（span/leftLen 与 span/rightLen），
+    //   两边行距根本不一样 → 横档永远是斜的，
+    //   而且链长一差好几倍时，「上下对齐」这种承诺根本兑现不了。
+    const total = Math.max(rowSeq.length, 1)
+    pitch = Math.max(dens.min, Math.min(dens.max, (TARGET_H - PAD_TOP - PAD_BOTTOM) / total))
+    const span = total * pitch
+    H = PAD_TOP + PAD_BOTTOM + span
+    rowSeq.forEach((r, i) => {
+      pos[r.id] = { x: r.side === 'l' ? xLeft : xRight, y: PAD_TOP + (i + 0.5) * pitch }
+    })
+    // 出处节点：落在它那一块基因的**正中间**
+    for (const { b, start, end } of blockRanges) {
+      if (!b.srcId) continue
+      const ys = []
+      for (let i = start; i <= end; i++) {
+        if (rowSeq[i].side !== 'l') continue
+        const y = pos[rowSeq[i].id]?.y
+        if (typeof y === 'number') ys.push(y)
+      }
+      if (!ys.length) continue
+      const mid = (ys[0] + ys[ys.length - 1]) / 2
+      pos[b.srcId] = { x: xRight, y: mid }
+    }
+  } else {
+    const rows = Math.max(leftLen, rightLen)
+    pitch = Math.max(dens.min, Math.min(dens.max, (TARGET_H - PAD_TOP - PAD_BOTTOM) / rows))
+    const span = rows * pitch
+    H = PAD_TOP + PAD_BOTTOM + span
+    leftRows.forEach((n, i) => {
+      pos[n.id] = { x: xLeft, y: PAD_TOP + (i + 0.5) * (span / leftLen) }
+    })
+    rightRows.forEach((n, i) => {
+      pos[n.id] = { x: xRight, y: PAD_TOP + (i + 0.5) * (span / rightLen) }
+    })
+  }
 
   layout.value = {
     pos, W, H, leftLen, rightLen, xLeft, xRight, pitch,
@@ -993,6 +1242,30 @@ const hiSet = computed(() => {
 })
 
 /**
+ * 「该亮着的那一组」
+ *
+ * 悬停：整条链 + 对侧邻居（保持现状，挺好 —— 一扫就知道这条链连着谁）。
+ * 选中：**它自己和它的邻居**。
+ *
+ * 为什么选中不能「除了自己全暗」：
+ *   双链图的价值就是「这条知识是从哪儿来的」——
+ *   点一个基因，想看的就是它对面那个出处。
+ *   以前选中会让**除自己以外的所有节点**变暗（包括它自己的出处），
+ *   等于「点一下，要读的那一端就没了」，越点越看不懂。
+ */
+const focusSet = computed(() => {
+  if (hoverId.value) return hiSet.value
+  const id = selected.value?.id
+  if (!id) return new Set()
+  const out = new Set([id])
+  for (const e of visibleEdges.value) {
+    if (e.source === id) out.add(e.target)
+    if (e.target === id) out.add(e.source)
+  }
+  return out
+})
+
+/**
  * 把颜色往背景里压
  *
  * k 是「还剩多少原色」：
@@ -1012,14 +1285,13 @@ function dimmed(color, k = 0.16) {
 
 function buildNodes() {
   const P = palette.value
-  const hi = hiSet.value
-  const dim = hoverId.value && hi.size > 0
+  const hi = focusSet.value
+  const dim = hi.size > 0
   const pos = layout.value.pos
   // 选中的节点要**在图上看得见**。
   // 以前选中只让右侧弹详情框，图上的节点一点变化都没有 ——
   // 「双螺旋定位」跳过去之后，用户根本不知道自己在看哪一个。
   const selId = selected.value?.id || ''
-  const isSelId = (id) => !!selId && id === selId
 
   return nodes.value.map((n) => {
     const p = pos[n.id] || { x: 0, y: 0 }
@@ -1030,7 +1302,7 @@ function buildNodes() {
     const isRec = n.kind === 'record'
     const isLib = n.kind === 'library'
     // 选中一个节点时，其它的退到背景里 —— 只把选中项点亮就够了
-    const faded = (dim && !hi.has(n.id)) || (isSelId(n.id) === false && !!selId)
+    const faded = dim && !hi.has(n.id)
 
     const m = metaOf(n.id)
     const base = isGene ? P[m.base || 'A']
@@ -1162,8 +1434,8 @@ function buildNodes() {
 
 function buildEdges() {
   const P = palette.value
-  const hi = hiSet.value
-  const dim = hoverId.value && hi.size > 0
+  const hi = focusSet.value
+  const dim = hi.size > 0
   const pos = layout.value.pos
   const line = cssVar('--border-strong', '#d1d5dd')
   const primary = cssVar('--primary', '#5b5fc7')
@@ -1261,8 +1533,8 @@ function setLbl(id, el) {
 
 const labels = computed(() => {
   const P = palette.value
-  const hi = hiSet.value
-  const dim = hoverId.value && hi.size > 0
+  const hi = focusSet.value
+  const dim = hi.size > 0
   const selId = selected.value?.id || ''
   const hits = searchHit.value?.direct || null
   const list = []
@@ -1279,13 +1551,26 @@ const labels = computed(() => {
       code: n.kind === 'record' || n.kind === 'section' ? '' : (metaOf(n.id).code || ''),
       color,
       text: n.label || '',
+      // 缩进：挂在文件下面的章节/记录往右让一格 ——
+      //   光靠颜色分不出「这段骨架属于哪份文件」，
+      //   缩进一眼就能看出层级（那面墙看着乱的主因之一）。
+      depth: ownerDocOf.value.has(n.id) ? 1 : 0,
+      // 文件下面挂着多少东西：折叠时给个徽章，点开才知道里面有什么
+      kids: n.kind === 'document' ? (childCountOf.value.get(n.id) || 0) : 0,
       title: `${n.label}\n${metaText(n)}`,
-      dim: (dim && !hi.has(n.id)) || (!!selId && n.id !== selId),
+      dim: dim && !hi.has(n.id),
       sel: n.id === selId,
       hit: !!hits && hits.has(n.id),
     })
   }
   return list
+})
+
+/** 文件 → 下面挂着多少章节/记录（折叠徽章用） */
+const childCountOf = computed(() => {
+  const m = new Map()
+  for (const [docId, kids] of childrenOf.value) m.set(docId, kids.length)
+  return m
 })
 
 /** 选中节点在画布上的位置（给脉冲环用） */
@@ -1911,6 +2196,26 @@ const H = computed(() => layout.value.H)
   transform: translate3d(var(--x), var(--y), 0) translate(calc(-100% - 38px), -50%);
   flex-direction: row-reverse;
   max-width: var(--lbl-max-l, 250px);
+}
+
+/* 徽章：文件下面还挂着几个章节/记录，点它才展开 */
+.dg-lbl-badge {
+  flex: none;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--fill-soft, #eef0f6);
+  color: var(--text-tertiary, #8b90a3);
+  font-size: calc(10px * var(--zoom, 1));
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.dg-lbl-badge:hover {
+  border-color: var(--primary, #5b5fc7);
+  color: var(--primary, #5b5fc7);
 }
 .dg-lbl.r {
   transform: translate3d(var(--x), var(--y), 0) translate(22px, -50%);

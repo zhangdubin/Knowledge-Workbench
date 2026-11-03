@@ -276,8 +276,7 @@
  * 配色全部来自设计令牌（明/暗两套都成立），不写死颜色。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { Network } from 'vis-network/standalone'
-import { DataSet } from 'vis-data/standalone'
+import { DataSet, Network } from 'vis-network/standalone'
 import { ElMessage } from 'element-plus'
 import { cssVar, isDark } from '../utils/theme'
 import {

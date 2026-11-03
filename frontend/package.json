@@ -9,18 +9,19 @@
     "test": "node tests/canvas-fill.test.mjs && node tests/markdown.test.mjs && node tests/notes.test.mjs && node tests/update.test.mjs && node tests/upgrade-verify.test.mjs && node tests/apps.test.mjs && node tests/model-fields.test.mjs && node tests/records.test.mjs && node tests/design.test.mjs && node tests/graph-style.test.mjs && node tests/graph-zoom.test.mjs && node tests/dev.test.mjs && node tests/dev-workspace.test.mjs && node tests/dev-pipeline.test.mjs && node tests/retrieval.test.mjs && node tests/dna-score.test.mjs && node tests/chat-truncate.test.mjs && node tests/note-links.test.mjs"
   },
   "dependencies": {
-    "vue": "^3.5.13",
-    "vue-router": "^4.5.0",
-    "pinia": "^2.3.0",
-    "element-plus": "^2.9.1",
     "@element-plus/icons-vue": "^2.3.1",
     "axios": "^1.7.9",
-    "vis-network": "^9.1.9",
+    "echarts": "^5.5.1",
+    "element-plus": "^2.9.1",
+    "pinia": "^2.3.0",
     "vis-data": "^7.1.9",
-    "echarts": "^5.5.1"
+    "vis-network": "^9.1.9",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
+    "unplugin-vue-components": "^32.1.0",
     "vite": "^6.0.3"
   }
 }

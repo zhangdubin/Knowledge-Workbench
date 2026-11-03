@@ -1,8 +1,9 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
-import 'element-plus/dist/index.css'
+// Element Plus 的基础样式（:root 上的那套 CSS 变量 + 过渡类 + .el-icon）
+// 组件样式由构建器按需引入（见 vite.config.js），
+// 这里必须留 base.css —— 变量少了，页面颜色会全乱。
+import 'element-plus/theme-chalk/base.css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
 
 import App from './App.vue'
@@ -20,9 +21,47 @@ initTheme()
 const app = createApp(App)
 app.use(createPinia())
 app.use(router)
-app.use(ElementPlus)
+// Element Plus 不再整包注册（app.use(ElementPlus)）：
+// 整包注册会把整个库（含没用到的组件和方法）都打进主包。
+// 现在由构建器按模板里真正用到的组件自动引入（见 vite.config.js），
+// 不用维护清单，也不会漏。
 
-for (const [key, comp] of Object.entries(ElementPlusIconsVue)) {
+// ============================================================
+// 图标：只注册项目里真的用到的那些
+//
+// 为什么不能整包注册：
+//   @element-plus/icons-vue 有 2900 多个图标，
+//   `import * as Icons` 再全量注册，会把每一个图标都打进主包 ——
+//   实测主包 1256kB（gzip 404kB）里有相当一部分是根本用不到的图标。
+//   只注册用到的 92 个，图标这块的体积降一个数量级。
+//
+// 怎么维护：
+//   新增图标时把名字加进这个清单（模板里 <el-icon><名字 /></el-icon> 用到的
+//   必须在这里注册，否则页面上那个图标位置是空的）；
+//   组件里具名 import 的图标不用登记。
+//   跑 `python3 scripts/list-icons.py` 可以重新扫一遍清单。
+// ============================================================
+import {
+  Aim, ArrowDown, ArrowLeft, ArrowRight, Back, Bell, Box, Brush,
+  CaretRight, Check, CircleCheck, CircleCheckFilled, CircleCloseFilled,
+  Clock, Close, Coin, Collection, Compass, Connection, CopyDocument,
+  DataAnalysis, DataBoard, DataLine, Delete, Document, DocumentRemove,
+  Download, Edit, EditPen, Files, Filter, FirstAidKit, Folder, FolderAdd,
+  FolderOpened, FullScreen, Grid, Headset, Histogram, HomeFilled,
+  InfoFilled, Key, Lightning, Link, List, Loading, Lock, MagicStick, Memo,
+  Menu, Monitor, MoreFilled, Notebook, Odometer, Operation, Paperclip,
+  Picture, PieChart, Plus, Pointer, Postcard, PriceTag, Printer, Promotion,
+  QuestionFilled, Rank, Reading, Refresh, RefreshLeft, RefreshRight, Right,
+  Search, Select, SetUp, Setting, Share, StarFilled, SwitchButton, Tools,
+  Top, TrendCharts, TrophyBase, Upload, UploadFilled, User, UserFilled,
+  VideoPlay, View, Warning, WarningFilled, ZoomIn, ZoomOut
+} from '@element-plus/icons-vue'
+
+const ICONS = {
+  Aim, ArrowDown, ArrowLeft, ArrowRight, Back, Bell, Box, Brush, CaretRight, Check, CircleCheck, CircleCheckFilled, CircleCloseFilled, Clock, Close, Coin, Collection, Compass, Connection, CopyDocument, DataAnalysis, DataBoard, DataLine, Delete, Document, DocumentRemove, Download, Edit, EditPen, Files, Filter, FirstAidKit, Folder, FolderAdd, FolderOpened, FullScreen, Grid, Headset, Histogram, HomeFilled, InfoFilled, Key, Lightning, Link, List, Loading, Lock, MagicStick, Memo, Menu, Monitor, MoreFilled, Notebook, Odometer, Operation, Paperclip, Picture, PieChart, Plus, Pointer, Postcard, PriceTag, Printer, Promotion, QuestionFilled, Rank, Reading, Refresh, RefreshLeft, RefreshRight, Right, Search, Select, SetUp, Setting, Share, StarFilled, SwitchButton, Tools, Top, TrendCharts, TrophyBase, Upload, UploadFilled, User, UserFilled, VideoPlay, View, Warning, WarningFilled, ZoomIn, ZoomOut,
+}
+
+for (const [key, comp] of Object.entries(ICONS)) {
   app.component(key, comp)
 }
 

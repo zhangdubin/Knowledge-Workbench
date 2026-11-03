@@ -29,16 +29,16 @@
  *     按钮不会被挤成两行或者溢出屏幕
  */
 import { computed } from 'vue'
-import * as ElementPlusIcons from '@element-plus/icons-vue'
+import { PAGE_ICONS, FALLBACK_ICON } from './pageIcons'
 
-// 图标直接用整个 Element Plus 图标包，不再维护 ICON_MAP。
+// 图标从 pageIcons.js 那张表里取 —— 不再整包 import。
 //
-// 为什么改：原来有一份 ICON_MAP + 一份 validator 数组，两处都得同步 ——
-// 而「新增图标只要两处同步即可」这句注释骗了人（实际漏一处就静默回退成工作台图标）。
-// 踩过：回收站与导航管理两个页面的标题图标长得一模一样（都是工作台那个表盘），
-// 用户看到的是「图标一样」，不是「报错了」，这种症状比报错更难查。
+// 为什么不用整包：`import * as` 是动态访问，rollup 摇不了树，
+// 2900 多个图标（未压缩 316kB）会整个进主包，用户首屏白下几十 kB。
 //
-// 现在图标本身从包里取 —— 以后用任何 Element Plus 图标都不会再漏。
+// 「漏配就静默回退成工作台图标」的老坑怎么办：
+//   由 scripts/verify-page-icons.py 在构建期扫全项目的 icon-key，
+//   表里没有就直接失败 —— 不用等用户看见两个页面图标长得一样。
 //
 // ⚠️ validator 里只能用**字面量**：defineProps 会被提升到 setup() 之外，
 //    不能引用模块里的变量（引用了直接编译报错，整个组件 500）。
@@ -55,7 +55,7 @@ const props = defineProps({
   },
 })
 
-const icon = computed(() => ElementPlusIcons[props.iconKey] || ElementPlusIcons.Odometer)
+const icon = computed(() => PAGE_ICONS[props.iconKey] || FALLBACK_ICON)
 const descText = computed(() => props.description || props.subtitle)
 </script>
 

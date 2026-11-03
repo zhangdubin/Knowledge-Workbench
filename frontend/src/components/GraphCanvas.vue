@@ -205,8 +205,7 @@
  * 对外只暴露三件事：nodes / edges 输入，select / recenter 两个意图事件。
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { Network } from 'vis-network/standalone'
-import { DataSet } from 'vis-data/standalone'
+import { DataSet, Network } from 'vis-network/standalone'
 import { chartTheme, cssVar, isDark } from '../utils/theme'
 import {
   viaMeta, minScaleFor,
@@ -251,6 +250,8 @@ const zoomClamped = ref(false)
 const labelTier = ref(LABEL_TIER.full)
 
 const network = shallowRef(null)
+// 图谱相关的清理动作（事件监听等）：组件卸载时统一撤掉
+const graphCleanups = []
 const nodesDS = shallowRef(null)
 const edgesDS = shallowRef(null)
 const built = shallowRef({ nodes: [], edges: [] })
@@ -711,12 +712,16 @@ function createNetwork() {
   net.on('dragEnd', () => { /* 拖动后不重排，交给用户 */ })
   // 指针离开画布时把悬停状态清掉：
   // 否则关系名会一直浮在图上，鼠标都已经不在图里了
-  host.value?.addEventListener('mouseleave', () => {
+  // 监听器要留着句柄：匿名函数卸载时没法移除，
+  // 组件销毁后监听还在 → 指针再进出这块区域就会去操作已经销毁的 network。
+  const onMouseLeave = () => {
     hoverNodeId.value = null
     hoverEdgeId.value = null
     highlight(null)
     applyEdgeLabels()
-  })
+  }
+  host.value?.addEventListener('mouseleave', onMouseLeave)
+  graphCleanups.push(() => host.value?.removeEventListener('mouseleave', onMouseLeave))
   return net
 }
 
@@ -911,6 +916,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', measure)
   stopTipTimer()
+  // 撤掉画布上的事件监听
+  while (graphCleanups.length) {
+    try { graphCleanups.pop()() } catch { /* 清理失败不影响卸载 */ }
+  }
   // 别把已销毁的 network 留在 window 上：
   // 验收脚本会读它，拿到的却是上一张图的「尸体」，测出来的东西全是错的
   if (window.__kbGraph === network.value) window.__kbGraph = null

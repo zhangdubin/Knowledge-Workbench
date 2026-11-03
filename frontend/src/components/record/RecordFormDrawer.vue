@@ -74,6 +74,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Api } from '../../api'
 import RecordFieldInput from './RecordFieldInput.vue'
+// 记录改名/新增/删除后，外键位置的显示名要跟着变 —— 让缓存失效一次
+import { clearRefLabelCache } from './useRecordFields.js'
 import { coerceRecordData, validateRecordData } from '../../utils/recordFields.js'
 
 const props = defineProps({
@@ -144,6 +146,8 @@ async function save() {
       await Api.createRecord(props.entityType.id, payload)
       ElMessage.success('已创建')
     }
+    // 名字变了，别人记录里的外键显示名也要跟着变
+    clearRefLabelCache()
     emit('saved', props.record)
     close()
   } catch (e) {

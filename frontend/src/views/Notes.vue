@@ -175,24 +175,24 @@
           tabindex="-1"
         >
           <li
-            v-for="(n, idx) in visibleItems"
-            :key="n.id"
+            v-for="(row, idx) in rows"
+            :key="row.n.id"
             class="note-row"
             :class="{ 'is-active': idx === cursor }"
             role="option"
             :aria-selected="idx === cursor"
             tabindex="-1"
-            @click="openNote(n.id)"
+            @click="openNote(row.n.id)"
             @mouseenter="cursor = idx"
           >
             <span class="note-row-icon"><el-icon><Document /></el-icon></span>
             <div class="note-row-body">
               <div class="note-row-top">
-                <span class="note-row-title">{{ titleOf(n) }}</span>
-                <span v-if="!n.data?.content" class="note-row-empty">空</span>
+                <span class="note-row-title">{{ row.title }}</span>
+                <span v-if="!row.n.data?.content" class="note-row-empty">空</span>
                 <span class="note-row-chips">
                   <button
-                    v-for="t in (n.data?.tags || []).slice(0, 4)"
+                    v-for="t in (row.n.data?.tags || []).slice(0, 4)"
                     :key="t"
                     class="note-chip"
                     type="button"
@@ -201,7 +201,7 @@
                   >#{{ t }}</button>
                 </span>
               </div>
-              <div class="note-row-snippet">{{ snippetOf(n) }}</div>
+              <div class="note-row-snippet">{{ row.snippet }}</div>
             </div>
             <div class="note-row-meta">
               <!-- 正在按某个分组看的时候，每行都挂同一个分组标签是纯噪音。
@@ -209,24 +209,24 @@
               <span
                 v-if="groupsAvailable"
                 class="note-row-group-slot"
-                :class="{ 'is-hidden': inFilteredGroup(n) }"
+                :class="{ 'is-hidden': row.inGroup }"
               >
                 <NoteGroupBadge
-                  v-if="!inFilteredGroup(n)"
-                  :name="groupNameOf(groupIdOfNote(n))"
-                  :color="groupColorOfNote(n)"
-                  :muted="!groupIdOfNote(n)"
+                  v-if="!row.inGroup"
+                  :name="row.groupName"
+                  :color="row.groupColor"
+                  :muted="!row.groupId"
                 />
               </span>
-              <span class="note-row-time" :title="formatTime(n.updated_at)">
-                {{ relativeOf(n) }}
+              <span class="note-row-time" :title="formatTime(row.updatedAt)">
+                {{ row.relative }}
               </span>
               <button
                 class="note-row-del"
                 type="button"
-                :aria-label="`删除笔记 ${titleOf(n)}`"
+                :aria-label="`删除笔记 ${row.title}`"
                 title="删除"
-                @click.stop="confirmDelete(n)"
+                @click.stop="confirmDelete(row.n)"
               >
                 <el-icon><Delete /></el-icon>
               </button>
@@ -235,7 +235,21 @@
         </ul>
 
         <!-- 空状态 -->
-        <div v-if="!visibleItems.length && !loading" class="notes-empty">
+        <!-- 加载失败：和「没有笔记」分开说，别把人往错方向引导 -->
+        <div v-if="loadError && !loading" class="notes-empty">
+          <div class="notes-empty-icon">
+            <el-icon :size="26"><WarningFilled /></el-icon>
+          </div>
+          <div class="notes-empty-title">笔记没加载出来</div>
+          <div class="notes-empty-desc">{{ loadError }}</div>
+          <div class="notes-empty-actions">
+            <el-button type="primary" size="small" @click="load()">
+              <el-icon><Refresh /></el-icon>重新加载
+            </el-button>
+          </div>
+        </div>
+
+        <div v-else-if="!visibleItems.length && !loading" class="notes-empty">
           <template v-if="isGroupEmpty">
             <div class="notes-empty-icon">
               <el-icon :size="26"><FolderOpened /></el-icon>
@@ -313,6 +327,12 @@ const allTags = ref([])
 const page = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
+// 加载失败的原因（空字符串 = 没失败）
+//
+// 为什么要有它：接口失败和「还没有笔记」在页面上长得一模一样，
+// 用户会以为是自己没写笔记，其实是接口挂了 ——
+// 该说清楚的时候要说清楚。
+const loadError = ref('')
 const viewMode = ref('list')
 
 // 分组：null = 全部笔记；0 = 未分组；>0 = 具体分组 id
@@ -357,6 +377,33 @@ const filtered = computed(() => {
   return list
 })
 const visibleItems = computed(() => filtered.value)
+
+/**
+ * 列表行：把每行要显示的东西一次算好
+ *
+ * 为什么要有这个：
+ *   原来模板里每行都直接调函数（titleOf / snippetOf / relativeOf /
+ *   groupIdOfNote …）。snippetOf 里的 stripMarkdown 要跑 8 条正则，
+ *   鼠标扫过一行（@mouseenter 改 cursor）就整表重渲染一次。
+ *   实测 500 行 × 6.7kB 正文，单次重渲染 29ms —— 鼠标一扫就卡一下。
+ *
+ *   现在这些值在 computed 里算一次，模板只读字段：
+ *   数据没变时根本不重算，鼠标扫过也不再触发正则。
+ */
+const rows = computed(() => visibleItems.value.map((n) => {
+  const gid = groupIdOfNote(n)
+  return {
+    n,
+    title: titleOf(n),
+    snippet: snippetOf(n),
+    relative: relativeOf(n),
+    updatedAt: n?.updated_at,
+    groupId: gid,
+    groupName: groupNameOf(gid),
+    groupColor: groupColorOfNote(n),
+    inGroup: inFilteredGroup(n),
+  }
+}))
 
 // ===== 打印 =====
 // 没有笔记可打的时候别打白纸：先说一声，用户自己决定要不要换个筛选条件
@@ -436,6 +483,7 @@ async function load(p) {
   if (!noteTypeId.value) return
   if (p) page.value = p
   loading.value = true
+  loadError.value = ''
   try {
     const tagFiltering = !!tagFilter.value
     const groupFiltering = groupId.value !== null
@@ -483,6 +531,10 @@ async function load(p) {
     }
     // 游标保持在合法范围内
     if (cursor.value >= visibleItems.value.length) cursor.value = visibleItems.value.length - 1
+  } catch (e) {
+    // 失败要说出来，别假装成「没有笔记」
+    const detail = e?.response?.data?.detail
+    loadError.value = detail ? `加载失败：${detail}` : '加载失败，请检查网络或服务状态后重试'
   } finally {
     loading.value = false
   }

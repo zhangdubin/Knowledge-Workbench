@@ -381,7 +381,7 @@
           class="nd-link-search"
           placeholder="搜索记录（按名称/标题）"
           clearable
-          @input="searchLinkCandidates"
+          @input="onLinkSearchInput"
           @clear="searchLinkCandidates"
         />
       </div>
@@ -681,6 +681,19 @@ function onLinkTypeChange() {
   searchLinkCandidates()
 }
 
+/**
+ * 关联记录搜索：输入防抖
+ *
+ * 为什么：原来每敲一个字就打一次后端（/api/records?keyword=…），
+ * 打字快时一个词能打出去七八次 —— 后端白忙，界面还闪。
+ * 同项目里的 RelationLinker 早就是 280ms 防抖了，这里照它来。
+ */
+let linkSearchTimer = null
+function onLinkSearchInput() {
+  clearTimeout(linkSearchTimer)
+  linkSearchTimer = setTimeout(searchLinkCandidates, 280)
+}
+
 async function searchLinkCandidates() {
   if (!linkForm.typeId) {
     linkCandidates.value = []
@@ -913,6 +926,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  // 定时器不撤的话，离开页面后它还会触发一次搜索（对着已经销毁的组件）
+  clearTimeout(linkSearchTimer)
 })
 
 watch(noteId, async () => {

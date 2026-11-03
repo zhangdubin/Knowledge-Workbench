@@ -17,6 +17,11 @@ export function formatDate(t) {
   return d.toISOString().slice(0, 10)
 }
 
+// 千分位数字：中文习惯用逗号分组
+export function formatNumber(n) {
+  return (n || 0).toLocaleString('zh-CN')
+}
+
 export function formatSize(bytes) {
   if (!bytes) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB']

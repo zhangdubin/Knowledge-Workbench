@@ -103,6 +103,16 @@
           @open="openDetail"
         />
       </template>
+      <div v-else-if="loadError" class="empty-state" style="border:none;box-shadow:none">
+        <div class="empty-icon"><el-icon :size="32"><WarningFilled /></el-icon></div>
+        <div class="empty-title">记录没加载出来</div>
+        <div class="empty-desc">{{ loadError }}</div>
+        <div class="empty-actions">
+          <el-button type="primary" @click="load()">
+            <el-icon><Refresh /></el-icon>重新加载
+          </el-button>
+        </div>
+      </div>
       <div v-else-if="!loading" class="empty-state" style="border:none;box-shadow:none">
         <div class="empty-icon"><el-icon :size="32"><Document /></el-icon></div>
         <div class="empty-title">暂无记录</div>
@@ -195,6 +205,13 @@ function onPrint() {
   printPage()
 }
 const loading = ref(false)
+// 加载失败的原因（空字符串 = 没失败）
+//
+// 为什么要有它：接口失败和「还没有数据」在页面上长得一模一样 ——
+// 都显示「暂无记录，点击新建记录」。用户以为是自己没数据，
+// 实际上是后端挂了/网络断了，只能干瞪眼。
+// 失败时单独显示原因 + 重试按钮，别把人往错方向引导。
+const loadError = ref('')
 const keyword = ref('')
 const page = ref(1)
 const pageSize = ref(20)
@@ -233,6 +250,7 @@ const canManage = computed(() => {
 async function load(p) {
   if (p) page.value = p
   loading.value = true
+  loadError.value = ''
   try {
     const active = filterParams()
     data.value = await Api.listRecords(typeId.value, {
@@ -243,6 +261,10 @@ async function load(p) {
       // 超过这个数后面的记录筛不到，分页数字也是假的
       filters: Object.keys(active).length ? JSON.stringify(active) : undefined,
     })
+  } catch (e) {
+    // 失败要说出来，别假装成「没有数据」
+    const detail = e?.response?.data?.detail
+    loadError.value = detail ? `加载失败：${detail}` : '加载失败，请检查网络或服务状态后重试'
   } finally {
     loading.value = false
   }

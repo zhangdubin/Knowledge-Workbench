@@ -929,7 +929,14 @@ function syncNarrow() {
 }
 syncNarrow()
 narrowMq.addEventListener('change', syncNarrow)
-onBeforeUnmount(() => narrowMq.removeEventListener('change', syncNarrow))
+onBeforeUnmount(() => {
+  narrowMq.removeEventListener('change', syncNarrow)
+  // 撤掉上传收尾的定时器：否则离开页面后它还会再拉一次文件列表
+  if (uploadSettleTimer) {
+    clearTimeout(uploadSettleTimer)
+    uploadSettleTimer = null
+  }
+})
 
 const viewMode = ref(narrow.value ? 'grid' : 'list')
 const loading = ref(false)
@@ -1544,12 +1551,17 @@ async function uploadFiles(fileList) {
   const okCount = uploading.value.filter(u => u.status === 'success').length
   if (okCount) ElMessage.success(`已上传 ${okCount} 个文件`)
 
-  setTimeout(() => {
+  // 定时器要留着句柄：组件卸载后它还会触发 loadFiles()，
+  // 那时组件已经销毁了 —— 属于「离开页面还在偷偷发请求」。
+  uploadSettleTimer = setTimeout(() => {
     uploading.value = uploading.value.filter(u => u.status === 'success')
     loadFiles()
   }, 2200)
 }
 
+
+// 上传完成后延迟收尾的定时器
+let uploadSettleTimer = null
 
 function removeUpload(u) {
   uploading.value = uploading.value.filter(x => x !== u)

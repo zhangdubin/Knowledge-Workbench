@@ -98,7 +98,7 @@
             <div class="metric">
               <div class="metric-num">{{ formatNumber(overview.totals.words) }}</div>
               <div class="metric-label">总字数</div>
-              <div class="metric-sub">{{ formatBytes(overview.totals.db_bytes) }} 库体积</div>
+              <div class="metric-sub">{{ formatSize(overview.totals.db_bytes) }} 库体积</div>
             </div>
             <div class="metric">
               <div class="metric-num">
@@ -495,6 +495,8 @@ import { ElMessage } from 'element-plus'
 import PageTitle from '../components/PageTitle.vue'
 import DnaGraph from '../components/DnaGraph.vue'
 import { Api } from '../api'
+// 时间/体积格式化统一走这里（本地时间，和其它页面一致）
+import { formatNumber, formatSize, formatTime } from '../utils/format.js'
 
 /** 报告目录：七节，编号与页面上的节号一致 */
 const SECTIONS = [
@@ -794,26 +796,10 @@ function sourceLabel(key) {
   return { upload: '上传', migrated: '历史迁移', api: '接口写入' }[key] || key || '未知'
 }
 
-function formatBytes(n) {
-  if (!n) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let v = n
-  let i = 0
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024
-    i++
-  }
-  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
-}
-
-function formatNumber(n) {
-  return (n || 0).toLocaleString('zh-CN')
-}
-
-function formatTime(iso) {
-  if (!iso) return ''
-  return String(iso).replace('T', ' ').slice(0, 16)
-}
+// 时间与体积统一用 utils/format.js ——
+// 这里原来自己写了一份 formatTime，是把 ISO 字符串直接切前 16 位，
+// 那是 **UTC** 时间，比别处（本地时间）差 8 小时。
+// 页面上「生成于」的时间比别的页面对不上，根因就是这一份。
 
 function detailFor(id) {
   return details.value[id] || { loading: false, data: null }

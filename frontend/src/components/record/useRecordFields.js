@@ -47,22 +47,42 @@ export function useRecordFields(entityTypeRef, { allTypesRef } = {}) {
   /**
    * 拉取外键目标的记录名
    * 为什么要有这一步：外键字段存的是记录 id，直接显示 12 用户根本认不出来。
+   *
+   * 为什么改成「并行 + 跨页面缓存」：
+   *   原来这里是**串行**的 for 循环里 await，而且每打开一条记录就重来一遍 ——
+   *   一个带 3 个外键字段的模型，点开一条记录 = 3 个请求 × 200 条记录，
+   *   换一条记录再来一遍。用户能直接感觉到「点一下卡一下」。
+   *   目标模型的记录名很少变，缓存一次就够；改了名字再失效一次（见 clearRefLabelCache）。
    */
   async function loadRefLabels() {
     const types = allTypesRef?.value || []
-    const next = { ...refLabels.value }
+
+    // 这次要拉哪些目标模型（同一个目标只算一次）
+    const targets = []
     for (const f of fields.value) {
       if (!isReferenceType(f.type)) continue
       const tkey = f.options?.target
       if (!tkey) continue
       const et = types.find(t => t.key === tkey)
       if (!et) continue
-      try {
-        const r = await Api.listRecords(et.id, { page_size: 200 })
-        for (const rec of (r.items || [])) {
-          next[`${tkey}:${rec.id}`] = rec.data?.name || rec.data?.title || rec.data?.code || `#${rec.id}`
-        }
-      } catch { /* 目标模型取不到就不显示名字，退化成 id */ }
+      if (targets.some(t => t.tkey === tkey)) continue
+      targets.push({ tkey, et })
+    }
+    if (!targets.length) return
+
+    // 并行拉取；缓存里存的是 Promise —— 并发调用时也只会发一次请求
+    const maps = await Promise.all(targets.map(async ({ tkey, et }) => {
+      if (!refLabelCache.has(tkey)) {
+        refLabelCache.set(tkey, fetchRefLabelsOf(tkey, et).catch(() => ({})))
+      }
+      return [tkey, await refLabelCache.get(tkey)]
+    }))
+
+    const next = { ...refLabels.value }
+    for (const [tkey, map] of maps) {
+      for (const [id, label] of Object.entries(map || {})) {
+        next[`${tkey}:${id}`] = label
+      }
     }
     refLabels.value = next
   }
@@ -71,6 +91,34 @@ export function useRecordFields(entityTypeRef, { allTypesRef } = {}) {
     fields, displayFields, cardFields, filterFields, choicesMap,
     refLabels, loadRefLabels,
   }
+}
+
+/**
+ * 外键显示名的跨页面缓存：目标模型 key → { 记录id → 名称 }
+ *
+ * 为什么放在模块级（而不是组件里）：
+ *   记录页、应用独立页用的是同一个组合式函数，
+ *   缓存放在组件里等于两边各拉一遍；放模块级两边共用一份。
+ */
+const refLabelCache = new Map()
+
+async function fetchRefLabelsOf(tkey, et) {
+  const r = await Api.listRecords(et.id, { page_size: 200 })
+  const map = {}
+  for (const rec of (r.items || [])) {
+    map[rec.id] = rec.data?.name || rec.data?.title || rec.data?.code || `#${rec.id}`
+  }
+  return map
+}
+
+/**
+ * 外键显示名缓存失效
+ *
+ * 什么时候要调：记录改名/新增/删除之后 ——
+ * 否则外键位置还会显示旧名字（要等整页刷新才对）。
+ */
+export function clearRefLabelCache() {
+  refLabelCache.clear()
 }
 
 /**

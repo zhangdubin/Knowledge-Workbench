@@ -26,6 +26,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import re
@@ -1098,6 +1099,17 @@ def _score(checks: list[dict]) -> int:
     return max(0, score)
 
 
+async def _analyze_async(snap: dict) -> dict:
+    """把纯计算丢到线程池，别占着事件循环
+
+    为什么：_analyze 是 CPU 密集的（每篇全文做 2-gram 滑窗建词频），
+    单篇正文上限 400KB，几百篇就是几千万次字典操作。
+    直接在 async 函数里调用会把事件循环卡住 ——
+    那一刻所有并发请求（包括首页这种轻请求）全都排队。
+    """
+    return await asyncio.to_thread(_analyze, snap)
+
+
 def _analyze(snap: dict) -> dict:
     """纯计算：把快照变成成分、结构树、指纹与体检结论"""
     docs: list[Document] = snap["docs"]
@@ -1189,7 +1201,7 @@ def _analyze(snap: dict) -> dict:
 async def build_overview(db: AsyncSession, principal: Principal) -> dict:
     """总览：成分 + 指纹 + 体检 + 健康分"""
     snap = await _snapshot(db, principal)
-    ana = _analyze(snap)
+    ana = await _analyze_async(snap)
     return {
         "generated_at": snap["generated_at"],
         "totals": ana["totals"],
@@ -1205,14 +1217,14 @@ async def build_overview(db: AsyncSession, principal: Principal) -> dict:
 async def build_documents(db: AsyncSession, principal: Principal) -> dict:
     """文档谱系列表"""
     snap = await _snapshot(db, principal)
-    ana = _analyze(snap)
+    ana = await _analyze_async(snap)
     return {"items": ana["items"]}
 
 
 async def build_tree(db: AsyncSession, principal: Principal) -> dict:
     """全库结构索引（OpenKB index.md 的等价物）"""
     snap = await _snapshot(db, principal)
-    ana = _analyze(snap)
+    ana = await _analyze_async(snap)
     return {"items": [
         {"id": it["id"], "title": it["title"], "words": it["words"],
          "ext": it.get("ext", ""), "kind": it.get("kind", ""),
@@ -1227,7 +1239,7 @@ async def build_document_detail(db: AsyncSession, principal: Principal,
                                 doc_id: int) -> dict | None:
     """单篇 DNA：结构树 + 块清单 + 主题词 + 关联 + 这篇的问题"""
     snap = await _snapshot(db, principal)
-    ana = _analyze(snap)
+    ana = await _analyze_async(snap)
     item = next((it for it in ana["items"] if it["id"] == doc_id), None)
     if item is None:
         return None
@@ -1290,7 +1302,7 @@ async def build_document_detail(db: AsyncSession, principal: Principal,
 async def build_report_json(db: AsyncSession, principal: Principal) -> dict:
     """完整 JSON 报告（overview + documents + tree）"""
     snap = await _snapshot(db, principal)
-    ana = _analyze(snap)
+    ana = await _analyze_async(snap)
     return {
         "generated_at": snap["generated_at"],
         "overview": {
@@ -1436,7 +1448,7 @@ async def build_graph(db: AsyncSession, principal: Principal) -> dict:
         principal = Principal(None, admin_perms(), auth_disabled=True)
 
     snap = await _snapshot(db, principal)
-    ana = _analyze(snap)
+    ana = await _analyze_async(snap)
     doc_items = {it["id"]: it for it in ana["items"]}
 
     # 记录侧脉络：业务关联（记录 ↔ 记录 / 文件）与笔记双链

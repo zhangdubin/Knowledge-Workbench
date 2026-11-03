@@ -373,21 +373,31 @@ def serialize(doc: Document, *, with_text: bool = False,
     return out
 
 
-async def _links_of(db: AsyncSession, doc_id: int) -> list[dict]:
+async def _links_of_many(db: AsyncSession, doc_ids: list[int]) -> dict[int, list[dict]]:
+    """一次取回多个文件的关联记录，按文件 id 分组
+
+    为什么要有这个批量版本：
+      列表接口原来对**每个文件**单独调一次 _links_of —— N+1。
+      一页 24 个文件 = 24 次查询，页大小上限 500 = 500 次，
+      而且全是串行 await，每次一次网络往返。
+      「文件一多就卡」的主因之一就是它。
+    """
+    if not doc_ids:
+        return {}
     q = (
         select(DocumentLink, EntityRecord, EntityType)
         .join(EntityRecord, EntityRecord.id == DocumentLink.record_id, isouter=True)
         .join(EntityType, EntityType.id == EntityRecord.entity_type_id, isouter=True)
-        .where(DocumentLink.document_id == doc_id)
+        .where(DocumentLink.document_id.in_(doc_ids))
     )
     rows = (await db.execute(q)).all()
-    out = []
+    out: dict[int, list[dict]] = {}
     for link, rec, et in rows:
         label = ""
         if rec:
             d = rec.data or {}
             label = d.get("name") or d.get("title") or d.get("code") or f"#{rec.id}"
-        out.append({
+        out.setdefault(link.document_id, []).append({
             "link_id": link.id,
             "record_id": link.record_id,
             "field_key": link.field_key,
@@ -398,6 +408,26 @@ async def _links_of(db: AsyncSession, doc_id: int) -> list[dict]:
             "entity_type_icon": et.icon if et else None,
         })
     return out
+
+
+async def _chunk_counts(db: AsyncSession, doc_ids: list[int]) -> dict[int, int]:
+    """一次算出多个文件的分块数
+
+    为什么：原来每个文件单独 count 一次，一页 N 条就是 N 次查询。
+    """
+    if not doc_ids:
+        return {}
+    q = (
+        select(DocumentChunk.document_id, func.count(DocumentChunk.id))
+        .where(DocumentChunk.document_id.in_(doc_ids))
+        .group_by(DocumentChunk.document_id)
+    )
+    return {doc_id: n for doc_id, n in (await db.execute(q)).all()}
+
+
+async def _links_of(db: AsyncSession, doc_id: int) -> list[dict]:
+    out = await _links_of_many(db, [doc_id])
+    return out.get(doc_id) or []
 
 
 # ---------- 结构化元数据（JSON） ----------
@@ -822,18 +852,21 @@ async def list_documents(
     q = q.options(defer(Document.data))
     docs = (await db.execute(q)).scalars().all()
 
+    # 关联记录与分块数：一次批量查回来，别在循环里逐条查（N+1）
+    doc_ids = [d.id for d in docs]
+    links_by_doc = await _links_of_many(db, doc_ids)
+    chunk_count_by_doc = await _chunk_counts(db, doc_ids)
+
     items = []
     for d in docs:
-        links = await _links_of(db, d.id)
+        links = links_by_doc.get(d.id) or []
         # 读不到的关联记录整条去掉：里面带着记录标题与模型名，
         # 留着等于在列表里泄露「有个叫 XXX 的商机/合同」
         if read_keys is not None:
             links = [l for l in links
                      if (l.get("entity_type_key") or "") in read_keys]
         item = serialize(d, links=links)
-        item["chunk_count"] = (await db.execute(
-            select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == d.id)
-        )).scalar() or 0
+        item["chunk_count"] = chunk_count_by_doc.get(d.id, 0)
         items.append(item)
 
     # 一次性补「关联定义」通道（按源/目标的文件 id 命中 doc_ids 归组）
@@ -866,26 +899,54 @@ async def list_documents(
 
 
 async def stats(db: AsyncSession) -> dict:
+    """文件统计
+
+    为什么改成一条 GROUP BY：
+      原来这里是 11 条独立的 COUNT —— 每条都要扫一遍 document 表。
+      列表接口每调一次 stats 就多 11 次全表扫，
+      页面上「数据中心」这个计数条刷新一次就抖一次。
+      现在 kind × embed_status 一次分组出来，数字口径完全一样。
+    """
     live = Document.deleted_at.is_(None)
 
-    async def cnt(*extra):
-        return (await db.execute(
-            select(func.count(Document.id)).where(live, *extra)
-        )).scalar() or 0
+    q = (
+        select(
+            Document.kind,
+            Document.embed_status,
+            func.count(Document.id),
+            func.coalesce(func.sum(Document.size), 0),
+        )
+        .where(live)
+        .group_by(Document.kind, Document.embed_status)
+    )
+    rows = (await db.execute(q)).all()
+
+    by_kind: dict[str, int] = {}
+    indexed = pending = failed = 0
+    total = 0
+    total_size = 0
+    for kind, embed_status, count, size in rows:
+        by_kind[kind] = by_kind.get(kind, 0) + count
+        total += count
+        total_size += size or 0
+        if embed_status == "ok":
+            indexed += count
+        elif embed_status in ("pending", "partial"):
+            pending += count
+        elif embed_status == "failed":
+            failed += count
 
     return {
-        "total": await cnt(),
-        "doc": await cnt(Document.kind == "doc"),
-        "image": await cnt(Document.kind == "image"),
-        "video": await cnt(Document.kind == "video"),
-        "audio": await cnt(Document.kind == "audio"),
-        "other": await cnt(Document.kind == "other"),
-        "indexed": await cnt(Document.embed_status == "ok"),
-        "pending": await cnt(Document.embed_status.in_(("pending", "partial"))),
-        "failed": await cnt(Document.embed_status == "failed"),
-        "totalSize": (await db.execute(
-            select(func.coalesce(func.sum(Document.size), 0)).where(live)
-        )).scalar() or 0,
+        "total": total,
+        "doc": by_kind.get("doc", 0),
+        "image": by_kind.get("image", 0),
+        "video": by_kind.get("video", 0),
+        "audio": by_kind.get("audio", 0),
+        "other": by_kind.get("other", 0),
+        "indexed": indexed,
+        "pending": pending,
+        "failed": failed,
+        "totalSize": total_size,
         "deleted": (await db.execute(
             select(func.count(Document.id)).where(Document.deleted_at.is_not(None))
         )).scalar() or 0,

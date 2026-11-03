@@ -20,8 +20,11 @@ import os
 import sqlite3
 
 from sqlalchemy import event, text
+# Delete/Insert/Update 从 sqlalchemy.sql.expression 取：
+# sqlalchemy 顶层这几个名字是 2.0 才有的，老版本（1.4）在顶层取不到。
+from sqlalchemy.sql.expression import Delete, Insert, Update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Session
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from .config import settings
@@ -107,6 +110,26 @@ def is_transient_db_error(exc: BaseException) -> bool:
     return any(m in msg for m in _TRANSIENT_SQLITE_MARKERS)
 
 
+def _is_write_statement(stmt) -> bool:
+    """这条语句会不会改数据
+
+    为什么要判断：会话层重试前要 rollback 整个事务，
+    而重试只重跑失败的那一条 —— 事务里已经有写入时不能这么干
+    （见 RetryingAsyncSession 的注释）。
+    """
+    if stmt is None:
+        return False
+    # ORM 的 Insert / Update / Delete
+    if isinstance(stmt, (Insert, Update, Delete)):
+        return True
+    # 原生 SQL：只能看开头那点关键字
+    text_value = getattr(stmt, "text", None)
+    if isinstance(text_value, str):
+        head = text_value.strip().lower()[:12]
+        return head.startswith(("insert ", "update ", "delete ", "insert\n", "replace "))
+    return False
+
+
 class RetryingAsyncSession(AsyncSession):
     """遇到瞬时 I/O 错误自动重试的会话
 
@@ -118,15 +141,40 @@ class RetryingAsyncSession(AsyncSession):
     重试前必须 rollback：失败的语句已经把事务打断了，
     不回滚的话下一次执行会带着一个坏掉的事务去跑，
     报错会变得莫名其妙（「cannot start a transaction within a transaction」）。
+
+    ⚠️ 但**事务里已经有写操作时不重试**（见 _kb_has_writes）：
+    rollback() 回滚的是整个事务，而重试只重跑失败的那一条语句 ——
+    于是「前面已经写进去的东西」被冲掉了，「重试成功的那一条」却留下了。
+    踩过：文档入库时先 flush 写了文档行，紧接着的 FTS 插入遇到瞬时锁，
+    回滚把文档行冲掉 → 重试成功 → commit 提交了 FTS 行 →
+    库里留下指向不存在文档的 FTS 行，接口照样返回 200，文件静默丢失。
+    这种「成功返回一个缺了数据的库」比直接报错难查得多，
+    所以宁可把错误抛出去（整个事务回滚、调用方看得见），也不在有写入时重试。
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 本事务里是否已经写进过东西（由 execute / after_flush 标记）
+        self._kb_has_writes = False
+
     async def execute(self, *args, **kwargs):
+        # 写语句先记一笔：后面遇到瞬时错误时靠它决定能不能重试
+        stmt = args[0] if args else kwargs.get("statement")
+        if _is_write_statement(stmt):
+            self._kb_has_writes = True
+
         attempts = 3
         for attempt in range(attempts):
             try:
                 return await super().execute(*args, **kwargs)
             except Exception as e:
                 if attempt >= attempts - 1 or not is_transient_db_error(e):
+                    raise
+                if self._kb_has_writes:
+                    log.warning(
+                        "数据库瞬时错误，但本事务已有写操作，不再重试（避免回滚丢掉已写入的数据）：%s",
+                        e,
+                    )
                     raise
                 log.warning("数据库瞬时错误，重试第 %d 次：%s", attempt + 1, e)
                 try:
@@ -138,6 +186,17 @@ class RetryingAsyncSession(AsyncSession):
 
 SessionLocal = async_sessionmaker(engine, class_=RetryingAsyncSession,
                                  expire_on_commit=False)
+
+
+@event.listens_for(Session, "after_flush")
+def _mark_session_has_writes(session, flush_context):
+    """ORM 刷过盘就算「这个事务写进东西了」
+
+    为什么单独挂一个监听：add()/delete() 之后 flush 才真正写库，
+    而 flush 可能发生在任何一条语句之前 —— 只有 flush 事件能准确回答
+    「事务里已经有写入了吗」。
+    """
+    session._kb_has_writes = True
 
 
 @event.listens_for(engine.sync_engine, "connect")

@@ -119,9 +119,16 @@ def _loop(name: str, interval_s: float, fn, *, on_done=None):
             try:
                 await asyncio.sleep(interval_s)
                 started = time.time()
-                out = fn()
-                if asyncio.iscoroutine(out):
-                    out = await out
+                # 同步函数丢到线程池跑：
+                # 维护任务里是同步 sqlite3 调用（wal_checkpoint / optimize），
+                # WAL 几 GB 时 wal_checkpoint 能卡住好几秒 ——
+                # 直接在事件循环里调，整个服务那几秒谁都不响应。
+                if asyncio.iscoroutinefunction(fn):
+                    out = await fn()
+                else:
+                    out = await asyncio.to_thread(fn)
+                    if asyncio.iscoroutine(out):
+                        out = await out
                 if on_done:
                     on_done(out)
                 log.info("定时维护「%s」完成，耗时 %.2fs", name, time.time() - started)

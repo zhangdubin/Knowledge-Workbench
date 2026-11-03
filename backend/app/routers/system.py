@@ -346,24 +346,41 @@ async def _audit_facets(db: AsyncSession) -> dict:
 async def audit_stats(days: int = Query(7, ge=1, le=90),
                       db: AsyncSession = Depends(get_db),
                       principal: Principal = Depends(require_feature("audit_view"))):
-    """近 N 天：写入量趋势 + 按用户/资源分布（审计页顶部图表）"""
-    since = datetime.now() - timedelta(days=days)
-    rows = (await db.execute(
-        select(AuditLog.created_at, AuditLog.username, AuditLog.resource, AuditLog.action)
-        .where(AuditLog.created_at >= since)
-    )).all()
+    """近 N 天：写入量趋势 + 按用户/资源分布（审计页顶部图表）
 
-    by_day: dict[str, int] = {}
-    by_user: dict[str, int] = {}
-    by_resource: dict[str, int] = {}
-    by_action: dict[str, int] = {}
-    for created, user, res, act in rows:
-        if created:
-            day = created.strftime("%m-%d")
-            by_day[day] = by_day.get(day, 0) + 1
-        by_user[user or "-"] = by_user.get(user or "-", 0) + 1
-        by_resource[res or "-"] = by_resource.get(res or "-", 0) + 1
-        by_action[act or "-"] = by_action.get(act or "-", 0) + 1
+    为什么改成聚合查询：
+      原来是把区间内的**每一行**都拉进 Python 再用字典数 ——
+      审计表只按保留天数清理，写入量随使用线性涨，
+      一次请求就是几万行进内存（区间还最多能到 90 天）。
+      现在交给数据库 GROUP BY，只回聚合结果。
+    """
+    since = datetime.now() - timedelta(days=days)
+
+    day_expr = func.strftime("%m-%d", AuditLog.created_at)
+
+    async def grouped(col, extra=None):
+        q = (
+            select(col, func.count(AuditLog.id))
+            .where(AuditLog.created_at >= since)
+            .group_by(col)
+        )
+        if extra is not None:
+            q = q.where(extra)
+        return {k or "-": n for k, n in (await db.execute(q)).all()}
+
+    by_day = {k: n for k, n in
+              (await db.execute(
+                  select(day_expr, func.count(AuditLog.id))
+                  .where(AuditLog.created_at >= since)
+                  .group_by(day_expr)
+              )).all()}
+    by_user = await grouped(AuditLog.username)
+    by_resource = await grouped(AuditLog.resource)
+    by_action = await grouped(AuditLog.action)
+
+    total = (await db.execute(
+        select(func.count(AuditLog.id)).where(AuditLog.created_at >= since)
+    )).scalar() or 0
 
     days_list = [(datetime.now() - timedelta(days=days - 1 - i)).strftime("%m-%d")
                  for i in range(days)]
@@ -375,7 +392,7 @@ async def audit_stats(days: int = Query(7, ge=1, le=90),
                               key=lambda x: -x["value"])[:10],
         "by_action": sorted(({"name": k, "value": v} for k, v in by_action.items()),
                             key=lambda x: -x["value"])[:10],
-        "total": len(rows),
+        "total": total,
     }
 
 

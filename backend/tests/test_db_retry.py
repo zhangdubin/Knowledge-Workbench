@@ -63,6 +63,64 @@ class TestTransientRetry(unittest.TestCase):
         self.assertEqual(n, 3, "应该重试到第 3 次才成功")
         self.assertEqual(tuple(row), (1,))
 
+    def test_no_retry_when_transaction_already_wrote(self):
+        """事务里已经有写入时，瞬时错误**不重试**，直接把错误抛出去
+
+        为什么：重试前的 rollback() 回滚的是整个事务，
+        而重试只重跑失败的那一条语句 ——
+        「前面已经写进去的东西」会被冲掉，「重试成功的那一条」却留下了。
+
+        踩过：文档入库时先 flush 写了文档行，紧接着的 FTS 插入遇到瞬时锁，
+        回滚把文档行冲掉 → 重试成功 → commit 提交了 FTS 行 →
+        库里留下指向不存在文档的 FTS 行，接口照样返回 200，文件静默丢失。
+
+        所以事务里有写入时，宁可报错（整个事务回滚、调用方看得见），
+        也不能重试出一个「少了数据的成功」。
+        """
+        from sqlalchemy import text
+
+        async def run():
+            async with db.SessionLocal() as s:
+                calls = {"n": 0}
+                real = db.AsyncSession.execute
+
+                async def flaky(self, *args, **kwargs):
+                    calls["n"] += 1
+                    if calls["n"] < 3:
+                        raise Exception("disk I/O error")
+                    return await real(self, *args, **kwargs)
+
+                db.AsyncSession.execute = flaky
+                try:
+                    # 先标记「这个事务已经写过了」
+                    s._kb_has_writes = True
+                    await s.execute(text("select 1"))
+                    return calls["n"], None
+                except Exception as e:
+                    return calls["n"], e
+                finally:
+                    db.AsyncSession.execute = real
+
+        n, err = asyncio.run(run())
+        self.assertEqual(n, 1, "有写入时不该重试")
+        self.assertIsNotNone(err, "有写入时应该把错误抛出去，而不是重试后成功")
+
+    def test_write_statement_marks_session(self):
+        """写语句要能把会话标记成「已有写入」"""
+        from sqlalchemy import text
+
+        async def run():
+            async with db.SessionLocal() as s:
+                before = s._kb_has_writes
+                await s.execute(text("create table if not exists t_probe (id int)"))
+                await s.execute(text("insert into t_probe (id) values (1)"))
+                after = s._kb_has_writes
+            return before, after
+
+        before, after = asyncio.run(run())
+        self.assertFalse(before, "新会话一开始不该算有写入")
+        self.assertTrue(after, "执行写语句后应该标记成有写入")
+
     def test_execute_gives_up_after_limit(self):
         """一直失败 → 重试 3 次后原样抛出，不无限重试"""
         from sqlalchemy import text

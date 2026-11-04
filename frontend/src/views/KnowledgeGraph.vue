@@ -1,12 +1,17 @@
 <template>
-  <!-- data-print-root：这一块是要打印的正文。
-       data-print-empty：一篇笔记都没有时为 true —— 打印脚本会先说一声，
-       而不是默默打出一张白纸 -->
   <div
     class="page"
     data-print-root
     :data-print-empty="printEmpty ? 'true' : 'false'"
   >
+    <!-- data-print-root：这一块是要打印的正文。
+         data-print-empty：一篇笔记都没有时为 true —— 打印脚本会先说一声，
+         而不是默默打出一张白纸。
+
+         这段说明必须放在根元素「里面」：放在外面的话，模板就变成多根节点，
+         开发模式下 Vue 会把它编译成 Fragment，而 Fragment 被卸载时不会回调
+         transition 的 afterLeave —— 路由切换的淡入淡出就永远卡在空白页。 -->
+
     <PageTitle
       title="知识图谱"
       subtitle="所有笔记与它们之间的双向链接。按标签着色，一眼看出知识聚成了哪几团"

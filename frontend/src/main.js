@@ -49,16 +49,16 @@ import {
   Download, Edit, EditPen, Files, Filter, FirstAidKit, Folder, FolderAdd,
   FolderOpened, FullScreen, Grid, Headset, Histogram, HomeFilled,
   InfoFilled, Key, Lightning, Link, List, Loading, Lock, MagicStick, Memo,
-  Menu, Monitor, MoreFilled, Notebook, Odometer, Operation, Paperclip,
+  Menu, Monitor, Moon, MoreFilled, Notebook, Odometer, Operation, Paperclip,
   Picture, PieChart, Plus, Pointer, Postcard, PriceTag, Printer, Promotion,
   QuestionFilled, Rank, Reading, Refresh, RefreshLeft, RefreshRight, Right,
-  Search, Select, SetUp, Setting, Share, StarFilled, SwitchButton, Tools,
+  Search, Select, SetUp, Setting, Share, StarFilled, Sunny, SwitchButton, Tools,
   Top, TrendCharts, TrophyBase, Upload, UploadFilled, User, UserFilled,
   VideoPlay, View, Warning, WarningFilled, ZoomIn, ZoomOut
 } from '@element-plus/icons-vue'
 
 const ICONS = {
-  Aim, ArrowDown, ArrowLeft, ArrowRight, Back, Bell, Box, Brush, CaretRight, Check, CircleCheck, CircleCheckFilled, CircleCloseFilled, Clock, Close, Coin, Collection, Compass, Connection, CopyDocument, DataAnalysis, DataBoard, DataLine, Delete, Document, DocumentRemove, Download, Edit, EditPen, Files, Filter, FirstAidKit, Folder, FolderAdd, FolderOpened, FullScreen, Grid, Headset, Histogram, HomeFilled, InfoFilled, Key, Lightning, Link, List, Loading, Lock, MagicStick, Memo, Menu, Monitor, MoreFilled, Notebook, Odometer, Operation, Paperclip, Picture, PieChart, Plus, Pointer, Postcard, PriceTag, Printer, Promotion, QuestionFilled, Rank, Reading, Refresh, RefreshLeft, RefreshRight, Right, Search, Select, SetUp, Setting, Share, StarFilled, SwitchButton, Tools, Top, TrendCharts, TrophyBase, Upload, UploadFilled, User, UserFilled, VideoPlay, View, Warning, WarningFilled, ZoomIn, ZoomOut,
+  Aim, ArrowDown, ArrowLeft, ArrowRight, Back, Bell, Box, Brush, CaretRight, Check, CircleCheck, CircleCheckFilled, CircleCloseFilled, Clock, Close, Coin, Collection, Compass, Connection, CopyDocument, DataAnalysis, DataBoard, DataLine, Delete, Document, DocumentRemove, Download, Edit, EditPen, Files, Filter, FirstAidKit, Folder, FolderAdd, FolderOpened, FullScreen, Grid, Headset, Histogram, HomeFilled, InfoFilled, Key, Lightning, Link, List, Loading, Lock, MagicStick, Memo, Menu, Monitor, Moon, MoreFilled, Notebook, Odometer, Operation, Paperclip, Picture, PieChart, Plus, Pointer, Postcard, PriceTag, Printer, Promotion, QuestionFilled, Rank, Reading, Refresh, RefreshLeft, RefreshRight, Right, Search, Select, SetUp, Setting, Share, StarFilled, Sunny, SwitchButton, Tools, Top, TrendCharts, TrophyBase, Upload, UploadFilled, User, UserFilled, VideoPlay, View, Warning, WarningFilled, ZoomIn, ZoomOut,
 }
 
 for (const [key, comp] of Object.entries(ICONS)) {

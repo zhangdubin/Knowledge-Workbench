@@ -1,3 +1,7 @@
+# 注意用 **/ 前缀：docker 的忽略规则里，__pycache__ 只匹配**顶层**那一层，
+# 嵌套的 tests/__pycache__、app/services/__pycache__ 都会被 COPY . . 带进镜像。
+# 带进去的是一堆过期 .pyc —— 不至于坏，但镜像里留着上一轮构建的字节码没道理。
+**/__pycache__
 __pycache__
 *.pyc
 *.pyo

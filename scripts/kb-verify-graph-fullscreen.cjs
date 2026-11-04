@@ -86,6 +86,23 @@ async function clickBtn(page, selector) {
   }, selector)
 }
 
+/** 等缩放稳定下来（物理引擎稳定后会自己 fit 一次，动画还在跑时读到的值是中间值） */
+async function waitStableScale(page, timeoutMs = 8000) {
+  const t0 = Date.now()
+  let last = -1, same = 0
+  while (Date.now() - t0 < timeoutMs) {
+    const s = await page.evaluate(() => {
+      const net = document.querySelector('.dna-graph') ? window.__dnaNet : window.__kbGraph
+      return net ? net.getScale() : -1
+    })
+    // 连续 6 次（约 1.2 秒）不变才算稳定 —— 物理引擎的 fit 动画有 380ms
+    if (Math.abs(s - last) < 0.001) { if (++same >= 6) return s } else { same = 0 }
+    last = s
+    await sleep(200)
+  }
+  return last
+}
+
 /** 点「缩小」n 次，等动画走完 */
 async function zoomOut(page, sel, n) {
   for (let i = 0; i < n; i++) {
@@ -130,6 +147,29 @@ async function zoomIn(page, sel, n) {
     const btnOk = await hasBtn(page, p.fs)
     ok(btnOk, '有全屏按钮')
     if (!btnOk) continue
+
+    // ---------- ⓪ 先把缩放调成一个固定值 ----------
+    // 为什么要在进全屏**之前**调：
+    //   「退出全屏后视角原样回来」这条，只有在进全屏前有一个已知的缩放值才验得了。
+    //
+    // 为什么先要等缩放稳定：
+    //   物理引擎稳定后会自己 fit 一次（带 380ms 动画），
+    //   测试设的缩放会被那次 fit 覆盖 —— 基准值必须是**实际生效**的那个，
+    //   所以设置完再读回来，退出后跟读回来的值比。
+    await waitStableScale(page)
+    await page.evaluate(() => {
+      const net = document.querySelector('.dna-graph') ? window.__dnaNet : window.__kbGraph
+      if (net) net.setOptions({ physics: { enabled: false } })
+    })
+    await sleep(400)
+    // 用**应用自己的**放大按钮把缩放调到一个特征值。
+    //   为什么不用脚本直接改 scale：物理引擎稳定时会自己 fit 一次，
+    //   脚本设的值会被那次 fit 覆盖，基准值就不可信了。
+    await zoomIn(page, p.zoomIn, 2)
+    const setScale = await page.evaluate(() => {
+      const net = document.querySelector('.dna-graph') ? window.__dnaNet : window.__kbGraph
+      return net ? net.getScale() : 0
+    })
 
     // ---------- ① 全屏：画布要真的变大 ----------
     const before = await page.evaluate(PROBE_FS)
@@ -229,6 +269,11 @@ async function zoomIn(page, sel, n) {
     const outFs = await page.evaluate(PROBE_FS)
     ok(!outFs.fs, 'Esc 退出全屏')
     ok(!outFs.locked, '退出后恢复滚动')
+    // 退出全屏必须把用户自己的视角还回去。
+    //   以前退出也走 fit()，缩放被改了两轮（实测 1.0 → 0.60 → 0.45），
+    //   图缩成一小团还得自己拉回来 —— 这就是「全屏显示有问题」里最明显的一条。
+    ok(Math.abs(outFs.scale - setScale) < 0.05, '退出后视角原样还原（缩放没被冲掉）',
+      setScale.toFixed(2) + ' → ' + outFs.scale.toFixed(2))
 
     // ---------- ③ 缩小 → 文字自动收起 ----------
     await zoomOut(page, p.zoomOut, 5)

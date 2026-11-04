@@ -8,7 +8,7 @@
             class="gt-btn"
             :class="{ on: isFullscreen }"
             aria-label="全屏显示"
-            @click="toggleFullscreen"
+            @click="onToggleFullscreen"
           >
             <el-icon><Rank /></el-icon>
           </button>
@@ -17,10 +17,10 @@
           <button class="gt-btn" aria-label="适应画布" @click="fit"><el-icon><FullScreen /></el-icon></button>
         </el-tooltip>
         <el-tooltip content="放大" placement="top">
-          <button class="gt-btn" aria-label="放大" @click="zoom(1.25)"><el-icon><ZoomIn /></el-icon></button>
+          <button class="gt-btn" aria-label="放大" @click="zoom(ZOOM_STEP_IN)"><el-icon><ZoomIn /></el-icon></button>
         </el-tooltip>
         <el-tooltip content="缩小" placement="top">
-          <button class="gt-btn" aria-label="缩小" @click="zoom(0.8)"><el-icon><ZoomOut /></el-icon></button>
+          <button class="gt-btn" aria-label="缩小" @click="zoom(ZOOM_STEP_OUT)"><el-icon><ZoomOut /></el-icon></button>
         </el-tooltip>
         <el-tooltip content="重新计算布局" placement="top">
           <button class="gt-btn" :class="{ on: physicsOn }" aria-label="重新计算布局" @click="relayout">
@@ -301,21 +301,114 @@ function scheduleTierCheck() {
 }
 
 /**
- * 全屏切换后：图必须重新量尺寸、重新对中
+ * 全屏切换：图必须重新量尺寸、重新对中
  *
  * 为什么不能只靠 resize 事件：
  *   全屏是**布局变了但 window 没变**，resize 事件根本不会触发。
  *   而且 vis-network 只在初始化时读一次容器尺寸 —— 不显式 setSize，
  *   画布还停在旧大小，只是被 CSS 拉大了（画面会糊、位置会偏）。
+ *
+ * 进全屏与退全屏要分开处理：
+ *   进全屏 = 把整张图铺满屏幕（fit），这是「全屏」这个动作的本意；
+ *   退全屏 = **还原成进来之前的样子**（画面中心 + 缩放）。
+ *   以前两个方向都调 fit()，实测缩放被改了两轮（1.0 → 0.60 → 0.45），
+ *   用户调好的缩放和平移全丢了 —— 退出全屏后图突然缩成一小团，
+ *   还得自己重新拉回来。
+ *
+ * 为什么快照要在「点按钮的那一刻」拍，不能等到 onFullscreenChange：
+ *   进全屏会让容器尺寸变化，而 setSize 会按新旧画布的比例把缩放改掉
+ *   （实测 1.5625 → 2.1278）。等回调时再读，读到的已经是被改过的值 ——
+ *   还原回去的还是错的。这就是「退出全屏后视角被冲掉」的根因。
  */
-function onFullscreenChange() {
+let fsSavedView = null
+
+/**
+ * 全屏切换后的「别再 fit」时间窗
+ *
+ * 为什么需要：容器尺寸一变，物理就会重新稳定一次，稳定回调里会 fit 整张图 ——
+ * 那次 fit 会把用户刚还原好的视角又冲掉（缩放被改两轮，图看着像跳了）。
+ */
+let fitSuppressedUntil = 0
+
+/** 拍下用户当前的视角（画面中心 + 缩放），退全屏时原样还回去 */
+function captureUserView() {
+  const net = network.value
+  if (!net) return
+  fsSavedView = { position: net.getViewPosition(), scale: net.getScale() }
+}
+
+/** 工具条上的全屏按钮：进全屏之前先把视角拍下来（此刻布局还没变） */
+function onToggleFullscreen() {
+  if (!isFullscreen.value) captureUserView()
+  toggleFullscreen()
+}
+
+/**
+ * 画布尺寸的唯一入口
+ *
+ * 为什么不让 vis 自己管（autoResize 默认开着）：
+ *   vis 自带一个 ResizeObserver 盯着画布容器，尺寸一变就调 setSize ——
+ *   而 setSize 会按新旧画布的比例把缩放改掉（实测 1.5625 → 2.1278）。
+ *   也就是说用户调好的视角会在进/出全屏时被**偷偷**改掉，
+ *   代码里根本看不出是谁改的。与其跟它抢，不如关掉它、自己来：
+ *   尺寸变了就重新量一次，再由我们自己决定视角该是什么。
+ */
+let lastSizedW = 0
+let lastSizedH = 0
+// 盯着容器尺寸用的观察器（vis 自带的那个已经关掉了）
+let sizeObserver = null
+
+function syncCanvasSize() {
   const net = network.value
   const el = host.value
   if (!net || !el) return
-  net.setSize(`${el.clientWidth}px`, `${el.clientHeight}px`)
-  // setSize 会按新旧画布的比例缩放视图 —— 必须重新对中，否则图会偏到一边
-  net.fit({ animation: false })
-  setTimeout(() => { applyMinScale(); applyLabelTier(true) }, 60)
+  const w = el.clientWidth
+  const h = el.clientHeight
+  if (!w || !h) return
+  // 尺寸没变就别重复 setSize：重复调会把缩放又按比例改一遍
+  if (w === lastSizedW && h === lastSizedH) return
+  lastSizedW = w
+  lastSizedH = h
+  net.setSize(`${w}px`, `${h}px`)
+}
+
+/**
+ * 全屏状态变了：重新量画布，再把该有的视角写回去
+ *
+ * 顺序很重要：**先 setSize，后写视角**。
+ *   setSize 会按新旧画布的比例缩放视图，所以视角必须写在它后面，
+ *   否则刚写进去的缩放又会被改掉。
+ */
+function onFullscreenChange() {
+  const net = network.value
+  if (!net) return
+  // 容器尺寸变了物理会重新稳定一次，那次的 fit 会冲掉刚还原的视角 ——
+  // 2.5 秒内不再 fit（物理稳定一次要几百毫秒）
+  fitSuppressedUntil = Date.now() + 2500
+  syncCanvasSize()
+  if (isFullscreen.value) {
+    // 进全屏：铺满整屏，位置重新对中
+    // 这次 fit 是「主动铺满」：可读下限又该生效了
+    userZoomed = false
+    net.fit({ animation: { duration: 320, easingFunction: 'easeInOutQuad' } })
+    setTimeout(() => { applyMinScale(); applyLabelTier(true) }, 430)
+  } else {
+    // 退全屏：把视角还原成进来之前的样子
+    if (fsSavedView) {
+      net.moveTo({
+        position: fsSavedView.position,
+        scale: fsSavedView.scale,
+        // 立刻生效：慢吞吞地补回来，用户只会觉得「没还原」
+        animation: false,
+      })
+      fsSavedView = null
+      // 还原回来的是用户自己挑的视角：可读下限不再适用
+      userZoomed = true
+    }
+    // 这里不调 applyMinScale：用户自己缩到的比例是他的选择，
+    // 文字档位跟着走就行（太小会自己把名字藏起来并给提示）
+    applyLabelTier(true)
+  }
 }
 
 const { isFullscreen, toggle: toggleFullscreen, exit: exitFullscreen } =
@@ -580,6 +673,8 @@ async function draw() {
   net.setOptions({ physics: { enabled: true } })
   physicsOn.value = true
   startTipTimer()
+  // 换数据 = 重新铺满：可读下限又该生效了
+  userZoomed = false
   net.fit({ animation: false })
   // fit 之后的缩放可能落在「字该藏」的区间，先把档位对齐
   applyLabelTier(true)
@@ -597,6 +692,12 @@ function applyVisibility() {
   })))
 }
 
+/**
+ * 物理引擎稳定后会再触发一次「整图 fit」——
+ *   而容器尺寸一变（进/出全屏）物理就会重新稳定一次，
+ *   这次 fit 会把用户刚还原好的视角又冲掉（缩放被改两轮，图看着像跳了）。
+ * 所以全屏切换后的稳定化不再 fit（见 fitSuppressedUntil）。
+ */
 function onStabilized() {
   const net = network.value
   if (!net) return
@@ -604,6 +705,13 @@ function onStabilized() {
   net.setOptions({ physics: { enabled: false } })
   physicsOn.value = false
   stopTipTimer()
+  if (Date.now() < fitSuppressedUntil) {
+    applyLabelTier(true)
+    scheduleTipRefresh()
+    return
+  }
+  // 这次 fit 是「重新铺满」：可读下限又该生效了
+  userZoomed = false
   net.fit({ animation: { duration: 380, easingFunction: 'easeInOutQuad' } })
   // fit 是带动画的，等它跑完再把缩放拉回可读区间
   setTimeout(() => { applyMinScale(); scheduleTipRefresh() }, 430)
@@ -631,14 +739,38 @@ function minScale() {
   return minScaleFor(windowWidth.value)
 }
 
+/**
+ * 用户自己缩小时能缩到多小
+ *
+ * 为什么和 minScaleFor() 分开：
+ *   minScaleFor() 那个下限是「我们主动把图铺满」时的取舍 ——
+ *   铺满之后缩得太小字全糊了，得拉回可读区间。
+ *   但用户自己按「缩小」是想看全貌，那是他的选择，不能拽回去：
+ *   以前 applyMinScale 每隔一会儿就把缩放拉回 0.45，
+ *   看起来就是「按了缩小也没反应，怎么都缩不下去」。
+ *   这里给用户自己缩留一个更低的底线：0.15
+ *   （再小就只剩几个像素，图彻底看不见了）。
+ */
+const USER_MIN_SCALE = 0.15
+
+/**
+ * 现在这个缩放是不是用户自己挑的
+ *
+ *   true  = 用户按过放大/缩小，他自己负责，我们不要再去「纠正」他
+ *   false = 这个缩放是我们铺满图算出来的，该拉回可读区间
+ */
+let userZoomed = false
+
 function applyMinScale() {
   const net = network.value
   if (!net) return
   const min = minScale()
-  if (net.getScale() < min) {
+  // 用户自己缩小的结果是他的选择 —— 不能拽回去
+  //   只有「我们铺满图」缩出来的小缩放，才需要拉回可读区间
+  if (!userZoomed && net.getScale() < min) {
     net.moveTo({ scale: min, animation: { duration: 320, easingFunction: 'easeInOutQuad' } })
     zoomClamped.value = true
-  } else {
+  } else if (!userZoomed) {
     zoomClamped.value = false
   }
   // 缩放被拉回来了，文字档位也得跟着重算（可能从 hidden 回到 brief/full）
@@ -648,6 +780,10 @@ function applyMinScale() {
 function createNetwork() {
   const options = {
     layout: { improvedLayout: true },
+    // 关掉 vis 自带的自动改尺寸：它盯着容器尺寸，一变就偷偷 setSize，
+    // 而 setSize 会按比例改掉用户的缩放 —— 视角的生死交给我们自己管
+    //   （见 syncCanvasSize 的注释）
+    autoResize: false,
     physics: {
       enabled: true,
       // 斥力更大、弹簧更松：节点之间要留出能读标签的空隙，
@@ -843,7 +979,20 @@ function scheduleTipRefresh() {
 
 // ---------- 工具条动作 ----------
 
+/**
+ * 工具条「放大 / 缩小」的步长
+ *
+ * 为什么缩小用 0.75（而不是以前的 0.8）：
+ *   缩小是要能真的缩到「看不清」的区间去的 —— 0.8 连点 5 次只降到原来的三分之一，
+ *   看着还是那么清楚，用户根本感觉不到「我缩小了」。
+ *   0.75 跟放大的 1.25 正好对称（一次 ±25%），连点几次就能进到「字该藏起来」的档位。
+ */
+const ZOOM_STEP_IN = 1.25
+const ZOOM_STEP_OUT = 0.75
+
 function fit() {
+  // 「适应画布」是用户主动要求铺满：可读下限又该生效了
+  userZoomed = false
   network.value?.fit({ animation: { duration: 380, easingFunction: 'easeInOutQuad' } })
   // fit 之后把缩放拉回可读区间，否则手机上整张图缩成一团小点
   setTimeout(applyMinScale, 420)
@@ -851,7 +1000,13 @@ function fit() {
 function zoom(factor) {
   const net = network.value
   if (!net) return
-  net.moveTo({ scale: net.getScale() * factor, animation: { duration: 200, easingFunction: 'easeInOutQuad' } })
+  // 缩到看不清是允许的（字会自动藏起来并给一句提示），
+  // 但别缩到画布上一个像素都不剩
+  const target = Math.max(USER_MIN_SCALE, net.getScale() * factor)
+  // 现在的缩放是用户自己挑的：铺满时的可读下限不再适用
+  userZoomed = true
+  zoomClamped.value = false
+  net.moveTo({ scale: target, animation: { duration: 200, easingFunction: 'easeInOutQuad' } })
 }
 function relayout() {
   const net = network.value
@@ -906,6 +1061,13 @@ onMounted(() => {
   edgesDS.value = new DataSet([])
   network.value = createNetwork()
   draw()
+  // 自己盯着容器尺寸：
+  //   vis 自带的那个已经关掉了（见 createNetwork 的 autoResize），
+  //   尺寸变了就由我们重新量一次画布 —— 谁改的、改成什么样，都看得见。
+  if (window.ResizeObserver && host.value) {
+    sizeObserver = new ResizeObserver(() => { syncCanvasSize() })
+    sizeObserver.observe(host.value)
+  }
   // E2E 钩子：只有显式带上 ?__e2e=1 才把实例挂到 window。
   // 自动化脚本必须能算出节点的真实屏幕坐标才点得中它，否则只能在画布上盲点，
   // 命中与否全看运气。留这个开关比让测试脚本绕路更可靠，正常访问不受影响。
@@ -916,6 +1078,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', measure)
   stopTipTimer()
+  // 尺寸观察器也要撤：不撤的话组件销毁后它还会触发，
+  // 去操作已经销毁的 network
+  if (sizeObserver) { sizeObserver.disconnect(); sizeObserver = null }
   // 撤掉画布上的事件监听
   while (graphCleanups.length) {
     try { graphCleanups.pop()() } catch { /* 清理失败不影响卸载 */ }

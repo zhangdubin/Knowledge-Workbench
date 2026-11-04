@@ -6,6 +6,31 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 log = logging.getLogger("kb.config")
 
+def _abs_path(value: str, fallback: str) -> str:
+    """把相对路径在**此刻**解析成绝对路径
+
+    为什么必须这么做：
+        相对路径是相对**当前工作目录**解析的，而且**每次用到时才解析** ——
+        也就是说，同一份配置在不同 CWD 下会指向不同的库。
+        生产上 compose 用 WORKDIR=/app + DATABASE_URL=sqlite+aiosqlite:///./data/kb.db，
+        解析出来是 /app/data/kb.db（对的）；
+        但只要有任何一段代码在别的 CWD 下 import app.config，
+        拿到的就是另一份库 —— 测试夹具正是这样把线上库的 dna_gene 清空的
+        （60 条基因，两次清空）。
+
+    这里的做法：**在配置读进来的那一刻**按当时的 CWD 解析成绝对路径。
+        语义跟原来完全一样（还是相对 CWD），但从此以后不管 CWD 怎么变，
+        指的都是同一个库 —— CWD 变了不会让库「换人」。
+
+    绝对路径原样返回：运维显式指定的路径必须一字不改地生效。
+    """
+    if not value:
+        value = fallback
+    p = Path(value)
+    if p.is_absolute():
+        return str(p)
+    return str(p.resolve())
+
 
 def _promote_kb_env() -> None:
     """把 `KB_` 前缀的环境变量映射成不带前缀的同名变量
@@ -78,15 +103,22 @@ class Settings(BaseSettings):
     update_cache_seconds: float = 600.0
 
     # 数据目录：kb.db（元数据 + 全文索引 + 向量索引）就放在这里
-    data_dir: str = "./data"
-    database_url: str = "sqlite+aiosqlite:///./data/kb.db"
+    #
+    # 为什么默认是空串、真实路径在下面统一算：
+    #   相对路径是相对**当前工作目录**解析的，而 CWD ≠ 应用目录是常态
+    #   （容器 WORKDIR、systemd 的 WorkingDirectory、测试从别处 import）。
+    #   一旦解析到别的目录，写进去的就是另一份库 ——
+    #   线上 60 条基因被清空，根子就在这里（测试连上了生产库）。
+    #   空串 + 事后锚定到应用根目录，就不会漂。
+    data_dir: str = ""
+    database_url: str = ""
 
     # ==== 文件原文存储 ====
     # fs = 原文落文件系统（默认，推荐）；db = 原文进 SQLite BLOB（历史行为）
     # 生产务必保持 fs：库文件从此只装元数据与索引，体积增长慢一个量级，
     # 备份窗口 / VACUUM 耗时 / 崩溃恢复时间都不会再被大文件拖着走。
     file_store: str = "fs"
-    file_store_dir: str = "./files"
+    file_store_dir: str = ""
     # 落盘后是否 fsync。开了更耐断电，代价是每次上传多一次磁盘同步；
     # 有备份机制时保持 False 更划算（备份才是真正的数据安全网）。
     file_store_fsync: bool = False
@@ -233,6 +265,50 @@ if _dropped:
     )
 
 settings = Settings()
+
+# ---- 把路径锚定到应用根目录 ----
+#
+# 为什么在这里做，而不是在字段默认值里写死：
+#   字段默认值是字符串常量，没法在里面调用函数；
+#   而 pydantic 的 field_validator 拿到的还是原始字符串，
+#   在那里拼绝对路径需要自己处理「已经是绝对路径」的情况。
+#   放这里最直白：读一遍、算一遍、写回去。
+#
+# 注意 database_url 单独处理：它是 URL 不是路径，
+# sqlite 的 URL 里路径部分要单独抠出来再锚定
+# （sqlite+aiosqlite:////abs/path.db 前面是四个斜杠）。
+if not settings.data_dir:
+    settings.data_dir = _abs_path("", "./data")
+else:
+    settings.data_dir = _abs_path(settings.data_dir, "./data")
+if not settings.file_store_dir:
+    settings.file_store_dir = _abs_path("", "./files")
+else:
+    settings.file_store_dir = _abs_path(settings.file_store_dir, "./files")
+if not settings.database_url:
+    settings.database_url = "sqlite+aiosqlite:///" + _abs_path("", "./data/kb.db")
+elif settings.database_url.startswith("sqlite"):
+    # 把 URL 里的路径部分锚定到应用根目录（只对相对路径生效）
+    #
+    # 注意斜杠数：SQLite URL 的路径部分以「/」开头，
+    # 而 URL 本身是 scheme:// + /absolute/path，
+    # 所以绝对路径拼出来是四个斜杠（sqlite:////app/data/kb.db）。
+    #   用 partition(":///") 切会把路径开头的斜杠一起吃掉，
+    #   结果 "/app/data/kb.db" 变成 "app/data/kb.db" ——
+    #   拼回去就成了 sqlite:////data/kb.db，指向根目录，库直接不见。
+    #   所以这里改用 rpartition("://") 只切 scheme，其余原样保留。
+    _scheme, _sep, _rest = settings.database_url.rpartition("://")
+    if _sep and _rest:
+        # URL 里路径部分开头的那个斜杠只是分隔符，不是路径的一部分：
+        #   sqlite:///./data/kb.db  →  真正的路径是 "./data/kb.db"（相对）
+        #   sqlite:////app/data/kb.db  →  真正的路径是 "/app/data/kb.db"（绝对）
+        # 直接拿 _rest 去 is_absolute() 判断会把 "./data/kb.db" 看成绝对路径 ——
+        # 开头那个斜杠骗过了判断，路径就永远锚定不到应用根目录。
+        _path = _rest[1:] if _rest.startswith("/") else _rest
+        if not Path(_path).is_absolute():
+            _path = _abs_path(_path, _path)
+        # 拼回去时路径自带一个前导斜杠，所以是四个斜杠
+        settings.database_url = _scheme + ":///" + _path
 
 # 确保数据目录存在
 Path(settings.data_dir).mkdir(parents=True, exist_ok=True)

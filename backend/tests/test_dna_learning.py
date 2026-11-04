@@ -27,18 +27,25 @@ import unittest
 # ---- 环境先钉死，再 import 应用模块 ----
 # 应用模块在 import 时就读 config（数据库 URL、文件目录…），
 # 环境变量不先设好就会连到线上库。
-_TMP = tempfile.mkdtemp(prefix="kb-test-dna-")
-os.environ["DATA_DIR"] = os.path.join(_TMP, "data")
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP}/kb.db"
-os.environ["FILE_STORE_DIR"] = os.path.join(_TMP, "files")
-os.environ["FILE_STORE"] = "fs"
-os.environ["AUTH_ENABLED"] = "false"
-os.environ["MAINTENANCE_ENABLED"] = "false"
-
+#
+# 这里用统一护栏（tests/_guard.py）而不是自己写一遍：
+#   本文件原来自己设了一组环境变量，看起来是安全的 ——
+#   但另一个测试文件（test_db_retry.py）用的是 setdefault("KB_DATABASE_URL")，
+#   而 KB_ 前缀只有在无前缀的 DATABASE_URL 不存在时才会被提升，
+#   容器里 compose 早就设了 DATABASE_URL —— 那个 setdefault 等于没设。
+#   两个文件谁先被 import 谁说了算（unittest 按字母序），
+#   于是先被 import 的那个用**线上库**跑，tearDown 把线上基因表清空了。
+# 护栏统一处理，并额外断言「现在生效的库确实落在临时目录里」。
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _BACKEND = os.path.dirname(_HERE)
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import _guard  # noqa: E402
+
+_TMP = _guard.use_temp_db()
 
 from sqlalchemy import select, text  # noqa: E402
 
@@ -46,6 +53,10 @@ from app import models  # noqa: E402,F401  让 Base.metadata 认识所有模型
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.models import DnaAsset, DnaAssetUse, DnaGene, DnaGeneScore  # noqa: E402
 from app.services import dna_asset, dna_library, dna_openkb, dna_score  # noqa: E402
+
+# 护栏的第二道：确认 settings 确实固化到了临时库。
+# 过了这一关，后面所有 delete 都只可能打在临时库上。
+_guard.assert_test_db()
 
 
 def _mk_gene(**kw) -> DnaGene:

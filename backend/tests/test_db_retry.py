@@ -14,10 +14,27 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-os.environ.setdefault("KB_DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+# 护栏：先把库指到临时目录，再 import 应用模块。
+#
+# 原来这里写的是 os.environ.setdefault("KB_DATABASE_URL", "sqlite+aiosqlite:///:memory:")，
+# 有三个问题，一个比一个隐蔽：
+#   1. setdefault —— 容器里 DATABASE_URL 早就被 compose 设好了，这行什么也没做；
+#   2. KB_ 前缀 —— app/config.py 的 _promote_kb_env() 只在**无前缀**的
+#      DATABASE_URL 不存在时才提升，compose 设过就永远轮不到这里；
+#   3. 结果：app.config 在 import 时固化成了**线上库**，
+#      而本文件按字母序排在 test_dna_learning 之前 ——
+#      它的 import 把 config 提前固化了，后一个文件再设环境变量已经太晚。
+#      线上 60 条基因就是这样被 tearDown 清掉的。
+import _guard  # noqa: E402
+
+_guard.use_temp_db()
 
 from app import database as db  # noqa: E402
+
+# 护栏的第二道：确认 settings 确实固化到了临时库
+_guard.assert_test_db()
 
 
 class TestTransientRetry(unittest.TestCase):

@@ -52,12 +52,30 @@
       show-icon
       class="missing-alert"
     >
-      <template #title>当前还差这些才能顺畅开发</template>
+      <template #title>还差这些才能开工</template>
       <ul class="missing-list">
         <li v-for="(m, i) in missing" :key="'m' + i">{{ m }}</li>
       </ul>
       <ul v-if="howToFix.length" class="missing-list">
         <li v-for="(h, i) in howToFix" :key="'h' + i">· {{ h }}</li>
+      </ul>
+    </el-alert>
+
+    <!-- 可选增强：GitHub 仓库、网络搜索这类是「配了更好」，不是「缺了不能开工」。
+         所以另起一条 info 提示、而且可以关掉 ——
+         之前它们混在 missing 里，一片告警色，用户以为模块坏了。 -->
+    <el-alert
+      v-if="optional.length"
+      type="info"
+      :closable="true"
+      show-icon
+      class="notice-alert"
+      title="还可以配这些增强（不配也能开工，配了更好）"
+    >
+      <ul class="missing-list">
+        <li v-for="(o, i) in optional" :key="'o' + i">
+          {{ o.label }}<span v-if="o.how_to_fix"> —— {{ o.how_to_fix }}</span>
+        </li>
       </ul>
     </el-alert>
 
@@ -208,6 +226,7 @@ import EmptyState from '../../components/EmptyState.vue'
 import DevApi from '../../api/dev.js'
 import {
   PROJECT_STATUS, modeLabel, modeDesc, modeType, projectStatus,
+  doctorSplit,
 } from '../../utils/dev.js'
 
 const router = useRouter()
@@ -222,6 +241,8 @@ const modelText = ref('未配置')
 const doctor = ref(null)
 const missing = ref([])
 const howToFix = ref([])
+// 可选增强：单独一份，不跟阻断项混在一起
+const optional = ref([])
 const notices = ref([])
 
 const dialogVisible = ref(false)
@@ -259,18 +280,33 @@ async function loadConfig() {
   modelText.value = m.ready ? (m.name || m.model || '已就绪') : '未配置'
   missing.value = []
   howToFix.value = []
+  optional.value = []
 }
 
+/**
+ * 能力自检。
+ *
+ * 口径只看**阻断项**：没有阻断项就是「可以开工」，
+ * 可选增强（GitHub 仓库、网络搜索）配不配都不影响开工 ——
+ * 拿它们说「不通过」只会让人以为功能坏了。
+ */
 async function runDoctor() {
   const res = await DevApi.doctor(mode.value)
   if (!res) return
   doctor.value = res
-  missing.value = res.missing || []
-  howToFix.value = res.how_to_fix || []
-  const bad = (res.capabilities || []).filter((c) => !c.ok)
-  if (!bad.length && !missing.value.length) {
-    ElMessage.success('能力自检通过，当前配置可以直接开工')
+  // 拆开：阻断项 = 不开工做不了；可选增强 = 配了更好
+  const split = doctorSplit(res)
+  missing.value = split.blocking.map((b) => b.text)
+  howToFix.value = split.blocking.map((b) => b.how_to_fix).filter(Boolean)
+  optional.value = split.optional
+  if (missing.value.length) {
+    ElMessage.warning('还差这些才能开工：' + missing.value.join('；'))
+    return
   }
+  const note = optional.value.length
+    ? '（还可以配：' + optional.value.map((o) => o.label).join('、') + '）'
+    : ''
+  ElMessage.success('能力自检通过，可以开工' + note)
 }
 
 async function toggleMode() {
@@ -280,12 +316,15 @@ async function toggleMode() {
     const res = await DevApi.switchMode(next)
     mode.value = res.mode || next
     if (res.missing && res.missing.length) {
-      missing.value = res.missing
-      howToFix.value = res.how_to_fix || []
+      const split = doctorSplit(res)
+      missing.value = split.blocking.map((b) => b.text)
+      howToFix.value = split.blocking.map((b) => b.how_to_fix).filter(Boolean)
+      optional.value = split.optional
       ElMessage.warning('已切换，但还差配置才能真正开工')
     } else {
       missing.value = []
       howToFix.value = []
+      optional.value = doctorSplit(res).optional
       ElMessage.success('已切到' + modeLabel(mode.value))
     }
   } catch (e) {

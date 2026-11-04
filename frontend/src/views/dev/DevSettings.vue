@@ -177,16 +177,27 @@
             <span class="cap-detail">{{ c.detail }}</span>
           </div>
         </div>
-        <div v-if="doctor.missing?.length" class="doctor-missing">
-          <div class="doctor-missing-title">还差这些：</div>
+        <div v-if="doctorBlocking.length" class="doctor-missing">
+          <div class="doctor-missing-title">还差这些才能开工：</div>
           <ul>
-            <li v-for="(m, i) in doctor.missing" :key="i">{{ m }}</li>
+            <li v-for="(m, i) in doctorBlocking" :key="i">{{ m.text }}</li>
           </ul>
         </div>
-        <div v-if="doctor.how_to_fix?.length" class="doctor-fix">
+        <div v-if="doctorBlockingFix.length" class="doctor-fix">
           <div class="doctor-missing-title">怎么配：</div>
           <ul>
-            <li v-for="(h, i) in doctor.how_to_fix" :key="i">{{ h }}</li>
+            <li v-for="(h, i) in doctorBlockingFix" :key="i">{{ h }}</li>
+          </ul>
+        </div>
+        <!-- 可选增强：单独一栏、用中性色 ——
+             它是「配了更好」，不是「缺了不能开工」，
+             跟上面的阻断项混在一起会让人以为功能坏了。 -->
+        <div v-if="doctorOptional.length" class="doctor-optional">
+          <div class="doctor-optional-title">可选增强（不配也能开工，配了更好）：</div>
+          <ul>
+            <li v-for="(o, i) in doctorOptional" :key="'o' + i">
+              {{ o.label }}<span v-if="o.how_to_fix"> —— {{ o.how_to_fix }}</span>
+            </li>
           </ul>
         </div>
       </div>
@@ -213,13 +224,19 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageTitle from '../../components/PageTitle.vue'
 import DevApi from '../../api/dev.js'
-import { modeLabel, modeType } from '../../utils/dev.js'
+import { modeLabel, modeType, doctorSplit } from '../../utils/dev.js'
 
 const loading = ref(false)
 const saving = ref(false)
 const checking = ref(false)
 const probing = ref('')
 const doctor = ref(null)
+// 体检结论拆成两份：阻断项（不开工做不了）与可选增强（配了更好）
+const doctorSplitResult = computed(() => doctorSplit(doctor.value))
+const doctorBlocking = computed(() => doctorSplitResult.value.blocking)
+const doctorBlockingFix = computed(() => doctorBlocking.value.map((b) => b.how_to_fix).filter(Boolean))
+// 可选增强（GitHub 仓库、网络搜索…）：与阻断项分开显示
+const doctorOptional = computed(() => doctorSplitResult.value.optional)
 const probeResult = ref(null)
 const tokenSet = ref(false)
 const apiKeySet = ref(false)
@@ -521,6 +538,27 @@ onMounted(load)
 }
 .doctor-empty {
   font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+/* 可选增强：用中性色，别用告警色 ——
+   「不配也能用」的事不该看起来像故障 */
+.doctor-optional {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border-left: 3px solid var(--border-light);
+}
+.doctor-optional-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.doctor-optional ul {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.2em;
+  font-size: var(--text-xs);
+  line-height: 1.9;
   color: var(--text-tertiary);
 }
 </style>

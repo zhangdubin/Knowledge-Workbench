@@ -2105,6 +2105,16 @@ async def doctor(db: AsyncSession, mode: str = "") -> dict:
 
     离线模式下这里不发任何外网请求 —— 连「探测一下能不能连上」都不做，
     因为那本身就是一次出网。
+
+    返回里的两段语义**不许混**：
+      missing / how_to_fix —— 阻断项：缺了就完全没法开工。
+        目前只有 model_endpoint（没模型端点）与 knowledge（本地知识库为空）。
+      optional            —— 增强项：配了更好，不配照样能开工。
+        目前只有 github.repos 与 web_search.endpoint（仅在线模式探测）。
+
+    为什么必须分开：前端把 missing 渲染成「还差这些才能开发」的红条。
+    以前把增强项也算进 missing，用户看到的永远是「差一堆东西」，
+    于是以为整个软件开发模块不可用 —— 实际上模型一就绪就能开工。
     """
     cfg = dev_config.load_config()
     mode = mode or cfg.get("mode") or dev_config.MODE_OFFLINE
@@ -2157,6 +2167,11 @@ async def doctor(db: AsyncSession, mode: str = "") -> dict:
 
     missing = []
     how = []
+    # 「缺了就完全没法开工」与「只是少个增强」必须分开：
+    #   阻断项只有两个 —— 没有模型端点就一个字也生成不出来，
+    #     没有本地知识就只剩通用套路。
+    #   GitHub 仓库、网络检索都是**增强**：不配照样能开工。
+    optional: list[dict] = []
     # 「一键切到在线协同」的出口：
     #   离线模式不认云端模型是刻意的（不偷偷出网），但现实里大多数机器
     #   没有本地模型端点 —— 于是整个开发模块直接罢工，用户被卡在门口。
@@ -2177,13 +2192,24 @@ async def doctor(db: AsyncSession, mode: str = "") -> dict:
                        "而系统里已经配好了一个可用的大模型。",
             }
     if mode == dev_config.MODE_ONLINE:
+        # 这两项是**增强**，不是阻断：
+        #   配了 → 方案能参考 GitHub 上的现成实现、能查最新资料；
+        #   没配 → 照样开工，只是少这两路参考来源。
+        # 放在 missing 里的话，前端会一直提示「还差这些才能开发」，
+        # 用户就以为整个模块不可用 —— 实际第一份方案照样出得来。
         if not gh_ready:
-            missing.append("github.repos")
-            how.append("开发设置 → GitHub 仓库：填 owner/repo，并配置令牌（可选但强烈建议）")
+            optional.append({
+                "key": "github.repos",
+                "label": "增强：参考 GitHub 上现成的开源实现",
+                "how_to_fix": "开发设置 → GitHub 仓库：填 owner/repo，并配置令牌（可选但强烈建议）；不配也能开工，只是少了这一路现成方案的来源",
+            })
         ws = cfg.get("web_search") or {}
         if not (ws.get("enabled") and (ws.get("endpoint") or "").strip()):
-            missing.append("web_search.endpoint")
-            how.append("开发设置 → 网络搜索：填搜索服务地址；不配就只用 GitHub 与本地知识")
+            optional.append({
+                "key": "web_search.endpoint",
+                "label": "增强：联网检索最新的技术资料与用法",
+                "how_to_fix": "开发设置 → 网络搜索：填搜索服务地址；不配也能开工，只是不会去网上找资料",
+            })
     if not (gene_count or doc_count):
         missing.append("knowledge")
         how.append("先到「养料库」吸收源码或文档：没有知识可引用，生成只能是通用套路")
@@ -2193,8 +2219,13 @@ async def doctor(db: AsyncSession, mode: str = "") -> dict:
         "mode_label": dev_config.MODE_LABEL.get(mode, mode),
         "outbound_enabled": dev_config.outbound_enabled(cfg),
         "capabilities": caps,
+        # missing 只放阻断项（与 how_to_fix 一一对应）：
+        #   前端拿它渲染「还差这些才能开工」的红条。
+        # optional 放增强项：配了更好，不配照样能开工，
+        #   绝不能混进 missing —— 混进去就等于说「模块不可用」。
         "missing": missing,
         "how_to_fix": how,
+        "optional": optional,
         "model": info,
         "switch_hint": switch_hint,
     }

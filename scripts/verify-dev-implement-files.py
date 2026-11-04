@@ -122,6 +122,7 @@ MOCK = {
     "calls": [],        # 每次实现阶段的请求（用户提示词）
     "titles": [],       # 每次实现阶段请求的文件名（按顺序）
     "fail_titles": set(),  # 这些文件一律回 500（模拟模型失败）
+    "spans": [],       # 每次实现调用的 [开始, 结束] 时刻（用来验并发）
 }
 
 
@@ -147,11 +148,17 @@ class _MockHandler(BaseHTTPRequestHandler):
         if "真实可运行" in system:
             # 项目生成阶段：一次只吐一个文件
             MOCK["calls"].append(user)
+            span = [time.time(), None]
+            MOCK["spans"].append(span)
             title = ""
             m = re.search(r"要写的文件：(.+)", user)
             if m:
                 title = m.group(1).strip()
             MOCK["titles"].append(title)
+            # 故意慢一点：模型本来就要 3~9 分钟，
+            # 慢着才看得出「几个文件是同时在问的」。
+            time.sleep(0.4)
+            span[1] = time.time()
             if title in MOCK["fail_titles"]:
                 body = json.dumps({"error": {"message": "mock: 模型崩了"}},
                                   ensure_ascii=False).encode("utf-8")
@@ -279,6 +286,7 @@ def main() -> int:
         print("== 2. 项目生成：一个文件一次调用 ==")
         MOCK["calls"] = []
         MOCK["titles"] = []
+        MOCK["spans"] = []
         MOCK["fail_titles"] = set()
         r = client.post("/api/dev/projects/%d/stages/implement/run" % pid, json={})
         check(r.status_code == 200, "POST /stages/implement/run 200")
@@ -300,6 +308,27 @@ def main() -> int:
         want = sorted(p for p, _l, _b in TASK_FILES.values())
         check(sorted(paths) == want,
               "产出的文件就是清单里的那些：%s" % sorted(paths))
+
+        print("== 2b. 并发：几个文件是同时在问模型的 ==")
+        spans = [s for s in MOCK["spans"] if s[0] and s[1]]
+        # 真正的同时在问数量：数某一时刻有多少个调用还没结束
+        events = []
+        for t0, t1 in spans:
+            events.append((t0, 1))
+            events.append((t1, -1))
+        events.sort()
+        now = peak = 0
+        for _t, d in events:
+            now += d
+            peak = max(peak, now)
+        check(peak >= 2,
+              "模型调用有重叠（最多同时 %d 个在问）" % peak)
+        main_spans = spans[:n]   # 前 n 次是主流程（每个任务问一次）
+        wall = max(s[1] for s in main_spans) - min(s[0] for s in main_spans)
+        serial = n * 0.4           # 一次问一个的话至少要这么久
+        check(wall < serial * 0.8,
+              "主流程墙钟 %.2fs < 串行的 %.2fs（并发确实省了时间）"
+              % (wall, serial))
 
         print("== 3. 进度：processed 递增到 N ==")
         check(int(job.get("processed") or 0) >= n,
@@ -339,13 +368,19 @@ def main() -> int:
               % (job2.get("status"), str(job2.get("error"))[:60]))
         arts2 = client.get("/api/dev/projects/%d" % pid2).json()["artifacts"]
         paths2 = [a["path"] for a in arts2]
-        check(len(arts2) == 2,
-              "失败前生成的 2 个文件仍在产出物里（%s）" % paths2)
-        check(paths2 == [TASK_FILES[tasks2[0]["title"]][0],
-                         TASK_FILES[tasks2[1]["title"]][0]],
-              "留下的是最先生成的那两个：%s" % paths2)
+        # 并发之后口径变了：失败的那两个没有产出物，
+        # 但**别的**文件（哪怕排在失败那两个后面）只要生成成功就得留下 ——
+        # 串行时是「连着挂两个就停手」，并发时是「该跑的都在跑，能留的都留」。
+        ok_paths = [TASK_FILES[t["title"]][0] for t in tasks2
+                    if t["title"] not in fail_titles]
+        bad_paths = [TASK_FILES[t["title"]][0] for t in tasks2
+                     if t["title"] in fail_titles]
+        check(paths2 == ok_paths,
+              "生成成功的文件全在产出物里（%s）" % paths2)
+        check(not [x for x in bad_paths if x in paths2],
+              "生成失败的文件不在产出物里（%s / %s）" % (bad_paths, paths2))
         how = " ".join(job2.get("how_to_fix") or [])
-        check("已生成 2/%d 个文件" % len(tasks2) in how,
+        check("已生成 %d/%d 个文件" % (len(ok_paths), len(tasks2)) in how,
               "how_to_fix 说清已生成多少：%s" % how[:120])
         check("重跑只补剩下的" in how,
               "how_to_fix 说清重跑只补剩下的：%s" % how[:120])

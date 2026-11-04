@@ -57,7 +57,7 @@
         <span v-if="job.error" class="job-error">{{ job.error }}</span>
         <span v-if="job.detail" class="job-detail">{{ jobDetailText }}</span>
         <span v-if="jobTimeout" class="job-timeout">
-          已经等了很久（超过 10 分钟），可以刷新页面看最新状态。
+          {{ jobTimeoutText }}
         </span>
       </div>
       <div v-if="jobMissing.length || jobHowToFix(job).length" class="job-fix">
@@ -108,6 +108,21 @@
       </div>
     </el-alert>
 
+    <!-- 可选增强：GitHub 仓库、网络搜索这些是「配了更好」，不是「缺了不能开工」。
+         所以用 info 型、可关闭 —— 不配也能用，不该看起来像故障。 -->
+    <el-alert
+      v-if="doctorOptional.length"
+      type="info"
+      :closable="true"
+      show-icon
+      class="ws-alert"
+      title="还可以配这些增强（不配也能开工，配了更好）"
+    >
+      <div v-for="(o, i) in doctorOptional" :key="'o' + i" class="blk-line">
+        {{ o.label }}<span v-if="o.how_to_fix"> —— {{ o.how_to_fix }}</span>
+      </div>
+    </el-alert>
+
     <!-- 降级说明：「没搜到」和「没搜」必须分开说 -->
     <el-alert
       v-for="(n, i) in notices"
@@ -140,10 +155,10 @@
           :closable="false"
           show-icon
           class="ws-alert"
-          title="这一步还在跑，已经超过 10 分钟"
+          :title="stageTimeoutTitle"
         >
           <div class="blk-line">
-            后端可能卡住了。可以点面板里的「重新生成」重跑，或者刷新页面看最新状态。
+            {{ stageTimeoutText }}
           </div>
         </el-alert>
         <!-- 后端还没上线流水线接口：说清楚，别白屏 -->
@@ -418,7 +433,7 @@ import {
   TASK_STATUS, modeLabel, modeType, projectStatus, taskStatus,
   citationKind, warningSeverity, describeWarning,
   planOutline, groupCitations, stageMeta, stageSummary,
-  jobProgress, jobHowToFix, unwrapJob, doctorSummary, doctorMissingText,
+  jobProgress, jobHowToFix, unwrapJob, doctorSummary, doctorSplit,
   formatPercent, scoreLevel,
 } from '../../utils/dev.js'
 
@@ -468,16 +483,59 @@ const feedbackDialog = ref(false)
 const feedbackReport = ref(null)
 const feedbackForm = reactive({ artifact_ids: [], lessons: '' })
 
+/* ---- 作业轮询 ---- */
+// 轮询时限**按阶段给**，不能一刀切。
+//
+// 为什么：一刀切 10 分钟是按「短阶段」定的，可 implement（项目生成）
+// 要给每个文件各写一遍模型 —— 实测 8 个文件要 25~70 分钟。
+// 10 分钟就停轮询的话，用户看到的就是「转了十分钟不动了」，
+// 像坏了，其实后端还在好好跑。
+const JOB_TIMEOUT_BY_STAGE = {
+  clarify: 30 * 60 * 1000,
+  specify: 30 * 60 * 1000,
+  design: 30 * 60 * 1000,
+  implement: 120 * 60 * 1000,
+}
+// 未知阶段（旧的一次性流程）按中等档给，宁可多等也不要停在半路。
+const JOB_TIMEOUT_DEFAULT_MS = 30 * 60 * 1000
+// 轮询节奏：正常 1.5 秒一次；超过时限后放慢到 3 秒
+// （作业还在跑，没必要一直盯着，省得浏览器和后端都跟着累）。
+const POLL_FAST_MS = 1500
+const POLL_SLOW_MS = 3000
+
 let pollTimer = null
+let pollActive = false
 let pollStartedAt = 0
-const JOB_TIMEOUT_MS = 10 * 60 * 1000
+let pollStage = ''
+let pollTimeoutMs = JOB_TIMEOUT_DEFAULT_MS
+let pollDelayMs = POLL_FAST_MS
 const jobTimeout = ref(false)
+
+/** 这一阶段的轮询时限（毫秒） */
+function jobTimeoutMs(stage) {
+  return JOB_TIMEOUT_BY_STAGE[stage] || JOB_TIMEOUT_DEFAULT_MS
+}
+
+/** 时限换算成「分钟」：至少显示 1 分钟，别出现「已超过 0 分钟」 */
+function timeoutMinutes(ms) {
+  return Math.max(1, Math.round(ms / 60000))
+}
+
+/** 停掉轮询（作业结束、切页、卸载时都要调） */
+function stopPolling() {
+  pollActive = false
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+}
 
 /* ---- 阶段级超时兜底 ---- */
 // 后端自动推进的阶段不一定返回 job（比如 answer 之后后端自己把下一阶段排上了），
 // 那时候没有作业可轮询，就只剩一个转圈的骨架屏 ——
 // 这里用「阶段状态 + 计时」盯着，超时了明确告诉用户「还在跑/已超时」。
-const STAGE_TIMEOUT_MS = 10 * 60 * 1000
+// 时限同样按阶段给（见 JOB_TIMEOUT_BY_STAGE），
+// 不然 implement 跑到一半就会被人为判成「卡住了」。
 const stageStartedAt = ref(0)
 const stageTimeout = ref(false)
 let stageClock = null
@@ -486,7 +544,7 @@ function syncStageClock() {
   const st = stageOf(activeStage.value)
   if (st && st.status === 'running') {
     if (!stageStartedAt.value) stageStartedAt.value = Date.now()
-    if (Date.now() - stageStartedAt.value > STAGE_TIMEOUT_MS) stageTimeout.value = true
+    if (Date.now() - stageStartedAt.value > jobTimeoutMs(activeStage.value)) stageTimeout.value = true
   } else {
     stageStartedAt.value = 0
     stageTimeout.value = false
@@ -498,8 +556,40 @@ const planText = computed(() => planOutline(project.value?.plan_json))
 const currentStageKey = computed(() => pipeline.value?.current_stage || '')
 const currentStageTitle = computed(() => stageMeta(currentStageKey.value).title)
 const currentStageNote = computed(() => stageSummary(stageOf(currentStageKey.value)))
-const doctorMissing = computed(() => doctorMissingText(doctor.value?.missing))
+// 体检结论拆成两份：阻断项（不开工做不了）与可选增强（配了更好）
+const doctorSplitResult = computed(() => doctorSplit(doctor.value))
+const doctorMissing = computed(() => doctorSplitResult.value.blocking.map((b) => b.text))
 const doctorSummaryText = computed(() => doctorSummary(doctor.value))
+// 可选增强（GitHub 仓库、网络搜索…）：不是缺什么，是「配了更好」
+const doctorOptional = computed(() => doctorSplitResult.value.optional)
+
+/**
+ * 作业轮询超时后的提示文案。
+ *
+ * 关键：**不能说「后端可能卡住了」**。
+ *   implement 阶段生成 8 个文件要 25~70 分钟，
+ *   在 10 分钟的尺度上说「卡住了」对那个阶段是错的 ——
+ *   用户听了只会以为坏了，然后白等或者重跑一遍（更慢）。
+ *   所以这里只说事实：还在跑、慢是正常的、进度会继续走。
+ */
+const jobTimeoutText = computed(() => {
+  const mins = timeoutMinutes(pollTimeoutMs)
+  if (pollStage === 'implement') {
+    return `这一步还在跑（已超过 ${mins} 分钟）。项目生成要给每个文件各写一遍模型，慢是正常的；进度会继续走，别急。`
+  }
+  return `这一步还在跑（已超过 ${mins} 分钟），进度会继续走；急的话可以刷新页面看最新状态。`
+})
+
+/** 阶段级兜底计时器的标题与正文（同样按阶段给时限、如实措辞） */
+const stageTimeoutTitle = computed(
+  () => `这一步还在跑，已经超过 ${timeoutMinutes(jobTimeoutMs(activeStage.value))} 分钟`,
+)
+const stageTimeoutText = computed(() => {
+  if (activeStage.value === 'implement') {
+    return '项目生成要给每个文件各写一遍模型（8 个文件常见 25~70 分钟），慢是正常的，后端还在跑；进度会继续走。实在不放心，可以刷新页面看最新状态。'
+  }
+  return '这一阶段的模型调用比平常久一些，后端还在跑。可以先等等；也可以点面板里的「重新生成」重跑。'
+})
 
 /**
  * 作业失败时后端挂在 job 顶层的 missing / how_to_fix。
@@ -656,7 +746,8 @@ async function runStage(stage, body) {
       return
     }
     job.value = j
-    pollJob(j.id)
+    // 把阶段带进去：轮询时限按阶段给（implement 要按小时算）
+    pollJob(j.id, stage)
   } catch (e) {
     collectError(e, '这一步没启动')
     // 失败多半是「模型不可用」，拉一次体检，好给「切在线协同」的出口
@@ -719,20 +810,25 @@ async function switchOnline() {
  *
  * 另外必须有超时兜底：作业卡住时不能无限转圈。
  */
-function pollJob(jobId) {
-  if (pollTimer) clearInterval(pollTimer)
+function pollJob(jobId, stage) {
+  stopPolling()
+  pollActive = true
   pollStartedAt = Date.now()
+  pollStage = stage || ''
+  pollTimeoutMs = jobTimeoutMs(pollStage)
+  pollDelayMs = POLL_FAST_MS
   jobTimeout.value = false
-  pollTimer = setInterval(async () => {
+
+  const tick = async () => {
+    if (!pollActive) return
     try {
       const res = await DevApi.job(jobId)
       const j = unwrapJob(res)
-      if (!j) return
+      if (!j) { scheduleNext(); return }
       job.value = j
       const p = jobProgress(j)
       if (p.done) {
-        clearInterval(pollTimer)
-        pollTimer = null
+        stopPolling()
         if (p.failed) {
           ElMessage.error('后台作业失败：' + (j.error || '（后端没给原因）'))
         } else {
@@ -742,16 +838,25 @@ function pollJob(jobId) {
         await loadPipeline()
         return
       }
-      if (Date.now() - pollStartedAt > JOB_TIMEOUT_MS) {
-        clearInterval(pollTimer)
-        pollTimer = null
+      // 超过时限**不停轮询** —— 停了就再也不会更新，用户看到的是
+      // 「十分钟不动了」，像坏了；其实后端还在跑。
+      // 这里只把提示改成「这一步耗时较长，仍在跑」，并把节奏放慢。
+      if (!jobTimeout.value && Date.now() - pollStartedAt > pollTimeoutMs) {
         jobTimeout.value = true
-        ElMessage.warning('等太久了，先停下来；可以刷新页面看最新状态')
+        pollDelayMs = POLL_SLOW_MS
       }
     } catch {
       // 轮询失败不打断作业：作业还在后端跑，下一轮再看
     }
-  }, 1500)
+    scheduleNext()
+  }
+
+  const scheduleNext = () => {
+    if (!pollActive) return
+    pollTimer = setTimeout(tick, pollDelayMs)
+  }
+
+  pollTimer = setTimeout(tick, POLL_FAST_MS)
 }
 
 /* ============ 旧的一次性流程（流水线没上线时的兜底） ============ */
@@ -767,7 +872,8 @@ async function genPlan() {
       return
     }
     job.value = j
-    pollJob(j.id)
+    // 旧的一次性流程也要按阶段给时限：生成方案属于「补全」这一档
+    pollJob(j.id, 'specify')
   } catch (e) {
     collectError(e, '生成方案没启动')
     await loadDoctor()
@@ -787,7 +893,8 @@ async function genAll() {
       return
     }
     job.value = j
-    pollJob(j.id)
+    // 一次性生成全部产出 = 项目生成那一档，按小时给时限
+    pollJob(j.id, 'implement')
   } catch (e) {
     collectError(e, '生成产出没启动')
     await loadDoctor()
@@ -1051,7 +1158,9 @@ onMounted(async () => {
   }, 5000)
 })
 onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer)
+  // 轮询用的是 setTimeout 链（为了能中途改节奏），
+  // 卸载时统一走 stopPolling 清掉，别让计时器在页面走了还一直回调。
+  stopPolling()
   if (stageClock) clearInterval(stageClock)
 })
 </script>

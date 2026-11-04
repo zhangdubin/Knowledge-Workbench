@@ -392,11 +392,10 @@ IMPLEMENT_SYSTEM = """你是一位资深工程师，正在为一个项目生成*
 - **别展开长篇推理**：直接给文件内容。
 """ + _SCHEMA_RULES
 
-# 项目生成分两批问：
-# 第一批只写「能跑起来的代码」，第二批只写「跑起来需要的配套」。
-# 为什么要分批：一次要一整套文件，推理型模型很容易把输出预算花光、
+# 项目生成一次只问一个文件：
+# 为什么要一个文件一次问：一次要一整套文件，推理型模型很容易把输出预算花光、
 # 正文只写一半甚至一个字没写（实测 MiniMax-M3.1-Flash 预算不够时正文 0 字）。
-# 分批之后每次问的都是小任务：更稳、更快，失败也只需要重问一小批。
+# 一个文件一次问之后每次都是小任务：更稳、更快，失败也只需要重问那一个。
 IMPLEMENT_ONE_FILE = """
 【这一次只写这一个文件】
 要写的文件：%s
@@ -415,6 +414,16 @@ IMPLEMENT_KIND_FILE = """
 只输出一个 JSON 对象：{"files": [{"path": "...", "content": "..."}]}
 path 用项目内相对路径；content 给完整内容，不要省略号。
 """
+
+# 项目生成阶段同时问模型几个文件（有限并发）。
+#
+# 为什么默认 3 路：
+#     实测一个文件要 3~9 分钟，8 个文件串行 = 25~70 分钟 ——
+#     用户等一半就以为功能坏了，并发是让它「能用」的关键。
+#     但模型服务有并发配额，超了会被限流，反而更慢甚至全挂；
+#     3 路是「明显变快」与「不把模型端点打爆」之间的折中。
+#     想改的话在开发设置里加一项 implement_concurrency（1~8）。
+IMPLEMENT_CONCURRENCY = 3
 
 
 def _stack_text(project: DevProject) -> str:
@@ -1571,7 +1580,7 @@ async def _stage_implement(db: AsyncSession, project: DevProject,
     files: list = []
     artifact_ids: list = []
     generated = 0
-    consecutive_failures = 0
+    failed_count = 0
     failures: list = []
     total = len(plan)
     # 作业的总步数要跟着文件数走，否则进度条会走到 100% 以外。
@@ -1579,48 +1588,135 @@ async def _stage_implement(db: AsyncSession, project: DevProject,
                       total=len(STAGE_STEPS.get("implement") or []) + total)
 
     await step.begin("逐个生成文件")
-    for idx, item in enumerate(plan, start=1):
-        if files and all(_required_kinds(files).values()):
+    # 并发生成：模型调用同时跑，落库之后按计划顺序做。
+    #
+    # 为什么并发：
+    #     实测一个文件要 3~9 分钟（推理型模型要想 + 写正文），
+    #     8 个文件串行 = 25~70 分钟 —— 用户等一半就以为功能坏了。
+    #     三路并发把总时长压到三分之一。
+    #
+    # 为什么落库不跟着一起并发：
+    #     SQLite 同一时刻只允许一个写事务，并发写会互相踩；
+    #     而且产出物的顺序跟计划一致，用户在界面上看着也顺。
+    #     所以并发只加在「问模型」这一段（慢的那段），
+    #     拿到内容之后按计划顺序一条条落库（快的那段）。
+    #
+    # 为什么并发度不是 8 路全开：
+    #     模型服务有并发配额，超了会被限流，反而更慢甚至全挂；
+    #     三路是「明显变快」与「不把模型端点打爆」之间的折中。
+    conc = max(1, min(int(cfg.get("implement_concurrency") or IMPLEMENT_CONCURRENCY), 8))
+    stage_limit = int(cfg.get("stage_timeout") or 600)
+    from ..database import SessionLocal
+    pending = [(i, item) for i, item in enumerate(plan, start=1)
+               if item.get("task_id") not in done_task_ids]
+    results: dict = {}
+    done_count = 0
+    ok_count = 0
+    progress_lock = asyncio.Lock()
+
+    async def _progress(text_of, ok: bool = False) -> None:
+        """回写进度：完成一个算一个，不丢计数。
+
+        为什么每个协程自己开连接写：
+            AsyncSession 不是并发安全的，多个协程共用一个会话会互相踩。
+            这里每个协程开一个短连接，只改作业那一行。
+        为什么加锁：
+            「计数 + 写回」必须是一个整体，否则两个协程交错写，
+            后写的那个可能带着更小的数落库 —— 进度就会倒退、丢计数。
+        """
+        nonlocal done_count, ok_count
+        async with progress_lock:
+            done_count += 1
+            if ok:
+                ok_count += 1
+                # 进度只有一份账：step.processed。
+                # 另起一个计数器的话，阶段收尾时 step.end() 会拿一个
+                # 比刚才小得多的数写回去 —— 进度条会从「已生成 6 个」倒回「2」，
+                # 前端看着像越跑越慢（E2E 断言 processed 只增不减也会挂）。
+                # 并发阶段主协程只在 gather 上等着，不会同时动它。
+                # 只在「真的产出文件了」时 +1 —— 跟串行那版口径一致：
+                # 没生成出来的文件不算完成的一步。
+                step.processed += 1
+            try:
+                async with SessionLocal() as sdb:
+                    await _update_job(sdb, step.job_id,
+                                      processed=step.processed,
+                                      current=text_of(done_count, ok_count))
+            except Exception as e:
+                log.warning("写进度失败：%s", type(e).__name__)
+
+    queue = list(pending)
+
+    async def _worker() -> None:
+        """一个工人：从清单里领一个文件去问模型，领完接着领下一个。
+
+        为什么是「领活」而不是「一人一个文件」：
+            文件清单长短不一（有的任务模型慢、有的快），
+            固定分配会让快的工人干等着 —— 谁先干完谁先领下一个，整体才压得平。
+        为什么单个文件失败不重试：
+            单文件时限已经按实测调宽（implement_file_timeout，实测一个文件 3~9 分钟），
+            到这里基本是模型真的卡住了；再等一轮只是把「进度卡住」的时间翻倍。
+            跳过的文件由「重跑只补剩下的」兜住 —— 那一轮只问缺的那几个。
+        """
+        while True:
+            if not queue:
+                return
             # 必需文件齐了就不必再问模型（模型有时一次给好几个文件）
-            break
-        if item.get("task_id") in done_task_ids:
-            # 续跑：上一个文件已经生成过了，跳过
+            got = [f for r in results.values() for f in (r.get("files") or [])]
+            if got and all(_required_kinds(got).values()):
+                return
+            idx, item = queue.pop(0)
+            try:
+                ask = IMPLEMENT_ONE_FILE % (item["title"], item["description"],
+                                            item["acceptance"])
+                data, raw_one = await call_json_with_timeout(
+                    mode, IMPLEMENT_SYSTEM, prompt + ask, cfg,
+                    what="生成文件「%s」" % item["title"],
+                    max_tokens=mx, timeout=tmo)
+                produced = _files_from_model(data)
+                ok = bool(produced)
+                results[idx] = {"ok": ok, "files": produced, "raw": raw_one,
+                                "notes": _as_text(data.get("notes")),
+                                "error": "" if ok else "模型没有返回文件内容"}
+                await _progress(lambda d, o: "已生成 %d/%d 个文件：%s"
+                                % (o, total, item["title"]), ok=ok)
+            except Exception as e:
+                # 这一整个文件就算没生成出来（模型挂了、超时了、返回看不懂了）：
+                # 记下来、继续干下一个 —— 已经生成好的文件不受影响。
+                results[idx] = {"ok": False, "error": _err_text(e), "raw": ""}
+                await _progress(lambda d, o: "第 %d/%d 个文件没生成出来：%s"
+                                % (idx, total, item["title"]))
+
+    workers = [asyncio.create_task(_worker())
+               for _ in range(min(conc, max(1, len(pending))))]
+    timed_out = False
+    try:
+        await asyncio.wait_for(asyncio.gather(*workers, return_exceptions=True),
+                               timeout=stage_limit)
+    except asyncio.TimeoutError:
+        # 整个阶段超时：在飞的那几个白等了，但已经拿到手的文件要留下 ——
+        # 用户至少能导出一部分，下次重跑只补剩下的。
+        timed_out = True
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+    await step.end()
+
+    # 落库：按计划的原顺序顺序执行（并发写 SQLite 会打架）。
+    for idx, item in pending:
+        res = results.get(idx)
+        if not res:
+            # 被掐掉的那一个（阶段超时）—— 不算失败，也不产出文件。
             continue
-        ask = IMPLEMENT_ONE_FILE % (item["title"], item["description"],
-                                    item["acceptance"])
-        await _update_job(
-            db, step.job_id, processed=step.processed,
-            current="生成第 %d/%d 个文件：%s" % (idx, total, item["title"]))
-        try:
-            data, raw_one = await call_json_with_timeout(
-                mode, IMPLEMENT_SYSTEM, prompt + ask, cfg,
-                what="生成文件「%s」" % item["title"],
-                max_tokens=mx, timeout=tmo)
-        except Exception as e:
-            # 一个文件失败不重试，直接跳过它去下一个。
-            #
-            # 为什么不重试：单文件时限已经按实测调宽（implement_file_timeout，
-            # 实测一个文件 3~9 分钟），到这里基本是模型真的卡住了；
-            # 再等一轮只是把「进度卡住」的时间翻倍。
-            # 跳过的文件由「重跑只补剩下的」兜住 —— 那一轮只问缺的那几个。
-            consecutive_failures += 1
-            failures.append({"title": item["title"], "error": _err_text(e)})
-            log.warning("生成文件失败 %s：%s", item["title"], type(e).__name__)
-            if consecutive_failures >= 2:
-                break
+        if not res.get("ok"):
+            failed_count += 1
+            failures.append({"title": item["title"],
+                             "error": res.get("error") or ""})
+            log.warning("生成文件失败 %s：%s", item["title"], res.get("error"))
             continue
-        consecutive_failures = 0
-        raw += raw_one
-        notes = notes or _as_text(data.get("notes"))
-        produced = _files_from_model(data)
-        if not produced:
-            consecutive_failures += 1
-            failures.append({"title": item["title"], "error": "模型没有返回文件内容"})
-            if consecutive_failures >= 2:
-                break
-            continue
-        # 立刻落库：超时只损失在飞的那一个文件，之前生成的全保住。
-        for f in produced:
+        raw += res.get("raw") or ""
+        notes = notes or (res.get("notes") or "")
+        for f in (res.get("files") or []):
             row = await dev_svc.create_artifact(db, project.id, {
                 "filename": f["filename"],
                 "path": f["path"],
@@ -1634,23 +1730,49 @@ async def _stage_implement(db: AsyncSession, project: DevProject,
             artifact_ids.append(row.id)
             files.append(f)
         generated += 1
-        step.processed += 1
-        await _update_job(
-            db, step.job_id, processed=step.processed,
-            current="已生成 %d/%d 个文件：%s" % (generated, total, item["title"]))
-    await step.end()
+    # 文件的进度在 _progress 里已经一个个加过了，
+    # 这里不能再加一次（加两次作业进度会超过 total，前端进度条会顶到 100% 以外）。
 
-    if consecutive_failures >= 2:
-        # 单个文件失败不作废整段：已生成的文件留在产出物里（还能导出），
-        # 阶段判失败，但要说清「已经拿到多少、怎么接着补」。
+    if timed_out:
         st["data"] = _implement_data(files, artifact_ids, [], blocked=None,
                                      failures=failures, notes=notes,
                                      version=int((st.get("data") or {}).get("version") or 0) + 1)
         st["summary"] = stage_summary("implement", st)
         await save_pipeline(db, project, pipeline)
         raise PipelineError(
-            "项目生成阶段：连续 %d 个文件没生成出来（已生成 %d/%d 个文件）"
-            % (consecutive_failures, generated, total),
+            "项目生成阶段：整体超过 %d 秒还没跑完（已生成 %d/%d 个文件）"
+            % (stage_limit, generated, total),
+            status=504, missing=["implement_timeout"],
+            how_to_fix=[
+                "已生成 %d/%d 个文件，重跑只补剩下的（已生成的不会重做）"
+                % (generated, total),
+                "把开发设置里的 stage_timeout 调大一点",
+                "或者调小 implement_concurrency（并发太高时模型会互相拖慢）",
+            ],
+            detail={"generated": generated, "total": total,
+                    "failed": failures})
+
+
+
+    if failed_count >= 2:
+        # 单个文件失败不作废整段：已生成的文件留在产出物里（还能导出），
+        # 阶段判失败，但要说清「已经拿到多少、怎么接着补」。
+        #
+        # 为什么是「一共挂 2 个」而不是「连着挂 2 个」：
+        #     串行时「连着」是确定的 —— 第 3 个文件挂了就停手，后面的压根没问。
+        #     并发之后所有文件都在飞，哪个文件挂取决于模型什么时候返回，
+        #     「连着」不再有唯一答案（同一个模型、同一批文件，两次跑挂的
+        #     可能不是同几个）。按总数判才说得清、也才稳定。
+        #     对用户来说这反而更好：挂 2 个就重跑补上，
+        #     拿到的是模型真写的文件，而不是自动合成的骨架。
+        st["data"] = _implement_data(files, artifact_ids, [], blocked=None,
+                                     failures=failures, notes=notes,
+                                     version=int((st.get("data") or {}).get("version") or 0) + 1)
+        st["summary"] = stage_summary("implement", st)
+        await save_pipeline(db, project, pipeline)
+        raise PipelineError(
+            "项目生成阶段：有 %d 个文件没生成出来（已生成 %d/%d 个文件）"
+            % (failed_count, generated, total),
             status=500, missing=["implement_files"],
             how_to_fix=[
                 "已生成 %d/%d 个文件，重跑只补剩下的（已生成的不会重做）"

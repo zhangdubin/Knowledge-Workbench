@@ -640,25 +640,119 @@ export function doctorMissingText(missing) {
 }
 
 /**
+ * 可选增强的中文名。
+ *
+ * 后端给的 label 已经是人话了，这里只是兜底：
+ * 万一某个 key 后端没给 label，前端也不至于把 "github.repos" 甩到界面上。
+ */
+const DOCTOR_OPTIONAL_TEXT = {
+  'github.repos': 'GitHub 开源项目取材（能直接读真实仓库，少走弯路）',
+  github: 'GitHub 开源项目取材（能直接读真实仓库，少走弯路）',
+  'web_search.endpoint': '网络知识检索（能顺手查最新的框架文档与业界做法）',
+  web_search: '网络知识检索（能顺手查最新的框架文档与业界做法）',
+}
+
+/**
+ * 把 doctor 的 optional 列表翻译成能直接渲染的 [{label, how_to_fix}]。
+ *
+ * 为什么要单独一个函数、而不是在页面里 map：
+ *   「可选增强」和「真正缺的东西」是两回事 ——
+ *   缺的是**不开工就做不了**（模型端点、知识库），
+ *   可选的是**配了更好**（GitHub 仓库、网络搜索）。
+ *   之前后端把后两者也放进 missing，于是页面一片告警色，
+ *   用户以为模块坏了，其实照样能生成项目。
+ */
+export function doctorOptionalText(optional) {
+  const list = Array.isArray(optional) ? optional : (optional ? [optional] : [])
+  return list.map((o) => {
+    if (typeof o === 'string') {
+      return { key: o, label: DOCTOR_OPTIONAL_TEXT[o] || String(o), how_to_fix: '' }
+    }
+    const key = (o && o.key) || ''
+    return {
+      key,
+      label: (o && o.label) || DOCTOR_OPTIONAL_TEXT[key] || String(key),
+      how_to_fix: (o && o.how_to_fix) || '',
+    }
+  })
+}
+
+/**
+ * 「其实是增强、不是阻断」的键。
+ *
+ * 为什么前端也要认这一份：后端的新契约把这几项挪进了 optional，
+ * 但旧后端（还没升级的那台）把它们留在 missing 里 ——
+ * 如果前端只信后端，模块就会在旧后端上继续显示成「还差这些才能开工」，
+ * 而用户明明能开工。这是「兼容性兜底」，后端升级后这段逻辑自动什么都不做。
+ */
+const DOCTOR_OPTIONAL_KEYS = ['github.repos', 'web_search.endpoint', 'github', 'web_search']
+
+/**
+ * 把 doctor 拆成「阻断项」和「可选增强」两份。
+ *
+ * 返回：
+ *   blocking: [{key, text, how_to_fix}] —— 不配就真的做不了
+ *   optional: [{key, label, how_to_fix}] —— 配了更好，不配照样开工
+ *
+ * how_to_fix 与 missing 是**一一对应**的（后端契约如此），
+ * 所以这里按下标配对，拆开之后每条阻断项仍带着自己的修法。
+ */
+export function doctorSplit(doctor) {
+  const missing = Array.isArray(doctor && doctor.missing) ? doctor.missing : []
+  const fixes = Array.isArray(doctor && doctor.how_to_fix) ? doctor.how_to_fix : []
+  const blocking = []
+  const optional = doctorOptionalText(doctor && doctor.optional)
+  const seen = new Set(optional.map((o) => o.key))
+  missing.forEach((k, i) => {
+    if (DOCTOR_OPTIONAL_KEYS.includes(k)) {
+      // 旧后端：增强项混在 missing 里 → 挪进 optional，别当成阻断项
+      if (!seen.has(k)) {
+        seen.add(k)
+        optional.push({
+          key: k,
+          label: DOCTOR_OPTIONAL_TEXT[k] || String(k),
+          how_to_fix: fixes[i] || '',
+        })
+      }
+      return
+    }
+    blocking.push({
+      key: k,
+      text: DOCTOR_MISSING_TEXT[k] || String(k),
+      how_to_fix: fixes[i] || '',
+    })
+  })
+  return { blocking, optional }
+}
+
+/**
  * doctor 的一句话结论。
+ *
+ * 口径：只有**阻断项**（missing）才影响「能不能开工」。
+ *   阻断项为空 → 结论是「可以开工」，哪怕可选增强一个都没配；
+ *   阻断项非空 → 才说「还差这些才能开工」，并把修法说清楚。
+ * 可选增强最多在附注里提一句，绝不能混进「还差这些」里。
+ *
  * 离线模式下没配本地模型 → 说清「可以切在线协同」，别只说「不可用」。
  */
 export function doctorSummary(doctor) {
   if (!doctor) return ''
   const mode = doctor.mode || ''
-  const missing = doctorMissingText(doctor.missing)
-  if (!missing.length) {
-    return mode === 'online'
-      ? '在线协同模式：大模型、外网检索与开源项目都可用。'
-      : '离线闭环模式：本地模型已就绪，全程不发外网请求。'
+  const { blocking, optional } = doctorSplit(doctor)
+  if (!blocking.length) {
+    const base = mode === 'online'
+      ? '在线协同模式：核心能力可用，可以开工。'
+      : '离线闭环模式：本地模型已就绪，可以开工。'
+    const note = optional.length
+      ? '还可以配这些增强（不配也能开工，配了更好）：' + optional.map((o) => o.label).join('、')
+      : ''
+    return [base, note].filter(Boolean).join(' ')
   }
-  const head = mode === 'offline'
-    ? '离线闭环模式现在用不了：'
-    : '还差一些配置：'
+  const head = '还差这些才能开工：'
   const tail = mode === 'offline'
     ? '系统里已经配好的云端大模型在在线协同模式下可直接用。'
     : ''
-  return [head + missing.join('；'), tail].filter(Boolean).join(' ')
+  return [head + blocking.map((b) => b.text).join('；'), tail].filter(Boolean).join(' ')
 }
 
 /* ============ 产出物 ============ */

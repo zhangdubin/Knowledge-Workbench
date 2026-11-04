@@ -1605,10 +1605,22 @@ async def _stage_implement(db: AsyncSession, project: DevProject,
     #     模型服务有并发配额，超了会被限流，反而更慢甚至全挂；
     #     三路是「明显变快」与「不把模型端点打爆」之间的折中。
     conc = max(1, min(int(cfg.get("implement_concurrency") or IMPLEMENT_CONCURRENCY), 8))
-    stage_limit = int(cfg.get("stage_timeout") or 600)
     from ..database import SessionLocal
     pending = [(i, item) for i, item in enumerate(plan, start=1)
                if item.get("task_id") not in done_task_ids]
+    # 并发阶段的整体时限不能照抄 stage_timeout：
+    #     串行那版「一次调用 = 一步」，stage_timeout 只是兜底；
+    #     并发之后阶段真正的下界是「几轮 × 单文件时限」——
+    #     8 个文件三路并发 = 3 轮，每轮最长 implement_file_timeout（默认 900 秒）。
+    #     照抄 1800 就会出现「每个文件都没超自己的时限，
+    #     阶段却被整体掐掉」的假失败：报出来是「超时」，
+    #     其实一个文件都没超时 —— 这种假失败比慢更糟。
+    #     所以取「用户配的 stage_timeout」与「跑完全部轮次所需时间」的较大者：
+    #       下界保证不误杀（不低于跑完所需）；
+    #       上界比串行那版更紧（轮次 ≤ 文件数），阶段不会无限拖长。
+    waves = max(1, (len(pending) + conc - 1) // conc)
+    stage_limit = max(int(cfg.get("stage_timeout") or 600),
+                      waves * tmo + 60)
     results: dict = {}
     done_count = 0
     ok_count = 0
@@ -1748,6 +1760,9 @@ async def _stage_implement(db: AsyncSession, project: DevProject,
                 % (generated, total),
                 "把开发设置里的 stage_timeout 调大一点",
                 "或者调小 implement_concurrency（并发太高时模型会互相拖慢）",
+                "这次的超时上限已经按「%d 路并发 × %d 轮 × 单文件时限」算过了，"
+                "调大 stage_timeout 之前先想想是不是单次调用太久"
+                % (conc, waves),
             ],
             detail={"generated": generated, "total": total,
                     "failed": failures})

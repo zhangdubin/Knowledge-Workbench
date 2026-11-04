@@ -65,7 +65,13 @@
           <el-button size="small" text title="放大" @click="zoomBy(1.25)">
             <el-icon><ZoomIn /></el-icon>
           </el-button>
-          <el-button size="small" text title="缩小" @click="zoomBy(0.8)">
+          <!--
+            缩小步长跟另两张图一致（0.75）：
+            0.8 缩 5 次只到 0.51，正好卡在「只显示图标」那一档，
+            用户怎么缩都进不了「文字全部隐藏」那一档 ——
+            「缩到看不清就藏字」的提示永远不出现。
+          -->
+          <el-button size="small" text title="缩小" @click="zoomBy(0.75)">
             <el-icon><ZoomOut /></el-icon>
           </el-button>
           <el-button size="small" text title="适应窗口" @click="resetView">
@@ -141,7 +147,7 @@
         <span v-if="showLeft" class="dg-rail dg-rail-l" :style="{ left: layout.xLeft + 'px' }" />
         <span v-if="showRight" class="dg-rail dg-rail-r" :style="{ left: layout.xRight + 'px' }" />
 
-        <div ref="host" class="dg-canvas" :style="{ height: H + 'px' }" />
+        <div ref="host" class="dg-canvas" :style="{ height: canvasH }" />
 
         <!-- 标题层：文字用 DOM 画，不跟节点挤在同一张 canvas 上 -->
         <div class="dg-overlay">
@@ -696,8 +702,21 @@ const nodes = computed(() => {
   if (evidenceScope.value === 'focus' && filter.value !== 'knowledge' && !searchHit.value) {
     const keep = focusKeep.value
     // 只收「证据链那侧」：基因与养料库是左链的主体，不能被一起收掉
-    out = out.filter((n) =>
+    const focused = out.filter((n) =>
       (n.kind === 'gene' || n.kind === 'library') || keep.has(n.id))
+    // 收窄到空 = 图上一个节点都不剩 —— 这是 bug，不是取舍。
+    //
+    // 什么时候会收成空：
+    //   focusKeep 是**从基因反推**出来的（基因的出处 → 出处所属的文件）。
+    //   一个基因都没有的时候（还没吸收养料、基因层被清空），
+    //   focusKeep 必是空集，「只留线索」就把 50 个证据节点全收掉了 ——
+    //   用户看到一张空图，还以为数据丢了。
+    //
+    // 为什么不能就这么让它空着：
+    //   收窄的目的是「少看噪音」，不是「什么都不给看」。
+    //   没有线索的时候先把全部摊开 —— 让人先看见有什么，
+    //   总比给一张白纸强。
+    out = focused.length ? focused : out
   }
   // 搜索：只留命中节点与它的一跳邻居
   if (searchHit.value) out = out.filter((n) => searchHit.value.ids.has(n.id))
@@ -789,6 +808,19 @@ const TARGET_H = 940      // 图区目标高度；行多的时候自动收窄行
 // 再密就真的叠上去了（实测 20px 是压字与浪费空间之间的分界）。
 const MIN_PITCH = 20
 const MAX_PITCH = 32
+
+/**
+ * 图区目标高度：普通模式是固定值，全屏时改成「可用高度」
+ *
+ * 为什么全屏要改：
+ *   普通模式的图区是「固定高度 + 内部滚动」，行距按 TARGET_H 算，
+ *   图多高就画多高（实测 720px）。全屏后视口有 780px 可用，
+ *   还按内容高度画的话，底下就空一大块 —— 看着就是「全屏没铺满」。
+ *   改成按可用高度排，行距会自然撑开，双螺旋把整屏用满。
+ */
+const layoutTargetH = ref(TARGET_H)
+/** 全屏时的画布高度；普通模式是 0，表示按内容高度 */
+const fsCanvasH = ref(0)
 
 const layout = ref({
   pos: {}, W: 900, H: 460, leftLen: 1, rightLen: 1,
@@ -1103,7 +1135,7 @@ function computeLayout() {
     //   两边行距根本不一样 → 横档永远是斜的，
     //   而且链长一差好几倍时，「上下对齐」这种承诺根本兑现不了。
     const total = Math.max(rowSeq.length, 1)
-    pitch = Math.max(dens.min, Math.min(dens.max, (TARGET_H - PAD_TOP - PAD_BOTTOM) / total))
+    pitch = Math.max(dens.min, Math.min(dens.max, (layoutTargetH.value - PAD_TOP - PAD_BOTTOM) / total))
     const span = total * pitch
     H = PAD_TOP + PAD_BOTTOM + span
     rowSeq.forEach((r, i) => {
@@ -1124,7 +1156,7 @@ function computeLayout() {
     }
   } else {
     const rows = Math.max(leftLen, rightLen)
-    pitch = Math.max(dens.min, Math.min(dens.max, (TARGET_H - PAD_TOP - PAD_BOTTOM) / rows))
+    pitch = Math.max(dens.min, Math.min(dens.max, (layoutTargetH.value - PAD_TOP - PAD_BOTTOM) / rows))
     const span = rows * pitch
     H = PAD_TOP + PAD_BOTTOM + span
     leftRows.forEach((n, i) => {
@@ -1194,18 +1226,37 @@ function applyZoomTier() {
  * 为什么还要重新对中：
  *   setSize 会按新旧画布的比例缩放视图，比例一变，整张图就偏到一边去了。
  */
-function onFullscreenChange() {
+/**
+ * 用户自己想要的缩放
+ *
+ * 为什么单独记一份：
+ *   容器尺寸一变（进/出全屏、窗口缩放），vis 的 setSize 会按新旧画布的
+ *   比例把视图重缩放一遍 —— 用户调好的缩放就这么被冲掉了。
+ *   而「重新对中」是代码主动做的，也不该顺手把缩放按回 1。
+ *   所以缩放单独存一份：任何一次重排、重新对中之后都按它还原。
+ */
+let userScale = 1
+
+async function onFullscreenChange() {
   if (!net) return
-  const el = host.value
   const vp = viewport.value
-  if (el) net.setSize(`${el.clientWidth}px`, `${el.clientHeight}px`)
-  // 重新对中：回到布局中心，缩放回到 1
-  try {
-    const lay = layout.value
-    net.moveTo({ position: { x: lay.W / 2, y: lay.H / 2 }, scale: 1 })
-  } catch (e) { /* 没有节点 */ }
-  applyZoomTier()
-  scheduleSync()
+  if (isFullscreen.value) {
+    // 画布吃满可用高度。
+    //   以前全屏还按内容高度画（实测 900 高的浮层里只画了 720），
+    //   底下空一大块，看着就是「全屏没铺满」。
+    const avail = Math.max((vp?.clientHeight || 0) - 2, 0)
+    fsCanvasH.value = avail
+    // 双螺旋的行距是按目标高度算的，目标高度也要跟着变
+    layoutTargetH.value = Math.max(avail, TARGET_H)
+  } else {
+    fsCanvasH.value = 0
+    layoutTargetH.value = TARGET_H
+  }
+  await nextTick()
+  // 重新排版 + 重新量尺寸；位置回到布局中心，缩放沿用用户自己的
+  //   （进出全屏时高度变了，世界坐标整个换了一套，旧位置对不上新的行分布 ——
+  //     位置以布局中心为准，缩放以用户为准）
+  draw(true)
   // 视口尺寸变了，滚动位置也回到顶部
   if (vp) vp.scrollTop = 0
 }
@@ -1626,7 +1677,10 @@ function scheduleSync() {
 function syncCanvasSize() {
   if (!net) return
   const w = host.value?.clientWidth || layout.value.W
-  const h = layout.value.H
+  // 高度优先用容器实测值。
+  //   全屏时容器是「吃满可用高度」，而布局算出来的是内容高度 ——
+  //   两者不等时按内容高度设，画布底部就空一截（vis 按容器尺寸画，不会自己撑满）。
+  const h = host.value?.clientHeight || layout.value.H
   if (!w || !h) return
   try {
     net.setSize(`${w}px`, `${h}px`)
@@ -1663,28 +1717,56 @@ function draw(recenter = false) {
   // 所以 setSize 必须放到 nextTick 里，否则量到的还是旧高度。
   nextTick(() => {
     syncCanvasSize()
-    if (recenter) resetView()
+    if (recenter) centerView()
     // 画布尺寸变了，缩放与文字档位要重新对一次
     applyZoomTier()
     scheduleSync()
   })
 }
 
-function resetView() {
+/**
+ * 重新对中：位置回到布局中心，缩放沿用用户自己调的那个
+ *
+ * 为什么不能直接按成 1：
+ *   「重新对中」的原因是对不上位置（尺寸变了、重排了），
+ *   跟缩放没关系。用户把图放大到 1.5 倍在看细节，
+ *   窗口一缩放就被按回 1 倍 —— 看着像「一碰就没了」。
+ *   缩放以用户为准（userScale），位置以布局为准。
+ */
+function centerView() {
   if (!net) return
   const lay = layout.value
-  try {
-    net.moveTo({ position: { x: lay.W / 2, y: lay.H / 2 }, scale: 1 })
-  } catch (e) { /* 没有节点 */ }
+  const apply = () => {
+    try {
+      net.moveTo({ position: { x: lay.W / 2, y: lay.H / 2 }, scale: userScale })
+    } catch (e) { /* 没有节点 */ }
+  }
+  apply()
+  // 重建节点（nodesDS.clear + add）会让 vis 在下一帧重新对中一次，
+  // 那次对中会把刚还原的缩放冲掉 —— 所以隔两帧再补一次。
+  requestAnimationFrame(() => requestAnimationFrame(apply))
   applyZoomTier()
   scheduleSync()
+}
+
+/**
+ * 「适应窗口」：用户明确要求看全图，缩放按回 1
+ *
+ * 布局就是按视口算的（行距、列宽都跟着视口走），
+ * 所以 1 倍正好是一眼看全的样子。
+ */
+function resetView() {
+  userScale = 1
+  centerView()
 }
 
 function zoomBy(k) {
   if (!net) return
   try {
     const scale = net.getScale() * k
-    net.moveTo({ scale: Math.max(0.25, Math.min(2.5, scale)) })
+    const next = Math.max(0.25, Math.min(2.5, scale))
+    userScale = next
+    net.moveTo({ scale: next })
   } catch (e) { /* 视口挪不动也不该报错 */ }
   applyZoomTier()
   scheduleSync()
@@ -1762,7 +1844,12 @@ onMounted(() => {
   })
   net.on('afterDrawing', () => { applyZoomTier(); scheduleSync() })
   // 缩放变了：文字档位与文字大小都要跟着变
-  net.on('zoom', () => { applyZoomTier(); scheduleSync() })
+  // 滚轮/键盘缩放：把用户的缩放记下来 ——
+  //   之后任何一次重排、重新对中都要按它还原
+  net.on('zoom', () => {
+    try { userScale = net.getScale() } catch (e) { /* 视口还没准备好 */ }
+    applyZoomTier(); scheduleSync()
+  })
   net.on('drag', scheduleSync)
 
   // 容器尺寸变了要重排：列位置是按宽度算的百分比，宽度变了列就偏了。
@@ -1836,6 +1923,8 @@ onBeforeUnmount(() => {
  * 对外暴露的尺寸（父组件用来对齐页头装饰）
  * ------------------------------------------------------------------ */
 const H = computed(() => layout.value.H)
+/** 画布高度：全屏吃满可用高度，普通模式按内容高度 */
+const canvasH = computed(() => (fsCanvasH.value || H.value) + 'px')
 </script>
 
 <style scoped>

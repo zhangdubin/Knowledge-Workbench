@@ -219,6 +219,11 @@ async def _race_request(url: str, *, proxy: str, timeout: float,
                     proxy_ok = True
                 else:
                     direct_ok = True
+                # 两条路都成功时，代理优先 ——
+                # 用户既然配了代理，就该用代理。
+                # （不 break 的话下面那个成功的会把 winner 覆盖掉，
+                #   报告出来的路线就与实际用的那条对不上了。）
+                break
             else:
                 errors.append(exc)
 

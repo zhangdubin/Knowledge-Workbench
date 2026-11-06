@@ -167,8 +167,14 @@ export const Api = {
 
   // ============ 升级更新（GitHub Releases）============
   // refresh=1 跳过服务端 10 分钟缓存（「重新检查」按钮用）
+  // 超时给得比服务端宽一点：服务端在代理与直连都不通时会等满 15 秒，
+  // 前端先超时的话，用户看到的就是「请求超时」而不是后端那句说人话的诊断。
   updateCheck: (refresh = false) => api.get('/api/system/update/check',
-    refresh ? { params: { refresh: 1 }, timeout: 20000 } : { timeout: 20000 }),
+    refresh ? { params: { refresh: 1 }, timeout: 30000 } : { timeout: 30000 }),
+
+  // 单独测出网：代理与直连各测一次，给出各自的耗时与结论。
+  // 超时给得比 updateCheck 宽 —— 坏代理要等满一个超时才判死。
+  updateProbe: () => api.get('/api/system/update/probe', { timeout: 30000 }),
 
   // ============ 一键升级 ============
   // 可行性判定：能不能自动升、缺什么、为什么不能、手动怎么升。

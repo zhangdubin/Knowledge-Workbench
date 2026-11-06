@@ -301,6 +301,11 @@
           <el-icon class="title-ico"><Refresh /></el-icon>版本与更新
         </span>
         <span class="ct-actions">
+          <!-- 单独测出站代理：「检查更新」是顺带测的，
+               用户想知道的往往是反过来 —— 「我配的代理到底能不能用？」 -->
+          <el-button size="small" :loading="probeLoading" @click="probeRoute">
+            {{ probeLoading ? '测出网中…' : '测出网' }}
+          </el-button>
           <el-button size="small" :loading="updateLoading" @click="checkUpdate(true)">
             {{ updateLoading ? '检查中…' : '检查更新' }}
           </el-button>
@@ -341,6 +346,28 @@
         </div>
       </div>
 
+      <!-- 出网探测结果：代理与直连各测一次，给出各自耗时。
+           这一块存在的意义是「代理坏掉」这件事**要看得见**：
+           代理故障往往长这样 —— 端口开着、TCP 连得上，
+           从外面看一切正常，只有真发一次请求才知道它不干活。 -->
+      <div v-if="probeInfo" class="probe-panel">
+        <div class="probe-row">
+          <span class="probe-label">出站代理</span>
+          <el-tag :type="probeInfo.proxy_ok ? 'success' : 'danger'" size="small" effect="dark">
+            {{ probeInfo.proxy_ok ? '通' : '不通' }}
+          </el-tag>
+          <span class="dim mono">{{ probeInfo.proxy_ok ? probeInfo.proxy_ms + ' ms' : (probeInfo.proxy_error || '未配置') }}</span>
+        </div>
+        <div class="probe-row">
+          <span class="probe-label">直连</span>
+          <el-tag :type="probeInfo.direct_ok ? 'success' : 'danger'" size="small" effect="dark">
+            {{ probeInfo.direct_ok ? '通' : '不通' }}
+          </el-tag>
+          <span class="dim mono">{{ probeInfo.direct_ok ? probeInfo.direct_ms + ' ms' : (probeInfo.direct_error || '—') }}</span>
+        </div>
+        <div class="probe-note dim">{{ probeInfo.note }}</div>
+      </div>
+
       <!-- 未配置 / 出错：说人话，给出可操作的下一步。
            按后端返回的 status 分类，而不是去猜 error 文案。 -->
       <el-alert
@@ -355,6 +382,25 @@
         <div class="update-hint dim">
           刚才查的是 <span class="mono">{{ effectiveRepo || '未配置' }}</span>
           （{{ srcLabel(repoSource) }}）· 出站代理{{ proxyItem?.value ? '已配置' : '未配置（直连）' }}
+        </div>
+      </el-alert>
+
+      <!-- 检查成功了，但**绕过了坏掉的代理**才成功 ——
+           这件事必须说出来：不然用户看到的全是「一切正常」，
+           永远不知道自己配的代理是坏的。 -->
+      <el-alert
+        v-if="updateInfo && updateInfo.ok && updateInfo.route && updateInfo.route.bypassed"
+        title="出站代理不通，本次已自动改用直连"
+        type="warning"
+        :closable="false" show-icon class="update-alert"
+      >
+        <div class="update-hint">
+          代理地址配着、也连得上，但它取不回任何内容 —— 所以系统绕过它走了直连。
+          查询和在线升级仍可用，但代理修好之前，依赖代理的其他出网操作可能受影响。
+        </div>
+        <div class="update-hint dim">
+          刚才查的是 <span class="mono">{{ effectiveRepo || '未配置' }}</span>
+          （{{ srcLabel(repoSource) }}）· 出站代理{{ proxyItem?.value ? '已配置（本次未生效）' : '未配置（直连）' }}
         </div>
       </el-alert>
 
@@ -694,6 +740,21 @@ const auth = useAuthStore()
 // ---- 系统更新（GitHub Releases）----
 const updateLoading = ref(false)
 const updateInfo = ref(null)          // null = 还没检查过
+
+// ---- 出网探测 ----
+// 「检查更新」是顺带测出网的；用户想知道的往往是反过来：
+// 「我配的代理到底能不能用？」所以给一个单独的按钮。
+const probeLoading = ref(false)
+const probeInfo = ref(null)
+
+async function probeRoute() {
+  probeLoading.value = true
+  try {
+    probeInfo.value = await Api.updateProbe()
+  } catch { /* 拦截器已提示 */ } finally {
+    probeLoading.value = false
+  }
+}
 
 async function checkUpdate(refresh = false) {
   updateLoading.value = true
@@ -1764,6 +1825,26 @@ onMounted(load)
 .update-idle .el-icon { color: var(--text-tertiary); }
 .update-alert { margin-bottom: var(--space-3); }
 .update-hint { margin-top: 6px; font-size: var(--text-sm); line-height: 1.6; }
+/* 出网探测结果：两条路各一行，结论一眼可见 */
+.probe-panel {
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+.probe-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: 6px;
+}
+.probe-label {
+  min-width: 72px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.probe-note { font-size: var(--text-sm); margin-top: 2px; }
 .upd-tag { font-weight: 600; }
 .update-notes {
   margin-top: var(--space-3);

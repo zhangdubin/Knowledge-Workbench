@@ -706,6 +706,37 @@ async def update_check(refresh: int = 0,
     return await upd.check_update(refresh=bool(refresh))
 
 
+@router.get("/update/probe")
+async def update_probe(principal: Principal = Depends(require_feature("system_config"))):
+    """单独测一下出站代理到底通不通
+
+    为什么要有这个接口：
+        「检查更新」是**顺带**测的 —— 它测的是「能不能连到 GitHub」，
+        顺带才暴露代理坏没坏。用户想知道的往往是反过来：
+        「我配的代理到底能不能用？」
+
+        实测踩到过一种很难查的代理故障：
+        端口开着、TCP 连得上，但代理往上游取东西时一直挂着不返回。
+        这时候从外面看「代理配了、也连上了」，一切像好的，
+        只有真正发一次请求才知道它不干活。
+
+        所以这里把两条路**分别**测一遍，各自给出耗时与结论，
+        让人一眼看出是哪条坏了、坏成什么样。
+
+    返回结构固定，永远 200（网络失败也是「测完了，结论是不通」）。
+    """
+    from ..services import netroute
+    from ..services import update as upd
+
+    cfg = upd.effective_config()
+    out = await netroute.probe_paths(
+        cfg["update_proxy"],
+        timeout=float(upd.settings.update_timeout),
+        headers=upd._HEADERS)
+    out["proxy_source"] = cfg["update_proxy_source"]
+    return out
+
+
 # ==================== 一键升级 ====================
 #
 # 上面那个接口只负责「查」；这一组负责「做」。

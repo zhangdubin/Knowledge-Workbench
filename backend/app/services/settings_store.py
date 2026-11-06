@@ -40,7 +40,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from ..config import settings
 
@@ -219,36 +219,94 @@ def normalize_repo(raw: Any) -> tuple[str, str]:
     return f"{owner}/{name}", ""
 
 
-def normalize_proxy(raw: Any) -> tuple[str, str]:
-    """校验出站代理地址。返回 (归一化后的值, 错误说明)
+# 容器里指向自己的地址。填了它们的人想指的多半是宿主机。
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
 
-    只认 http / https —— httpx 的代理走的就是这两种协议，
+# Docker 提供的「宿主机」域名。Docker Desktop 与 Linux 的 docker 都有。
+_HOST_GATEWAY = "host.docker.internal"
+
+# httpx 认识的代理协议。
+# socks5 要靠 socksio 组件（httpx 的 [socks] extra），
+# 没有它的话 httpx 会在运行时抛一个很难懂的错，所以这里先检查。
+_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
+
+
+def _socks_available() -> bool:
+    try:
+        import socksio  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def normalize_proxy(raw: Any) -> tuple[str, str, str]:
+    """校验出站代理地址。返回 (归一化后的值, 错误说明, 警告说明)
+
+    认 http / https / socks5 / socks5h —— httpx 的代理只支持这几种，
     放行其它 scheme 只会得到一个更难懂的报错。
+
+    **为什么要改写回环地址**：
+        容器里的 127.0.0.1 指的是**容器自己**，不是宿主机。
+        而绝大多数人的代理（Clash、V2Ray、Surge…）都跑在**宿主机**上。
+        于是一个完全正常、看起来毫无问题的配置
+            http://127.0.0.1:7890
+        进了容器就必然连不通 —— 地址一点没错，错的是它指向了谁。
+
+        这种坑的表现极具迷惑性：日志里只有一句「连不上代理」，
+        用户根本想不到要写 host.docker.internal。
+
+        所以这里直接把回环地址改写成 host.docker.internal，
+        并**明确警告**说改了什么 —— 静默改写只会让人更困惑。
     """
     text = str(raw or "").strip()
     if not text:
-        return "", ""
+        return "", "", ""
     try:
         parts = urlsplit(text)
     except ValueError:
-        return "", "代理地址无法解析，请照着 http://主机:端口 的样子填"
+        return "", "代理地址无法解析，请照着 http://主机:端口 的样子填", ""
     scheme = (parts.scheme or "").lower()
-    if scheme not in ("http", "https"):
-        return "", (f"代理地址必须以 http:// 或 https:// 开头"
-                   f"（当前是「{scheme or '无协议'}」）")
+    if scheme not in _PROXY_SCHEMES:
+        return "", (f"代理地址必须以 http://、https:// 或 socks5:// 开头"
+                   f"（当前是「{scheme or '无协议'}」）"), ""
+    if scheme.startswith("socks") and not _socks_available():
+        return "", ("当前镜像未内置 SOCKS 代理组件（socksio），"
+                   "请改用 http:// 或 https:// 代理"), ""
     try:
         host = parts.hostname
         port = parts.port          # 端口非法时只有访问 .port 才会抛错
     except ValueError:
-        return "", "代理端口不是合法数字"
+        return "", "代理端口不是合法数字", ""
     if not host:
-        return "", "代理地址里缺少主机名，请写成 http://主机:端口"
+        return "", "代理地址里缺少主机名，请写成 http://主机:端口", ""
     if port is not None and not (0 < port < 65536):
-        return "", "代理端口超出合法范围"
+        return "", "代理端口超出合法范围", ""
     if parts.path and parts.path != "/":
-        return "", "代理地址不需要带路径，只填 http://主机:端口"
+        return "", "代理地址不需要带路径，只填 http://主机:端口", ""
+
+    # ---- 回环地址改写 ----
+    warn = ""
+    new_host = host
+    if host.lower() in _LOOPBACK_HOSTS:
+        new_host = _HOST_GATEWAY
+        warn = (f"已把 {host} 改写成 {_HOST_GATEWAY} —— "
+                "容器里的 127.0.0.1 指的是容器自己，"
+                "而你的代理通常跑在宿主机上。")
+
+    # 重新拼回 URL。用户名口令要原样带上（代理认证很常见），
+    # 所以不能用字符串替换 —— 那会把 user:pass@ 弄丢。
+    netloc = ""
+    if parts.username:
+        netloc += parts.username
+        if parts.password:
+            netloc += ":" + parts.password
+        netloc += "@"
+    netloc += new_host
+    if port is not None:
+        netloc += f":{port}"
+    normalized = urlunsplit((scheme, netloc, "", "", ""))
     # 去掉结尾斜杠：同一台代理写成两种样子时不该被当成两个配置
-    return text.rstrip("/"), ""
+    return normalized.rstrip("/"), "", warn
 
 
 def effective(key: str) -> tuple[Any, str]:
@@ -736,7 +794,7 @@ def validate(key: str, value: Any) -> tuple[bool, Any, str, str]:
             return False, None, err, ""
         return True, text, "", warn
     if kind == "proxy":
-        text, err = normalize_proxy(value)
+        text, err, warn = normalize_proxy(value)
         if err:
             return False, None, err, ""
         return True, text, "", warn

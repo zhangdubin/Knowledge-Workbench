@@ -28,6 +28,7 @@ from typing import Any
 import httpx
 
 from ..config import settings
+from . import netroute
 from . import settings_store as ss
 
 # 结果缓存：key = "仓库|代理" → {"result": {...}, "ts": monotonic 秒}
@@ -93,11 +94,30 @@ def effective_config() -> dict[str, str]:
     return out
 
 
+# GitHub API 的请求头。抽成常量是因为「探测」和「正式请求」要用同一套 ——
+# 探测请求带的 UA 不一样的话，某些网关会当成不同的客户端区别对待。
+_HEADERS = {"Accept": "application/vnd.github+json",
+            "User-Agent": "kb-workbench-updater"}
+
+
+def _route_fields(route: netroute.Route) -> dict[str, Any]:
+    """把出网路径的诊断结果整理成给前端的字段
+
+    只回「通不通」与「有没有绕过」，**不回代理地址本身** ——
+    代理 URL 里可能带着用户名口令。
+    """
+    return {
+        "proxy_ok": bool(route.proxy_ok),
+        "direct_ok": bool(route.direct_ok),
+        "bypassed": bool(route.bypassed),
+        "note": route.describe(),
+    }
+
+
 def _client_kwargs(proxy: str) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "timeout": settings.update_timeout,
-        "headers": {"Accept": "application/vnd.github+json",
-                    "User-Agent": "kb-workbench-updater"},
+        "headers": dict(_HEADERS),
     }
     if proxy:
         kwargs["proxy"] = proxy
@@ -110,10 +130,16 @@ async def _repo_state(repo: str, kwargs: dict[str, Any]) -> str:
     GitHub 对这两种情况一律返回 404，光看状态码分不出来 ——
     而这两种情况的处理完全不同（一个是名字写错了，一个是还没发版）。
     返回 "exists" / "missing" / "unknown"。
+
+    这里也走 netroute：主请求可能已经绕过了坏代理，
+    这一发再走一次代理只会再卡一次 8 秒。
     """
     try:
-        async with httpx.AsyncClient(**kwargs) as cli:
-            r = await cli.get(f"https://api.github.com/repos/{repo}")
+        r, _route = await netroute.fetch(
+            f"https://api.github.com/repos/{repo}",
+            proxy=str(kwargs.get("proxy") or ""),
+            timeout=float(kwargs.get("timeout") or settings.update_timeout),
+            headers=kwargs.get("headers") or _HEADERS)
         if r.status_code == 200:
             return "exists"
         if r.status_code == 404:
@@ -150,6 +176,12 @@ async def check_update(refresh: bool = False) -> dict[str, Any]:
         "error": "",
         "checked_at": "",
         "ok": False,
+        # note：不是错误，是「有件事你该知道但不影响结果」的提示
+        # （比如「绕过了坏掉的代理，查询仍然成功」）。
+        "note": "",
+        # route：这次出网走了哪条路、两条路各自通不通。
+        # 前端用它决定要不要提示用户去修代理。
+        "route": {},
     }
 
     # ---- 未配置：说清楚去哪配，而不是让人去翻 .env ----
@@ -172,13 +204,21 @@ async def check_update(refresh: bool = False) -> dict[str, Any]:
         return out
     out["repo"] = repo
 
-    proxy, proxy_err = ss.normalize_proxy(proxy_raw)
+    proxy, proxy_err, proxy_warn = ss.normalize_proxy(proxy_raw)
     if proxy_err:
         out["status"] = ST_INVALID_CONFIG
         out["error"] = (f"出站代理配置不合法：{proxy_err} —— "
                         "请到「系统设置 → 升级与更新」改正后重新保存。")
         return out
     out["configured"] = True
+    # note 可能同时有好几条（代理被改写过 + 又绕过了代理），
+    # 所以攒起来最后一起写 —— 后写的会把先写的盖掉，
+    # 而两条都是用户该知道的事。
+    notes: list[str] = []
+    if proxy_warn:
+        # 代理地址被改写过（比如 127.0.0.1 改成 host.docker.internal），
+        # 要告诉用户 —— 静默改写只会让人更困惑。
+        notes.append(proxy_warn)
 
     # ---- 缓存：key 里带仓库与代理，换了配置不会拿到旧结果 ----
     cache_key = f"{repo}|{proxy}"
@@ -190,9 +230,40 @@ async def check_update(refresh: bool = False) -> dict[str, Any]:
 
     url = f"https://api.github.com/repos/{repo}/releases/latest"
     kwargs = _client_kwargs(proxy)
+    route: netroute.Route | None = None
     try:
-        async with httpx.AsyncClient(**kwargs) as cli:
-            r = await cli.get(url)
+        # 代理与直连同时发起，谁先成功用谁。
+        #
+        # 为什么不再「只走代理」：实测遇到过一种代理「假活」——
+        # 端口开着、TCP 连得上，但它往上游取东西时一直挂着不返回。
+        # 这时死抱代理不放，用户只会看到一句「链路不通」，
+        # 而直连其实是通的（0.7 秒就能拿到）。
+        # 改成两条路一起走：坏代理只当它不存在，直连立刻接管。
+        r, route = await netroute.fetch(
+            url, proxy=proxy, timeout=settings.update_timeout,
+            headers=_HEADERS)
+    except netroute.RouteError as e:
+        route = e.route
+        # 两条路都不通。到底是代理坏了还是网络坏了，得看诊断信息 ——
+        # 只说一句「链路不通」等于让用户自己猜。
+        if route.proxy and not route.proxy_ok:
+            out["status"] = ST_PROXY
+            out["error"] = (
+                f"配置的出站代理不通（{proxy}），直连也不通 —— "
+                "两条路都走不了。"
+                "请核对「系统设置 → 升级与更新」里的代理地址与端口，"
+                "或把它清空改成直连；若容器本身也出不了网，"
+                "还需要让运维放开到 GitHub 的出站访问。"
+            )
+        else:
+            out["status"] = ST_NETWORK
+            out["error"] = (
+                "连不上 api.github.com：容器没有出网（DNS 或防火墙拦截）。"
+                "请在「系统设置 → 升级与更新」里配置出站代理，"
+                "或让运维放开到 GitHub 的出站访问。"
+            )
+        out["route"] = _route_fields(route)
+        return out
     except httpx.ProxyError:
         out["status"] = ST_PROXY
         out["error"] = (
@@ -227,6 +298,20 @@ async def check_update(refresh: bool = False) -> dict[str, Any]:
         out["error"] = ("访问 GitHub 失败：请求过程中出现意外错误。"
                         "请稍后重试，或在「系统设置 → 升级与更新」里改用代理。")
         return out
+
+    # 请求成功了。但**可能是绕过了代理**才成功的 ——
+    # 这件事必须告诉用户，否则他永远不知道自己配的代理是坏的。
+    #
+    # 注意不改 status：status 回答的是「有没有新版本」，
+    # 代理坏不坏是另一回事，混在一起会让前端不知道该渲染哪种提示。
+    # 代理的事走 route 字段 + note。
+    if route is not None:
+        out["route"] = _route_fields(route)
+        if route.bypassed:
+            notes.append("配置的出站代理不通，本次已自动改用直连完成检查。"
+                         "代理修好之前，在线升级下载镜像也可能受影响。")
+    if notes:
+        out["note"] = " ".join(notes)
 
     if r.status_code == 404:
         # 404 有两种可能，处置方式完全不同，分开说

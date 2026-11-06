@@ -84,6 +84,7 @@ import httpx
 
 from ..config import settings
 from . import audit as audit_svc
+from . import netroute
 from . import settings_store as ss
 from . import update as upd
 
@@ -1676,6 +1677,20 @@ async def _stage(job: UpgradeJob, key: str, cmd: list[str], cwd: Path,
     return "\n".join(sink)
 
 
+def _is_proxy_level_error(exc: BaseException) -> bool:
+    """这个异常是不是「代理这条路断了」
+
+    只认代理层级的错误（连不上代理、代理握手失败、代理那侧超时）。
+    HTTP 4xx/5xx 不是代理的锅 —— 那是 GitHub 自己的回答，换路重试也没用。
+    """
+    if isinstance(exc, netroute.ROUTE_BROKEN):
+        return True
+    # 传输中途被代理掐断，httpx 往往报成别的异常名，
+    # 所以再认一下这些「连接被重置/中断」的类型。
+    return isinstance(exc, (httpx.RemoteProtocolError, httpx.ReadError,
+                           httpx.WriteError, ConnectionError))
+
+
 async def _download_asset(url: str, dest: Path, proxy: str, job: UpgradeJob) -> None:
     """把 Release 资产下载到本地文件
 
@@ -1692,6 +1707,25 @@ async def _download_asset(url: str, dest: Path, proxy: str, job: UpgradeJob) -> 
     kwargs["timeout"] = httpx.Timeout(60.0, read=600.0, write=60.0, pool=60.0)
     # GitHub 的资产地址会 302 跳到对象存储，不跟重定向就只会拿到一个 302
     kwargs["follow_redirects"] = True
+
+    # ---- 先探路，再下大文件 ----
+    #
+    # 镜像包 100MB+，「试错重来」的代价太高：
+    # 代理坏掉时如果闷头走代理，会卡满一个 read 超时（600 秒）才报错，
+    # 用户等十分钟看到一句「下载失败」。
+    # 所以先用一次小请求探出哪条路通，再下。
+    route = await netroute.resolve_route(
+        proxy,
+        timeout=float(upd.settings.update_timeout),
+        probe_url="https://api.github.com/",
+        headers=upd._HEADERS)
+    use_proxy = route.use_proxy
+    if route.bypassed:
+        job.log("  配置的出站代理不通，本次改用直连下载")
+    elif not route.usable:
+        job.log("  出站代理与直连都不通，下载可能失败")
+    if not use_proxy:
+        kwargs.pop("proxy", None)
 
     total = 0
     for attempt in range(1, 5):
@@ -1727,6 +1761,12 @@ async def _download_asset(url: str, dest: Path, proxy: str, job: UpgradeJob) -> 
             job.log(f"  下载完成：{_human_size(done)}")
             return
         except Exception as e:
+            # 代理中途死了（探路时它还活着，传输到一半挂了）：
+            # 换成直连续传，别把剩下的重试次数全耗在这条死路上。
+            if use_proxy and _is_proxy_level_error(e):
+                job.log("  经代理下载失败，改用直连续传")
+                use_proxy = False
+                kwargs.pop("proxy", None)
             if attempt >= 4:
                 raise
             job.log(f"  第 {attempt} 次下载中断（{e}），"

@@ -760,6 +760,12 @@ export function doctorSummary(doctor) {
 /**
  * 产出物概览：几个文件、多少字、有没有告警、有没有入库。
  * 卡片上就显示这一行。
+ *
+ * ⚠️ 这里用的是列表接口给的 size，**不是**正文长度：
+ *   列表接口刻意不带正文（几十个文件、单个几十 KB，全塞进去列表接口就重了），
+ *   而 size 就是后端记下来的正文字节数（create_artifact 里 len(content.encode)），
+ *   所以「多少字」这件事靠 size 就够了，不需要把正文拉下来。
+ *   千万别改成去读 a.content —— 那是 undefined，会把「24 个文件」显示成「0 字节」。
  */
 export function summarizeArtifacts(artifacts) {
   const list = Array.isArray(artifacts) ? artifacts : []
@@ -787,4 +793,162 @@ export function formatBytes(n) {
   if (num < 1024) return num + ' B'
   if (num < 1024 * 1024) return (num / 1024).toFixed(1) + ' KB'
   return (num / 1024 / 1024).toFixed(1) + ' MB'
+}
+
+/* ============ 文件预览（正文按需懒加载） ============ */
+
+/**
+ * 预览区的状态机。
+ *
+ * 为什么要有这么多种状态：
+ *   原来预览区只有一句话的余地 —— `current?.content || '（这个文件没有内容）'`。
+ *   但「没取到内容」和「文件本来就是空的」是两件完全不同的事，
+ *   用一个 `||` 判成同一件事就是在骗人：
+ *   一个几千行的源码文件在界面上显示成「没有内容」，
+ *   用户只会得出「模型没生成」的结论 ——
+ *   而实际上内容好好地躺在库里，是**显示链路断了**。
+ *   所以这里把「取到了 / 没取到 / 确实是空的」分成三个状态，
+ *   每一句话都必须说清楚是哪一种。
+ */
+export const PREVIEW_IDLE = 'idle'         // 还没选文件
+export const PREVIEW_LOADING = 'loading'   // 正在取正文
+export const PREVIEW_READY = 'ready'       // 取到了正文
+export const PREVIEW_EMPTY = 'empty'       // 取到了，但这个文件本来就是空的
+export const PREVIEW_ERROR = 'error'       // 没取到（接口失败，或返回里根本没有正文）
+
+/**
+ * 从单条产出物接口的返回里取正文 —— 三态，不能只分「有/无」。
+ *
+ * 后端 GET /api/dev/artifacts/{id} 返回 { artifact: {...} }，
+ * content 字段的两种缺失含义必须分开：
+ *   · 字段根本不存在（undefined）→ **没取到**：接口没给正文，
+ *     绝不能当成「这个文件是空的」，那会把用户引向错误结论；
+ *   · 字段存在但是空的（'' 或 null）→ 这个文件确实是空的；
+ *   · 字段有内容 → 正常。
+ *
+ * 这正是原来 `current?.content || '（这个文件没有内容）'` 出错的地方：
+ * `||` 把「没取到」与「是空的」判成了同一件事。
+ */
+export function unwrapArtifactContent(res) {
+  const a = (res && res.artifact) || null
+  if (!a || typeof a !== 'object') {
+    return { status: PREVIEW_ERROR, content: '', reason: 'no-artifact' }
+  }
+  if (!Object.prototype.hasOwnProperty.call(a, 'content')) {
+    return { status: PREVIEW_ERROR, content: '', reason: 'no-content-field' }
+  }
+  const content = a.content == null ? '' : String(a.content)
+  if (!content.length) return { status: PREVIEW_EMPTY, content: '', reason: 'empty' }
+  return { status: PREVIEW_READY, content: content, reason: '' }
+}
+
+/**
+ * 预览区该显示什么。
+ *
+ * @param {string} status  PREVIEW_* 之一
+ * @param {string} content 正文
+ * @param {string} error   取失败时的原因（后端给的 detail，原样透出）
+ */
+export function previewView(status, content, error) {
+  switch (status) {
+    case PREVIEW_LOADING:
+      return {
+        kind: PREVIEW_LOADING,
+        title: '正在读取文件内容…',
+        detail: '',
+        content: '',
+      }
+    case PREVIEW_ERROR:
+      return {
+        kind: PREVIEW_ERROR,
+        title: '没取到文件内容',
+        // 如实透出后端给的错误，不自己编一句「没有内容」
+        detail: String(error || '读取文件内容失败'),
+        content: '',
+      }
+    case PREVIEW_EMPTY:
+      return {
+        kind: PREVIEW_EMPTY,
+        title: '这个文件确实是空的',
+        detail: '后端返回的正文长度为 0 —— 库里就没有正文，不是读取失败。',
+        content: '',
+      }
+    case PREVIEW_READY:
+      return { kind: PREVIEW_READY, title: '', detail: '', content: content || '' }
+    default:
+      return {
+        kind: PREVIEW_IDLE,
+        title: '在左边选一个文件看内容',
+        detail: '',
+        content: '',
+      }
+  }
+}
+
+/**
+ * 取失败时给用户看的话：后端说了什么就说什么。
+ *
+ * DevApi.artifact 传了 silent（不弹全局窗），因为预览区自己有地方显示；
+ * 但也绝不能在这里自己编一句「这个文件没有内容」——
+ * 那句话会把「没取到」说成「文件是空的」，正好把用户引向错误的结论。
+ */
+export function previewErrorText(err, fallback) {
+  const d = (err && err.response && err.response.data) || {}
+  const msg = d.detail || d.message || (err && err.message) || ''
+  return String(msg || fallback || '读取文件内容失败')
+}
+
+/**
+ * 列表里的这一项是不是已经带了正文。
+ *
+ * 后端的列表接口（GET /projects/{id}）刻意不带正文 ——
+ * 几十个文件、单个几 KB 到几十 KB，全塞进去会让列表接口变得很重，
+ * 而列表页根本用不到正文。正文一律按需去单条接口取。
+ * 但万一某条链路已经把正文带过来了，就不用再请求一次。
+ */
+export function hasArtifactContent(file) {
+  return !!(file && typeof file.content === 'string' && file.content.length)
+}
+
+/**
+ * 文本的 UTF-8 字节数。
+ * 后端记的 size 就是正文的字节数（create_artifact 里 len(content.encode)），
+ * 拿它对一下就知道「刚才取到的正文」是不是已经过期。
+ */
+export function byteLength(text) {
+  if (typeof text !== 'string' || !text.length) return 0
+  if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(text).length
+  return text.length
+}
+
+/**
+ * 取到的正文是不是还跟列表里说的一致（用来发现「内容已经变了」）。
+ *
+ * 什么时候会不一致：重跑「项目生成」之后产出物被重建，
+ * 而 SQLite 的整型主键在删掉最大行之后会被复用 ——
+ * 于是同一个 id 可能已经是另一份文件了。
+ * 不对一下的话，用户会看着上一轮的代码以为那就是最新的。
+ */
+export function contentSizeMatches(content, size) {
+  const n = Number(size)
+  if (!n) return true          // 后端没给尺寸就无从比对，放行
+  if (typeof content !== 'string') return false
+  return byteLength(content) === n
+}
+
+/**
+ * 请求序号：防「慢请求覆盖新文件」。
+ *
+ * 用户连点两个文件时两个请求并发，先点的那个可能后回来。
+ * 不挡的话，它的正文会把新选的文件内容盖掉 ——
+ * 界面上出现「点了 B，看到的却是 A 的代码」。
+ * 序号是最省事的挡法：只有序号等于最新序号的响应才准写进界面。
+ */
+export function nextRequestSeq(prev) {
+  return (Number(prev) || 0) + 1
+}
+
+/** 这个响应是不是已经过期（序号已经不是最新的那个） */
+export function isStaleSeq(seq, latest) {
+  return Number(seq) !== Number(latest)
 }

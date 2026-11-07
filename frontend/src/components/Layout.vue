@@ -20,49 +20,64 @@
         :collapse-width="64"
         class="nav-menu"
       >
-        <template v-for="g in navGroups" :key="g.title">
-          <div v-show="!collapsed" class="nav-group-title">{{ g.title }}</div>
-          <!-- 折叠后分组标题没了，用一条细线保留分组边界，
+        <!-- gi 只用来判断「是不是第一组」：第一组不需要那么大的组间留白 -->
+        <template v-for="(g, gi) in navGroups" :key="g.title">
+          <div v-show="!collapsed" class="nav-group-title" :class="{ 'is-first': gi === 0 }">
+            {{ g.title }}
+          </div>
+          <!-- 折叠后分组标题没了，用一条短横线保留分组边界，
                否则一列图标看不出谁跟谁是一组 -->
-          <div v-if="collapsed" class="nav-group-divider" />
+          <div v-if="collapsed" class="nav-group-divider" :class="{ 'is-first': gi === 0 }" />
           <el-menu-item v-for="item in g.items" :key="item.path" :index="item.path">
             <el-icon><component :is="item.icon" /></el-icon>
             <template #title>{{ item.label }}</template>
           </el-menu-item>
         </template>
-        <div v-if="!navGroups.length" class="nav-group-title">当前账号没有任何页面权限</div>
+        <div v-if="!navGroups.length" class="nav-group-title nav-group-empty">
+          当前账号没有任何页面权限
+        </div>
       </el-menu>
 
       <div class="sidebar-footer">
-        <!-- 自定义导航：管理员能直接在这里加一项，不用去「导航管理」页 -->
-        <button
-          v-if="canManageNav"
-          type="button"
-          class="collapse-btn nav-add-btn"
-          title="给左侧导航加一项"
-          @click="goNavManager"
-        >
-          <el-icon><Plus /></el-icon>
-          <span v-show="!collapsed">自定义导航</span>
-        </button>
-        <button
-          type="button"
-          class="collapse-btn"
-          :title="collapsed ? '展开侧边栏' : '收起侧边栏'"
-          :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
-          @click="toggleCollapse"
-        >
-          <el-icon><component :is="collapsed ? 'DArrowRight' : 'DArrowLeft'" /></el-icon>
-          <span v-show="!collapsed">收起侧边栏</span>
-        </button>
+        <!-- 底部两个动作排在同一行：
+             「收起侧边栏」本来就是图标动作（一个箭头），
+             配一段「收起侧边栏」的文字既占地方又和图标重复说同一件事。
+             改成图标按钮并和「自定义导航」并排，底部区立刻省下一整行 ——
+             这行原来是被导航挤下去的（实测侧栏 23 个入口，
+             800px 高的屏上要溢出 260 多像素，能省一行是一行）。 -->
+        <div class="footer-actions">
+          <!-- 自定义导航：管理员能直接在这里加一项，不用去「导航管理」页 -->
+          <button
+            v-if="canManageNav"
+            type="button"
+            class="collapse-btn nav-add-btn"
+            title="给左侧导航加一项"
+            @click="goNavManager"
+          >
+            <el-icon><Plus /></el-icon>
+            <span v-show="!collapsed">自定义导航</span>
+          </button>
+          <button
+            type="button"
+            class="collapse-btn collapse-toggle"
+            :title="collapsed ? '展开侧边栏' : '收起侧边栏'"
+            :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
+            @click="toggleCollapse"
+          >
+            <el-icon><component :is="collapsed ? 'DArrowRight' : 'DArrowLeft'" /></el-icon>
+            <span v-show="!collapsed">收起侧边栏</span>
+          </button>
+        </div>
         <div v-show="!collapsed" class="kbd-hint">
           <span class="kbd">⌘K</span>
           <span>快速搜索</span>
-        </div>
-        <!-- 版本标识：取自后端 /auth/status（auth store），升级后自动变。
-             不写死在构建里 —— 离线包升级只换镜像，前端静态资源与后端版本必须同源。 -->
-        <div v-if="auth.sysVersion" class="sys-version" title="系统版本">
-          v{{ auth.sysVersion }}
+          <!-- 版本标识：取自后端 /auth/status（auth store），升级后自动变。
+               不写死在构建里 —— 离线包升级只换镜像，前端静态资源与后端版本必须同源。
+               和 ⌘K 提示并排放在一行：底部区原本 140px 高，
+               其中光一个版本号就占了一整行 —— 那点地方留给导航更值。 -->
+          <span v-if="auth.sysVersion" class="sys-version" title="系统版本">
+            v{{ auth.sysVersion }}
+          </span>
         </div>
       </div>
     </el-aside>
@@ -184,7 +199,7 @@
       :with-header="false"
       class="mobile-drawer"
     >
-      <div class="mobile-brand">
+      <div class="brand mobile-brand">
         <div class="brand-logo">
           <el-icon :size="19"><Collection /></el-icon>
         </div>
@@ -200,11 +215,13 @@
         class="nav-menu"
         @select="drawerOpen = false"
       >
-        <template v-for="g in navGroups" :key="g.title">
-          <div class="nav-group-title">{{ g.title }}</div>
+        <template v-for="(g, gi) in navGroups" :key="g.title">
+          <div class="nav-group-title" :class="{ 'is-first': gi === 0 }">{{ g.title }}</div>
           <el-menu-item v-for="item in g.items" :key="item.path" :index="item.path">
             <el-icon><component :is="item.icon" /></el-icon>
-            <span>{{ item.label }}</span>
+            <!-- 用 title 插槽而不是裸 span：和侧栏的菜单项生成完全一样的 DOM，
+                 两边才真的是「同一套」而不是「长得像」 -->
+            <template #title>{{ item.label }}</template>
           </el-menu-item>
         </template>
       </el-menu>
@@ -513,13 +530,15 @@ onUnmounted(() => {
 }
 
 /* ============ 侧边栏 ============ */
+/* 侧栏的文字/表面色令牌（--nav-*）定义在 main.css 的「侧边栏 / 移动端抽屉」段。
+   放全局是因为移动端抽屉是 teleport 出来的，拿不到本文件的 scoped 属性 ——
+   侧栏与抽屉必须共用同一份令牌，否则两边各写各的，迟早漂移。 */
 .sidebar {
   background: var(--bg-sidebar);
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0) 42%);
-  color: #fff;
+  color: var(--nav-fg);
   display: flex;
   flex-direction: column;
-  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  border-right: 1px solid var(--nav-hairline);
   transition: width var(--duration) var(--ease-out);
   overflow: hidden;
 }
@@ -533,35 +552,49 @@ onUnmounted(() => {
 .brand {
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 18px 18px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-  min-height: 69px;
+  gap: 10px;
+  padding: 13px 16px 12px;
+  border-bottom: 1px solid var(--nav-hairline);
+  min-height: 62px;
+  /* 抽屉里品牌块压在菜单之上，菜单一长就会被挤扁 —— 固定住 */
+  flex-shrink: 0;
+  /* 顶部那点柔光挪到品牌块里：
+     原来整条侧栏从上到下都带一层渐变，结果是**菜单区不干净** ——
+     分组标题想吸顶就得有个实底去盖住滚上来的内容，
+     而渐变底色没法盖（盖上去就是一块色差明显的方块）。
+     挪到品牌块之后，菜单区回到纯色，吸顶标题才能严丝合缝。 */
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0) 100%);
 }
 .brand-logo {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 9px;
   background: var(--primary-grad);
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 3px 10px rgba(74, 78, 180, 0.35);
+  /* 外发光走主题色：明暗两套主题的品牌色不同，写死会有一边不搭 */
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 3px 10px var(--primary-glow);
   flex-shrink: 0;
 }
 .brand-text { min-width: 0; }
 .brand-title {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 650;
   letter-spacing: 0.2px;
-  color: rgba(255, 255, 255, 0.94);
+  color: var(--nav-fg);
   white-space: nowrap;
 }
 .brand-sub {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.32);
-  margin-top: 3px;
+  /* 原来是 --nav-fg-ghost（0.30 白）—— 对深色底只有 2.6:1，
+     11px 的小字这个亮度基本是「看不见但知道那儿有字」。
+     提到 0.48 白（4.9:1），副标题能读了，又明显比主标题弱。 */
+  color: var(--nav-fg-dim);
+  margin-top: 2px;
+  /* 这一行是英文：字距与全大写在这里是刻意的。
+     和下面中文分组标题不是同一套规则 —— 中文不吃这套 */
   letter-spacing: 0.6px;
   text-transform: uppercase;
   white-space: nowrap;
@@ -573,148 +606,339 @@ onUnmounted(() => {
   max-width: 100%;
 }
 
+/* ============ 导航菜单 ============ */
+/* 展开态与折叠态共用这一段：折叠态是「同一套设计去掉文字」，
+   不是另画一套。所有状态色都走 --nav-* 令牌，
+   改一处主题，明暗两套主题同时生效。 */
 .nav-menu {
   flex: 1;
   border-right: none;
   background: transparent;
-  padding: 6px 0 14px;
+  /* 上内边距必须是 0：吸顶标题是按内容盒定位的，
+     菜单留 4px 上内边距，标题就吸在菜单顶边下方 4px ——
+     那一道 4px 的缝里会漏出滚过去的内容，看着像没对齐。
+     顶部留白改由第一个分组标题自己的 padding 承担。 */
+  padding: 0 0 16px;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 全局滚动条是浅灰滑块，落在深色侧栏上亮得刺眼 */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
   /* 让 Element Plus 菜单融入深色侧栏 */
   --el-menu-bg-color: transparent;
-  --el-menu-text-color: rgba(255, 255, 255, 0.66);
+  --el-menu-text-color: var(--nav-fg-muted);
   --el-menu-active-color: #ffffff;
-  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.055);
-  --el-menu-hover-text-color: rgba(255, 255, 255, 0.94);
+  --el-menu-hover-bg-color: var(--nav-surface);
+  --el-menu-hover-text-color: var(--nav-fg);
 }
+.nav-menu::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+.nav-menu::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+/* 底部渐隐：菜单装不下时，最后一行会被硬生生切一半，
+   看着像「排版坏了」而不是「下面还有，滚一下」。
+   一层从底色渐隐出去的薄雾，就自然了。 */
+.nav-menu::after {
+  content: '';
+  position: sticky;
+  bottom: -1px;
+  display: block;
+  height: 24px;
+  margin-top: -24px;
+  background: linear-gradient(to top, var(--bg-sidebar) 15%, transparent);
+  pointer-events: none;
+}
+
+/* 菜单项：一格 32px（31 高的行 + 上下各 1px），
+   分组标题也占一格 —— 标题与项落在同一套网格上，节奏才一致。
+   比原来的 38px 收一点：实测这台机器上侧栏有 23 个入口、4 个分组，
+   800px 高的笔记本屏上按 34px 排要滚 376px 才够得着最后一组；
+   收到 32px、再把分组标题也压一压，能露出来的就多出一大截。 */
 .nav-menu :deep(.el-menu-item) {
-  border-radius: 7px;
-  margin: 1px 10px;
-  padding: 0 11px !important;
-  height: 38px;
-  line-height: 38px;
-  font-size: 13.5px;
-  font-weight: 450;
+  /* 「这一格的底色」交给一个局部变量承载：
+     hover / 当前项只是改这个变量的值，
+     状态之间就不会互相覆盖打架（以前是三处规则各写各的背景）。 */
+  --nav-item-bg: transparent;
+  background: var(--nav-item-bg);
   position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  height: 32px;
+  line-height: 32px;
+  margin: 1px 10px;
+  padding: 0 11px !important;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 450;
+  color: var(--nav-fg-muted);
+  transition: background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+/* hover 与 focus 都要看得见：菜单项能拿到焦点（EP 给的是 tabindex="-1"，
+   鼠标点过就会聚焦），只靠背景色一档变化在深色侧栏上分辨不出来。 */
+.nav-menu :deep(.el-menu-item:hover) {
+  --nav-item-bg: var(--nav-surface);
+  color: var(--nav-fg);
 }
 .nav-menu :deep(.el-menu-item:focus) {
-  background: transparent;
-  color: rgba(255, 255, 255, 0.94);
+  --nav-item-bg: var(--nav-surface);
+  color: var(--nav-fg);
 }
+.nav-menu :deep(.el-menu-item:focus-visible) {
+  outline: 2px solid var(--nav-accent);
+  outline-offset: -2px;
+}
+/* 图标比文字更沉一层：这一列是图标导航，文字才是主信息 */
 .nav-menu :deep(.el-menu-item .el-icon) {
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--nav-fg-icon);
   font-size: 16px;
+  /* Element Plus 默认给图标 5px 右外边距，和这里的 gap 叠成 15px，
+     图标与文字离得太远 */
+  margin-right: 0;
   transition: color var(--duration-fast) var(--ease-out);
 }
 .nav-menu :deep(.el-menu-item:hover) .el-icon {
-  color: rgba(255, 255, 255, 0.78);
+  color: var(--nav-fg-strong);
 }
-/* 当前项：背景 + 字重 + 左侧高亮条，三重指示 ——
-   只靠颜色区分在深色侧栏上不够明显，只靠背景又不够「当前位置」 */
+
+/* 当前项：一片主色淡染的底 + 一条贴着底色左缘的主色条。
+   以前这里是「一层白」，整条侧栏只有 logo 带颜色 ——
+   当前位置和别的项的差别全靠「白了一点」和一条竖条，
+   在深色底上看着发闷，而且和 logo 对不上。
+   改成主色淡染之后，当前项与 logo 是同一个色系，
+   侧栏终于有了一个视觉重心，不再是一片灰。
+
+   淡染用 color-mix 而不是固定 rgba：主色在明暗两套主题里不同，
+   固定 rgba 会出现「一边刚好、一边发灰」。 */
 .nav-menu :deep(.el-menu-item.is-active) {
-  background: rgba(255, 255, 255, 0.085) !important;
-  color: #fff !important;
+  --nav-item-bg: linear-gradient(90deg,
+    var(--nav-accent-tint) 0%,
+    var(--nav-accent-tint-soft) 68%,
+    transparent 100%);
+  color: #fff;
   font-weight: 600;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
 }
-.nav-menu :deep(.el-menu-item.is-active:focus) {
-  background: rgba(255, 255, 255, 0.085);
+.nav-menu :deep(.el-menu-item.is-active:hover) {
+  --nav-item-bg: linear-gradient(90deg,
+    var(--nav-accent-tint-hover) 0%,
+    var(--nav-accent-tint) 68%,
+    var(--nav-accent-tint-soft) 100%);
 }
 .nav-menu :deep(.el-menu-item.is-active) .el-icon {
-  color: #a7aae8;
+  color: var(--nav-accent);
 }
 .nav-menu :deep(.el-menu-item.is-active)::before {
   content: '';
   position: absolute;
-  left: -10px;
+  left: 1px;
   top: 50%;
   transform: translateY(-50%);
   width: 3px;
-  height: 18px;
-  background: linear-gradient(180deg, #8a8ee0, #5b5fc7);
-  border-radius: 0 3px 3px 0;
+  height: 16px;
+  border-radius: 2px;
+  /* 与品牌 logo 同一套主色渐变：「主色 = 当前所在」 */
+  background: var(--nav-accent-grad);
 }
-/* 折叠态：图标居中，悬浮时用 Element Plus 的气泡显示全名 */
+
+/* ============ 折叠态 ============ */
+/* 折叠态不是另一套设计，是同一套设计去掉文字：
+   同样的圆角、同样的图标规则、同样的「主色 = 当前所在」。
+   展开态把主色做成一条小竖条；64px 宽里没有横向空间，
+   就把它做成一块方块 —— 规则一致，形态随空间变。 */
 .sidebar.is-collapsed :deep(.el-menu-item) {
-  margin: 1px 8px;
+  width: 38px;
+  height: 38px;
+  line-height: 38px;
+  margin: 2px auto;
   padding: 0 !important;
   justify-content: center;
+  border-radius: 9px;
 }
-.sidebar.is-collapsed :deep(.el-menu-item::before) {
-  left: -8px;
+.sidebar.is-collapsed :deep(.el-menu-item .el-icon) {
+  font-size: 17px;
+}
+/* 折叠态当前项：整块点亮成主色渐变。
+   64px 宽里「文字加粗」这个信号已经没了，得给一个看得见的标记；
+   方块形状与品牌 logo 同源，一眼就知道是「当前位置」。 */
+.sidebar.is-collapsed :deep(.el-menu-item.is-active) {
+  --nav-item-bg: var(--nav-accent-grad);
+  box-shadow: 0 4px 12px var(--primary-glow);
+}
+.sidebar.is-collapsed :deep(.el-menu-item.is-active) .el-icon {
+  color: #fff;
+}
+/* 竖条在方块里无处安放，当前位置改由整块主色承担 */
+.sidebar.is-collapsed :deep(.el-menu-item.is-active)::before {
+  display: none;
 }
 
+/* ============ 分组标题 ============ */
+/* 中文标题不吃 uppercase 和大字距：uppercase 对中文是空操作，
+   剩下的只有「字被拉开了」的怪异间距，看着像排版事故而不是设计。
+   改成中文排版的常规做法：小字号、加粗、跟菜单项图标左对齐，
+   右边拖一条细线把下面这一组「框」住 ——
+   这条线就是标题与菜单项之间唯一的视觉关联：
+   没有它，12px 的标题和 13px 的项只是两行字，不成组。 */
 .nav-group-title {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.34);
-  letter-spacing: 1.1px;
-  padding: 17px 21px 7px;
+  /* 吸顶：侧栏有 23 个入口，800px 高的屏上装不下，
+     往下滚的时候不知道自己在哪一组里 —— 标题吸在顶上，
+     滚到哪一组就是哪一组的名字。 */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  padding: 10px 21px 4px;
+  /* 12px：项目里 11px 的小字在 1x 屏上已经发糊 */
+  font-size: var(--text-xs);
   font-weight: 600;
-  text-transform: uppercase;
+  line-height: 16px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--nav-fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  /* 吸住的时候要盖住下面滚上来的内容。
+     菜单区是纯色（顶部柔光挪到了品牌块），所以盖得住、不留色差。 */
+  background: var(--bg-sidebar);
 }
-/* 折叠态：分组标题换成一条分隔线，保留「谁跟谁一组」的线索 */
-.nav-group-divider {
+.nav-group-title::after {
+  content: '';
+  flex: 1;
   height: 1px;
-  margin: 10px 16px;
-  background: rgba(255, 255, 255, 0.07);
+  /* 比通用分隔线深一档：这条线有活干 ——
+     它得把下面这一组「框」住，太淡就等于没画（0.07 时只有 1.19:1，肉眼找不着）。
+     右端渐隐：一条到头齐刷刷断掉的线像被刀切过，渐隐才像「这一组到这里」。 */
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0));
 }
-.nav-group-divider:first-of-type { margin-top: 4px; }
+/* 所有分组标题一律同高（30px）：
+   吸顶时每一组的标题要正好盖住上一组的那一条带 ——
+   高度不一致的话，先吸住的那组会从下面露出半截（第一组原本矮 6px）。
+   第一组不再特殊：品牌块下面那点留白，由它自己的 10px 上内边距给，
+   刚好和别的组之间的留白一致，横着看也是一排。 */
+/* 「没有任何权限」是一句提示，不是一个分组标题，别给它拖条尾巴 */
+.nav-group-empty::after { display: none; }
 
+/* 折叠态放不下标题，就用一段短横线交代「这里是另一组」。
+   原来是一条 32px、透明度 0.07 的线 —— 在深色底上几乎看不见，
+   等于分组信息全丢；现在线更短更实，前后各留一格空隙，
+   就算不数线，也能靠「停顿」数出组。 */
+.nav-group-divider {
+  width: 18px;
+  height: 1px;
+  margin: 9px auto;
+  border-radius: 1px;
+  /* 与展开态的分组细线同一档深浅：两处是同一个「分组」概念 */
+  background: rgba(255, 255, 255, 0.14);
+}
+.nav-group-divider.is-first { margin-top: 5px; }
+
+/* ============ 底部区 ============ */
+/* 之前底部的按钮是「透明底 + 12px 小字 + 6px 圆角」，
+   和上面的菜单项完全不是一套语言，看着像两个系统拼在一起。
+   现在按菜单项的规格重做：同高、同圆角、同一水平对齐轴 ——
+   图标都落在距侧栏左边 21px 处，文字都落在 47px 处。 */
 .sidebar-footer {
-  padding: 12px 18px 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--nav-hairline);
+  /* 比导航区略沉一档，把「导航」与「操作」分成两块 */
+  background: rgba(255, 255, 255, 0.035);
+  flex-shrink: 0;
+}
+/* 底部动作区：两个动作并排一行 */
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 「自定义导航」占满剩下的宽度 */
+.footer-actions .nav-add-btn { flex: 1; min-width: 0; }
+/* 收起/展开是纯图标动作：给它一个方块，
+   宽度和菜单图标方块（折叠态 38px）同一套语言。 */
+.footer-actions .collapse-toggle {
+  width: 30px;
+  flex-shrink: 0;
+  justify-content: center;
+  padding: 0;
 }
 .collapse-btn {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 10px;
   width: 100%;
-  min-height: 28px;
-  padding: 4px 8px;
-  margin-bottom: 8px;
+  height: 30px;
+  padding: 0 11px;
+  margin-bottom: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.42);
-  font-size: 12px;
+  color: var(--nav-fg-muted);
+  font-size: 13px;
   font-family: inherit;
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 .collapse-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.85);
+  background: var(--nav-surface);
+  color: var(--nav-fg);
 }
 .collapse-btn:focus-visible {
-  outline: 2px solid var(--primary-light);
-  outline-offset: 1px;
+  outline: 2px solid var(--nav-accent);
+  outline-offset: -2px;
 }
-.sidebar.is-collapsed .collapse-btn { justify-content: center; padding: 4px 0; }
+.collapse-btn .el-icon {
+  font-size: 16px;
+  color: var(--nav-fg-faint);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+.collapse-btn:hover .el-icon { color: var(--nav-fg-strong); }
+/* 折叠态：按钮只剩图标，收到和菜单图标方块一样的 38px，排得才整齐 */
+.sidebar.is-collapsed .sidebar-footer { padding: 8px 12px 10px; }
+.sidebar.is-collapsed .footer-actions { flex-direction: column; gap: 6px; }
+.sidebar.is-collapsed .collapse-btn {
+  justify-content: center;
+  padding: 0;
+  width: 38px;
+  height: 38px;
+  margin: 0 auto;
+}
+.sidebar.is-collapsed .footer-actions .nav-add-btn { flex: none; }
+
 .kbd-hint {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.36);
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+  height: 22px;
+  padding: 0 11px;
+  font-size: 12px;
+  color: var(--nav-fg-ghost);
 }
 .kbd {
   background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   padding: 1px 6px;
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.6);
-}
-.sys-version {
-  margin-top: 8px;
+  border-radius: 5px;
   font-family: var(--font-mono);
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--nav-fg-muted);
+}
+.sys-version {
+  /* 版本号跟提示排在同一行，右对齐 —— 底部区省下一整行 */
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  /* 版本号是次要信息，但不能暗到找不着（0.38 时对深色底 3.5:1，
+     小字要 4.5:1，所以给到 --nav-fg-dim 的 4.9:1） */
+  color: var(--nav-fg-dim);
   letter-spacing: 0.2px;
 }
 
@@ -835,23 +1059,11 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
-.mobile-drawer :deep(.el-drawer__body) {
-  padding: 0 !important;
-  background: var(--bg-sidebar);
-  color: #fff;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
-
-.mobile-drawer .mobile-brand {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-  flex-shrink: 0;
-}
+/* 抽屉面板是 teleport 出来的，拿不到本文件的 scoped 属性，
+   所以「面板外壳」（底色、内边距、滚动方式）只能定义在 main.css 里。
+   菜单本体不用再抄一份：抽屉与侧栏共用 .nav-menu 这一个类名，
+   样式自然就是同一套 —— 抄第二份只会让两边慢慢漂移。
+   抽屉的品牌块也直接复用 .brand（同一个类名），连排版都不用各写一遍。 */
 
 /* ============ 响应式 ============ */
 /* 面包屑在窄屏上是多余的：顶栏已经有页面标题了，

@@ -2105,82 +2105,63 @@ html.dark .el-loading-mask { background-color: rgba(12, 13, 18, 0.66) !important
   color: #fff !important;
 }
 
-/* 移动端抽屉：复用深色侧栏的菜单样式 */
+/* =========================================================
+   侧边栏 / 移动端抽屉：跨组件共享的「深色面板」
+   =========================================================
+
+   为什么单开一块：
+     侧栏（Layout.vue 的 .sidebar）与移动端抽屉（el-drawer）是两套 DOM，
+     但必须长得一模一样。抽屉面板是 teleport 出来的，
+     拿不到 Layout.vue 的 scoped 属性 —— 所以「外壳」只能放在全局；
+     而「菜单本体」（.nav-menu）在 Layout.vue 里，
+     抽屉复用同一个类名，样式自然就是同一套。
+     这里绝不能再抄第二份：抄了就会出现「抽屉 40px 高、侧栏 38px 高」
+     这种谁也说不清哪边是对的漂移（原来正是这样）。
+
+   侧栏在明暗两套主题下都是深色底
+   （--bg-sidebar：浅色主题 #111218，深色主题 #0a0b0f），
+   所以侧栏里的文字一律用「白 + 透明度」，不能用 --text-*（那些是给浅底设计的）。
+   把这些透明度收成侧栏专属令牌：
+     将来若要把侧栏改成浅底，只要改这一处，
+     不用再翻遍样式表找散落的 rgba(255,255,255,…)。
+     明暗两套主题共用同一份令牌，也就不会出现「亮色主题下字看不见」。 */
+.sidebar,
+.mobile-drawer {
+  --nav-fg: rgba(255, 255, 255, 0.95);        /* 品牌名、聚焦后的文字 */
+  --nav-fg-strong: rgba(255, 255, 255, 0.82); /* hover 后的文字与图标 */
+  --nav-fg-muted: rgba(255, 255, 255, 0.64);  /* 菜单项正文（对深色底 ≥ 7:1） */
+  --nav-fg-dim: rgba(255, 255, 255, 0.48);    /* 品牌副标题、版本号（≥ 4.5:1） */
+  --nav-fg-faint: rgba(255, 255, 255, 0.50);  /* 分组标题（对深色底 ≥ 4.5:1） */
+  --nav-fg-icon: rgba(255, 255, 255, 0.50);   /* 图标，比文字更沉一层（图形需 ≥ 3:1） */
+  --nav-fg-ghost: rgba(255, 255, 255, 0.38);  /* ⌘K 提示这类装饰性文字 */
+  --nav-surface: rgba(255, 255, 255, 0.055);       /* hover / focus 底 */
+  --nav-hairline: rgba(255, 255, 255, 0.09);       /* 分隔线（1.26:1，再淡就真的看不见了） */
+  /* 高亮色跟着主题走：浅色主题下 --primary-light 偏暗、深色主题下偏亮，
+     但两者落在深色侧栏上都够清楚 —— 不再写死 #a7aae8 这种「哪边都差不多」的色 */
+  --nav-accent: var(--primary-light);
+  --nav-accent-grad: var(--primary-grad);
+  /* 当前项的底色：主色淡染。
+     整条侧栏从头到尾只有 logo 带主色，其余全是灰 —— 一眼看过去像「没做完」。
+     让「当前位置」带上和 logo 同源的颜色，侧栏才有一个视觉重心。
+     用 color-mix 而不是写死 rgba：主色在明暗两套主题里不一样，
+     写死就会出现「浅色主题刚好、深色主题发灰」这种偏一边的情况。 */
+  --nav-accent-tint: color-mix(in srgb, var(--primary-light) 24%, transparent);
+  --nav-accent-tint-soft: color-mix(in srgb, var(--primary-light) 9%, transparent);
+  --nav-accent-tint-hover: color-mix(in srgb, var(--primary-light) 32%, transparent);
+}
+
+/* 抽屉面板外壳：底色、内边距、滚动方式。
+   品牌块与菜单本体由 Layout.vue 的 scoped 样式负责
+   （它们在 Layout 的模板里，拿得到 scoped 属性），这里只管面板本身。 */
 .mobile-drawer .el-drawer__body {
   padding: 0 !important;
   background: var(--bg-sidebar);
-  color: #fff;
-  overflow-y: auto;
-}
-.mobile-drawer .mobile-brand {
+  /* 顶部柔光挪到品牌块里了（见 Layout.vue 的 .brand）——
+     菜单区要保持纯色，分组标题才能吸顶而不留色差。 */
+  color: var(--nav-fg);
+  overflow: hidden;
   display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-}
-.mobile-drawer .mobile-brand .brand-logo {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  background: var(--primary-grad);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  flex-shrink: 0;
-}
-.mobile-drawer .mobile-brand .brand-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.94);
-}
-.mobile-drawer .mobile-brand .brand-sub {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.32);
-  margin-top: 3px;
-}
-.mobile-drawer .nav-menu {
-  flex: 1;
-  border-right: none;
-  background: transparent;
-  padding: 6px 0 14px;
-  overflow-y: auto;
-  --el-menu-bg-color: transparent;
-  --el-menu-text-color: rgba(255, 255, 255, 0.66);
-  --el-menu-active-color: #ffffff;
-  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.055);
-  --el-menu-hover-text-color: rgba(255, 255, 255, 0.94);
-}
-.mobile-drawer .nav-menu .el-menu-item {
-  border-radius: 7px;
-  margin: 1px 10px;
-  padding: 0 11px !important;
-  height: 40px;
-  line-height: 40px;
-  font-size: 14px;
-  font-weight: 450;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.mobile-drawer .nav-menu .el-menu-item .el-icon {
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 16px;
-}
-.mobile-drawer .nav-menu .el-menu-item.is-active {
-  background: rgba(255, 255, 255, 0.075) !important;
-  color: #fff !important;
-  font-weight: 550;
-}
-.mobile-drawer .nav-menu .el-menu-item.is-active .el-icon { color: #a7aae8; }
-.mobile-drawer .nav-group-title {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.34);
-  letter-spacing: 1.1px;
-  padding: 17px 21px 7px;
-  font-weight: 600;
-  text-transform: uppercase;
+  flex-direction: column;
 }
 
 @media (max-width: 768px) {

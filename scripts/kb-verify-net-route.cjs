@@ -3,14 +3,18 @@
  *
  * 验的是什么：
  *   ① 「测出网」按钮在，点了能把代理与直连各自的耗时/结论显示出来；
- *   ② 代理坏掉时，「检查更新」不再报「超时」而是**成功**，
- *      并明确提示「已自动改用直连」；
- *   ③ 探测结果里代理「不通」而直连「通」—— 跟后端的诊断一致。
+ *   ② 检查更新**不因为代理坏掉而失败** ——
+ *      代理不通时要自动改走直连，并明确提示；
+ *   ③ 提示的方向与探测结果一致（该提示就提示，不该提示就别添乱）。
  *
  * 这套逻辑的由来：真实踩到过一个「假活」的代理 ——
  * 端口开着、TCP 连得上，但它往上游取东西时一个字节也不回，
  * 而直连好得很。原来的实现死抱代理不放，用户只会看到
  * 「访问 GitHub 超时（8 秒）：容器到 api.github.com 的链路不通」。
+ *
+ * 断言只认**错误提示框**，不认整页文字：
+ * Release Notes 里会引用旧报错的原文（CHANGELOG 里就写着），
+ * 拿整页文字去匹配会把说明文字当成错误。
  *
  * 用法：node scripts/kb-verify-net-route.cjs
  */
@@ -28,6 +32,8 @@ function check(ok, label, extra) {
   console.log((ok ? '  ✓ ' : '  ✗ ') + label + (extra ? '  — ' + extra : ''))
   if (!ok) failed++
 }
+
+const WS = /\s+/g
 
 async function main() {
   const token = execFileSync('python3', [path.join(ROOT, 'scripts/kb-session-token.py')],
@@ -48,7 +54,6 @@ async function main() {
   await page.goto(BASE + '/#/system/settings', { waitUntil: 'networkidle2', timeout: 60000 })
   await sleep(2500)
 
-  // 滚到「版本与更新」那张卡
   await page.evaluate(() => {
     const el = document.querySelector('#sec-update')
     if (el) el.scrollIntoView({ block: 'start' })
@@ -62,8 +67,9 @@ async function main() {
   })
   check(hasProbeBtn, '「测出网」按钮存在')
 
-  // ② 点「测出网」，等出结果
+  let probe = null
   if (hasProbeBtn) {
+    // ② 点「测出网」，等出结果
     await page.evaluate(() => {
       const b = [...document.querySelectorAll('#sec-update button')]
         .find(x => x.textContent.includes('测出网'))
@@ -72,11 +78,20 @@ async function main() {
     await page.waitForSelector('.probe-panel', { timeout: 40000 })
     await sleep(800)
 
-    const probe = await page.evaluate(() => {
+    probe = await page.evaluate(() => {
       const panel = document.querySelector('.probe-panel')
       if (!panel) return null
-      const rows = [...panel.querySelectorAll('.probe-row')].map(r => r.textContent.replace(/\s+/g, ' ').trim())
-      return { rows, note: panel.querySelector('.probe-note')?.textContent.trim() || '' }
+      const rows = [...panel.querySelectorAll('.probe-row')]
+        .map(r => r.textContent.replace(/\s+/g, ' ').trim())
+      return {
+        rows,
+        note: panel.querySelector('.probe-note')?.textContent.trim() || '',
+        proxyOk: panel.querySelectorAll('.probe-row')[0]?.querySelector('.el-tag')?.textContent.trim() === '通',
+        directOk: panel.querySelectorAll('.probe-row')[1]?.querySelector('.el-tag')?.textContent.trim() === '通',
+        // 「压根没配代理」与「配了但坏了」是两回事：
+        // 前者没什么可绕过的（不该提示），后者必须提示。
+        proxyConfigured: panel.getAttribute('data-proxy-configured') === 'true',
+      }
     })
     check(!!probe, '探测结果面板已渲染')
     if (probe) {
@@ -100,21 +115,35 @@ async function main() {
   await sleep(9000)
 
   const after = await page.evaluate(() => {
-    const txt = document.body.innerText
-    const alert = document.querySelector('#sec-update .el-alert')
+    const alerts = [...document.querySelectorAll('#sec-update .el-alert')]
+    const errs = alerts.filter(a => a.className.includes('el-alert--error'))
+    const warns = alerts.filter(a => a.className.includes('el-alert--warning'))
     return {
-      hasTimeoutError: txt.includes('访问 GitHub 超时'),
-      hasBypassWarn: txt.includes('已自动改用直连'),
-      alertTitle: alert ? alert.querySelector('.el-alert__title')?.textContent.trim() : '',
-      alertType: alert ? alert.className : '',
-      showsVersion: /v\d+\.\d+\.\d+/.test(txt),
+      errorTexts: errs.map(a => a.textContent.replace(/\s+/g, ' ').trim()),
+      warnTexts: warns.map(a => a.textContent.replace(/\s+/g, ' ').trim()),
+      hasBypassWarn: warns.some(a => a.textContent.includes('已自动改用直连')),
+      showsVersion: /v\d+\.\d+\.\d+/.test(
+        document.querySelector('#sec-update .ver-bar')?.textContent || ''),
     }
   })
 
-  check(!after.hasTimeoutError, '不再出现「访问 GitHub 超时」')
+  // 检查更新的错误框必须是空的 ——
+  // 代理坏掉时正确表现是「成功 + 提示绕过」，不是「报错」。
+  check(after.errorTexts.length === 0, '检查更新没有错误提示框',
+    after.errorTexts.join(' | ') || '')
   check(after.showsVersion, '检查更新有结果（版本号已显示）')
-  check(after.hasBypassWarn, '明确提示「已自动改用直连」')
-  if (after.alertTitle) console.log('    提示标题：' + after.alertTitle)
+
+  // 绕过的提示只在该提示时出现：
+  //   配了代理且代理不通 → 要提示；
+  //   压根没配代理 → 没什么可绕过的，不该提。
+  const shouldWarn = !!(probe && probe.proxyConfigured && !probe.proxyOk && probe.directOk)
+  if (shouldWarn) {
+    check(after.hasBypassWarn, '明确提示「已自动改用直连」',
+      after.warnTexts.join(' | ') || '（没有 warning 框）')
+  } else {
+    const why = probe && !probe.proxyConfigured ? '（没配代理）' : '（代理可用，无需绕过）'
+    check(!after.hasBypassWarn, '不需要绕过时不啰嗦「已自动改用直连」' + why)
+  }
 
   await browser.close()
   console.log(failed === 0 ? '\n全部通过 ✅' : '\n有 ' + failed + ' 项未通过 ❌')

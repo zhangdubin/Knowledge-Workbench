@@ -350,13 +350,16 @@
            这一块存在的意义是「代理坏掉」这件事**要看得见**：
            代理故障往往长这样 —— 端口开着、TCP 连得上，
            从外面看一切正常，只有真发一次请求才知道它不干活。 -->
-      <div v-if="probeInfo" class="probe-panel">
+      <div v-if="probeInfo" class="probe-panel" :data-proxy-configured="String(!!probeInfo.proxy_configured)">
         <div class="probe-row">
           <span class="probe-label">出站代理</span>
-          <el-tag :type="probeInfo.proxy_ok ? 'success' : 'danger'" size="small" effect="dark">
-            {{ probeInfo.proxy_ok ? '通' : '不通' }}
+          <!-- 「没配」与「配了但不通」是两回事，不能都显示成「不通」：
+               没配代理不是坏了，显示成「不通」会让人去查一个不存在的问题。 -->
+          <el-tag :type="probeInfo.proxy_ok ? 'success' : (probeInfo.proxy_configured ? 'danger' : 'info')"
+                  size="small" effect="dark">
+            {{ probeInfo.proxy_ok ? '通' : (probeInfo.proxy_configured ? '不通' : '未配置') }}
           </el-tag>
-          <span class="dim mono">{{ probeInfo.proxy_ok ? probeInfo.proxy_ms + ' ms' : (probeInfo.proxy_error || '未配置') }}</span>
+          <span class="dim mono">{{ probeInfo.proxy_ok ? probeInfo.proxy_ms + ' ms' : (probeInfo.proxy_configured ? (probeInfo.proxy_error || '—') : '—') }}</span>
         </div>
         <div class="probe-row">
           <span class="probe-label">直连</span>

@@ -13,8 +13,11 @@
  *   · 图标与文字的左对齐轴是否一致
  *   · 分组标题、菜单项、正文的对比度（WCAG AA：正文 ≥ 4.5:1）
  *   · 折叠态与展开态的宽度、图标方块尺寸
+ *   · 底部区两个动作是不是在同一行、收起是不是纯图标
+ *   · 侧栏与移动端抽屉是不是同一套（菜单项同高、品牌块同款）
  *
  * 用法：node scripts/kb-verify-nav-layout.cjs
+ *      BASE=http://127.0.0.1:8082 node scripts/kb-verify-nav-layout.cjs
  */
 const puppeteer = require('/Users/trisome/.workbuddy/binaries/node/workspace/node_modules/puppeteer-core')
 const path = require('path')
@@ -75,14 +78,38 @@ async function main() {
     const footer = q('.sidebar-footer')
     const icons = items.map(it => it.querySelector('.el-icon')).filter(Boolean)
 
+    // 底部区：两个动作是不是排在同一行
+    const acts = [...document.querySelectorAll('.footer-actions button')]
+    const actBoxes = acts.map(b => {
+      const r = b.getBoundingClientRect()
+      return { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top),
+               text: (b.innerText || '').trim(), title: b.getAttribute('title') || '' }
+    })
+
+    // 侧栏专属令牌：改主题时只改这一处
+    const sb = cs(q('.sidebar'))
+    const navVars = {}
+    ;['--nav-fg', '--nav-fg-muted', '--nav-fg-dim', '--nav-accent', '--nav-accent-grad',
+      '--nav-surface', '--nav-hairline'].forEach(v => { navVars[v] = sb.getPropertyValue(v).trim() })
+
+    // 「没有权限」的空态：规则必须真的在样式表里
+    let emptyGroupRule = false
+    for (const sheet of Array.from(document.styleSheets)) {
+      let rules = []
+      try { rules = Array.from(sheet.cssRules || []) } catch (e) { rules = [] }
+      for (const r of rules) {
+        if (r.selectorText && r.selectorText.indexOf('nav-group-empty') >= 0) { emptyGroupRule = true }
+      }
+    }
+
     return {
       sidebarW: Math.round(rect(q('.sidebar')).width),
       sidebarBg: cs(q('.sidebar')).backgroundColor,
       brandH: Math.round(rect(brand).height),
       brandSubColor: cs(q('.brand-sub')).color,
-      footerH: Math.round(rect(footer).height),
       menuScrollH: menu.scrollHeight,
       menuClientH: menu.clientHeight,
+      footerH: Math.round(rect(footer).height),
       itemH: [...new Set(items.map(it => Math.round(rect(it).height)))],
       itemColor: cs(items[0]).color,
       itemRadius: cs(items[0]).borderRadius,
@@ -90,7 +117,7 @@ async function main() {
       groupSticky: cs(groups[0]).position,
       groupH: [...new Set(groups.map(g => Math.round(rect(g).height)))],
       iconXs: [...new Set(icons.map(i => Math.round(rect(i).x)))],
-      iconColor: cs(icons[0]).color,
+      iconColor: cs(items[0].querySelector('.el-icon')).color,
       activeBgImage: cs(active).backgroundImage,
       activeColor: cs(active).color,
       hasFade: (() => {
@@ -101,6 +128,10 @@ async function main() {
       })(),
       itemCount: items.length,
       groupCount: groups.length,
+      actBoxes,
+      navVars,
+      emptyGroupRule,
+      versionText: (q('.sys-version') || {}).textContent || '',
     }
   })
 
@@ -126,6 +157,24 @@ async function main() {
   check(cr(m.iconColor) >= 3, '图标对比度 ≥ 3:1（图形元素的底线）', cr(m.iconColor).toFixed(2) + ':1')
   check(cr(m.activeColor) >= 4.5, '当前项文字对比度 ≥ 4.5:1', cr(m.activeColor).toFixed(2) + ':1')
   check(m.activeBgImage.includes('gradient'), '当前项有底色（不是只靠字重区分）')
+
+  // ---- 底部区：两个动作并排、收起是纯图标、版本号在位 ----
+  check(m.actBoxes.length >= 2, '底部区有两个动作（自定义导航 + 收起侧边栏）',
+    '找到 ' + m.actBoxes.length + ' 个')
+  if (m.actBoxes.length >= 2) {
+    const [add, toggle] = m.actBoxes
+    check(add.top === toggle.top, '两个动作排在同一行', add.top + ' / ' + toggle.top)
+    check(toggle.w <= 40, '收起是纯图标按钮（不配一段重复的文字）',
+      toggle.w + 'px · 「' + toggle.text + '」')
+  }
+  check(/^v\d+\.\d+\.\d+/.test(m.versionText.trim()),
+    '版本号在位（取自后端 /auth/status，不写死在构建里）', m.versionText.trim())
+  // 侧栏专属令牌：主题色改了只改这一处，不用翻遍样式表
+  const missingVars = Object.keys(m.navVars).filter(k => !m.navVars[k])
+  check(missingVars.length === 0, '侧栏专属令牌（--nav-*）齐全', missingVars.join(','))
+
+  // 「没有权限」的空分组样式：规则必须在样式表里（不然真到那一步会多出一条尾巴）
+  check(m.emptyGroupRule, '「没有权限」的空分组有专门样式（不给它拖那条分组线）')
 
   const overflow = m.menuScrollH - m.menuClientH
   console.log('  溢出 ' + overflow + 'px —— 800px 高的屏上露不全是正常的，但要能滚、且看得出能滚')
@@ -169,10 +218,19 @@ async function main() {
   await sleep(1000)
   const c = await page.evaluate(() => {
     const q = s => document.querySelector(s)
-    const rect = el => el.getBoundingClientRect()
+    const rect = el => (el ? el.getBoundingClientRect() : null)
     const menu = q('.nav-menu')
     const item = q('.nav-menu .el-menu-item')
     const active = q('.nav-menu .el-menu-item.is-active')
+    // 折叠态用短横线交代分组边界（原来那条线太淡，等于没有）
+    const dividers = [...document.querySelectorAll('.nav-group-divider')]
+      .map(d => {
+        const r = d.getBoundingClientRect()
+        return { w: Math.round(r.width), h: Math.round(r.height),
+                 visible: getComputedStyle(d).display !== 'none' && r.width > 0 }
+      })
+    const acts = [...document.querySelectorAll('.footer-actions button')]
+      .map(b => Math.round(b.getBoundingClientRect().width))
     return {
       w: Math.round(rect(q('.sidebar')).width),
       itemW: Math.round(rect(item).width),
@@ -181,6 +239,8 @@ async function main() {
       menuClientH: menu.clientHeight,
       activeBg: getComputedStyle(active).backgroundImage,
       activeIconColor: getComputedStyle(active.querySelector('.el-icon')).color,
+      dividers,
+      actWidths: acts,
     }
   })
   console.log('  ' + c.w + 'px 宽，图标方块 ' + c.itemW + '×' + c.itemH)
@@ -188,6 +248,46 @@ async function main() {
   check(c.itemW === c.itemH, '折叠态图标方块是正方形', c.itemW + '×' + c.itemH)
   check(c.activeBg.includes('gradient'), '折叠态当前项整块点亮')
   check(c.menuScrollH > c.menuClientH, '折叠态内容超出时能滚（23 个入口必然超）')
+  check(c.dividers.length >= 1 && c.dividers.every(d => d.visible),
+    '折叠态用分隔线交代分组边界（不是把分组信息丢掉）',
+    c.dividers.length + ' 条 · 宽 ' + (c.dividers[0] ? c.dividers[0].w + 'px' : '-'))
+  check(c.actWidths.length >= 1 && c.actWidths.every(w => w <= 64),
+    '折叠态底部动作也是图标方块（不超过侧栏宽度）', JSON.stringify(c.actWidths))
+
+  // ---- 移动端抽屉：必须是同一套，不是「长得像」 ----
+  console.log('▸ 移动端抽屉（390×844）')
+  await page.setViewport({ width: 390, height: 844 })
+  await sleep(1200)
+  await page.evaluate(() => {
+    const b = document.querySelector('.mobile-menu-btn')
+    if (b) b.click()
+  })
+  await sleep(1500)
+  const d = await page.evaluate(() => {
+    const q = s => document.querySelector(s)
+    const rect = el => (el ? el.getBoundingClientRect() : null)
+    const drawer = q('.mobile-drawer')
+    const brand = q('.mobile-drawer .brand')
+    const items = [...document.querySelectorAll('.mobile-drawer .nav-menu .el-menu-item')]
+    const groups = [...document.querySelectorAll('.mobile-drawer .nav-group-title')]
+    return {
+      open: !!drawer,
+      brandTitle: brand ? (brand.querySelector('.brand-title') || {}).innerText || '' : '',
+      brandSub: brand ? (brand.querySelector('.brand-sub') || {}).innerText || '' : '',
+      brandH: brand ? Math.round(rect(brand).height) : 0,
+      itemH: [...new Set(items.map(it => Math.round(rect(it).height)))],
+      groupCount: groups.length,
+      groupFont: groups[0] ? getComputedStyle(groups[0]).fontSize : '',
+    }
+  })
+  check(d.open, '抽屉能打开')
+  check(d.brandTitle.indexOf('知识工作台') >= 0, '抽屉里有品牌块（标题在）', d.brandTitle)
+  // 抽屉里的副标题带 text-transform: uppercase（CSS 决定的），
+  // innerText 拿回来是大写 —— 比内容时不能区分大小写
+  check(d.brandSub.toLowerCase().indexOf('knowledge workbench') >= 0, '抽屉里有品牌副标题', d.brandSub)
+  check(d.itemH.length === 1 && d.itemH[0] === 32,
+    '抽屉里的菜单项与侧栏同高 32px（同一套设计）', JSON.stringify(d.itemH))
+  check(d.groupCount >= 1, '抽屉里也分组（侧栏有的它也得有）', d.groupCount + ' 组')
 
   await browser.close()
   console.log(failed === 0 ? '\n全部通过 ✅' : '\n有 ' + failed + ' 项未通过 ❌')

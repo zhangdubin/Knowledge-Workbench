@@ -154,6 +154,13 @@ async function main() {
     fails.forEach((f) => console.log('  - ' + f))
     process.exit(1)
   }
+  // 成功路径也必须显式退出：
+  //   browser.close() 之后 puppeteer 的连接套接字还挂着句柄，
+  //   node 不会自己结束 —— 脚本会把「断言全过」打印出来，
+  //   然后**永远不退出**（实测挂住 4 分多钟，被 SIGTERM 杀掉，exit=143）。
+  //   在 CI/回归跑批里，一个不退出的脚本会被当成「还在跑」，
+  //   把整批验证卡住 —— 断言全过也没用。
+  process.exit(0)
 }
 
 main().catch((e) => { console.error('ERR', e); process.exit(1) })

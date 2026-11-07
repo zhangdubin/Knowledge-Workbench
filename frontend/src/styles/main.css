@@ -1719,6 +1719,13 @@ html.dark .dialog-summary { background: var(--primary-bg); border-color: var(--b
   box-shadow: var(--shadow-xl) !important;
   border: 1px solid var(--border-light);
   padding-bottom: 16px !important;
+  /* 底色显式写出来：
+     Element Plus 自己那份样式没进包时（见 main.js 里的说明），
+     确认框身上一条 background 规则都没有 —— 就成了一块**透明**浮层，
+     字飘在灰色遮罩上，看不清。
+     --el-bg-color-overlay 是 Element Plus 的语义变量，
+     本项目里指向 --bg-elevated（浅色 #ffffff / 深色 #1c1f27）。 */
+  background-color: var(--el-bg-color-overlay);
 }
 .el-message-box__header {
   padding: 18px 24px 0 !important;

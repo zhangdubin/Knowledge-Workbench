@@ -6,6 +6,32 @@ import { createPinia } from 'pinia'
 import 'element-plus/theme-chalk/base.css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
 
+// Element Plus 的「命令式」组件：它们只出现在 JS 里，模板里一个都没有。
+//
+// 为什么必须在这里手动引样式：
+//   vite.config.js 里的 ElementPlusResolver 是**扫模板**的 ——
+//   模板里写了 <el-xxx> 才把它的样式带进包。
+//   而 ElMessage / ElMessageBox 是这么用的：
+//       import { ElMessage, ElMessageBox } from 'element-plus'
+//       ElMessage.success('保存成功')
+//   模板里找不到它们，扫不到，样式就不进包。
+//
+// 漏了会怎样（真踩过）：
+//   样式没进包 → .el-message-box 身上一条 background 规则都没有，
+//   确认框就成了一块**透明**的浮层，字飘在灰色遮罩上看不清；
+//   ElMessage 的提示条则没有 fixed 定位、没有图标样式，
+//   顶在正文里跑，像页面多长了一段字。
+//
+// 只影响样式，不影响功能（所以更难被发现 —— 弹窗照样弹，只是看不见）。
+// 以后再用到别的命令式组件，记得往这下面加一行。
+import 'element-plus/theme-chalk/el-message.css'
+import 'element-plus/theme-chalk/el-message-box.css'
+
+// 统一弹窗按钮文案（默认中文）。
+// 引入这个模块就完成打补丁，必须在挂载应用之前执行 ——
+// 里面的实现见 utils/feedback.js 的注释。
+import './utils/feedback.js'
+
 import App from './App.vue'
 import router from './router'
 import './styles/main.css'

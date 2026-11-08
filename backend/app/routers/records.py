@@ -14,6 +14,7 @@ from ..database import get_db
 from ..models import EntityRecord, EntityType
 from ..schemas import RecordIn
 from ..services import audit as audit_svc
+from ..services import note_format as note_fmt_svc
 from ..services import record as svc
 from ..services.auth import Principal, current_principal, ensure_model
 
@@ -100,12 +101,33 @@ async def create_record(
 
 @router.put("/{record_id}")
 async def update_record(
-    record_id: int, payload: RecordIn, db: AsyncSession = Depends(get_db),
+    record_id: int, payload: RecordIn,
+    # touch=0：不改 updated/version、不写变更日志。
+    # 给「迁移/回填/批量导入」用 —— 机械搬运不该给每篇都记一笔人工编辑。
+    touch: bool = Query(True),
+    db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(current_principal),
 ):
-    ensure_model(principal, await _record_type_key(db, record_id), "write")
+    type_key = await _record_type_key(db, record_id)
+    ensure_model(principal, type_key, "write")
+
+    data = dict(payload.data or {})
+    # 笔记保存时维护「updated / version / 变更日志」——
+    # 不然改完正文，页脚的变更日志永远停在「自动排版」那一行（用户实测发现）。
+    if touch and type_key == "note" and "content" in data:
+        old = await db.get(EntityRecord, record_id)
+        old_content = str((old.data or {}).get("content") or "") if old else ""
+        new_content = str(data.get("content") or "")
+        if new_content != old_content:
+            touched, _info = note_fmt_svc.touch_note(
+                new_content, old_content=old_content, source="human",
+                title=str(data.get("title") or "") or None,
+                tags=list(data.get("tags") or []) if "tags" in data else None,
+            )
+            data["content"] = touched
+
     try:
-        rec = await svc.update_record(db, record_id, payload.data)
+        rec = await svc.update_record(db, record_id, data)
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
     if not rec:

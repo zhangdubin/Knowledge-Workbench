@@ -230,7 +230,12 @@ async def beautify_layout(payload: BeautifyIn) -> dict:
     return {"text": result}
 
 
-@router.post("/note-template", dependencies=_AI)
+# 注意：这个接口**故意不挂 _AI**。
+# 它做的事全是确定性规则（front-matter + 标题层级），一次模型都不调，
+# 挂 AI 授权只会让「没配 Key 的部署新建笔记就套不了模板」——
+# 那是笔记的基础能力，不该被 AI 开关挡住。
+# 路径保留是为了兼容老前端；新代码请用 /api/notes/template。
+@router.post("/note-template")
 async def note_template(payload: NoteTemplateIn) -> dict:
     """新建笔记的模板（按《笔记 UI 排版规范》）
 

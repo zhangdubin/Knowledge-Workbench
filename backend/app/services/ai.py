@@ -398,6 +398,135 @@ async def summarize(text: str) -> str:
     ])
 
 
+_STRUCT_SYSTEM = """你是笔记结构化提取器。给你一段散乱的记录（可能是终端输出、复制粘贴的碎片、没有小标题的段落），
+你要提取出**结构化事实**，供排版器渲染成规范笔记。只输出 JSON，不要解释、不要 markdown 代码围栏。
+
+输出 schema：
+{
+  "tldr": ["一两句结论", "关键影响", "可选第三行"],   // 2-3 条，每条 ≤ 60 字；只能说原文有的事实，不许编
+  "sensitivity": "secret | confidential | public",
+  "tags": ["英文域标签", "最多 6 个"],
+  "risks": [                                        // 原文里明确写出的问题/发现；没有就给空数组
+    {"id": "C2", "severity": "严重|高|中|低", "title": "一句话问题", "evidence": "证据/位置（≤80 字）"}
+  ],
+  "targets": [                                      // 原文里出现的资产
+    {"name": "域名或IP", "port": "端口", "stack": "系统/框架（不知道就空串）", "result": "结果（≤30 字）"}
+  ],
+  "timeline": [                                     // 原文里带时间的事件；没有就给空数组
+    {"time": "2026-11-08 17:17", "event": "发生了什么（≤50 字）"}
+  ],
+  "sections": ["原文实际包含的主题（3-8 个，每个 ≤ 12 字）"]
+}
+
+硬规则：
+- 只提取原文出现过的事实；不确定的字段留空，绝不编造 IP、时间、口令、结论。
+- 口令/密钥/token 这类值不要写进 JSON（排版器会自己遮盖）。
+- 没有把握的数组就给 []，宁缺毋滥。
+- 每字段都要短：tldr ≤ 60 字/条，risks ≤ 8 条，targets ≤ 6 条，timeline ≤ 8 条。
+"""
+
+
+# 结构化结果缓存：同一个内容只花一次模型调用（弹窗切开关、重复预览都不重复烧 token）
+_STRUCT_CACHE: dict[str, dict] = {}
+_STRUCT_TIMEOUT = 40.0
+
+
+async def structure_note(text: str) -> dict:
+    """把散乱正文结构化成「要素」（TL;DR / 风险 / 目标 / 时间线）
+
+    这是规则做不了、模型才做得好的那部分：
+    规则能排版、能识别命令和风险编号，但写不出一句真正的 TL;DR，
+    也判断不出「哪些是目标资产、哪些是时间线事件」。
+
+    返回的 dict 一定是**校验过的形状**：字段缺了就补空，
+    类型不对就丢掉 —— 上层拿到它可以直接渲染，不用再防御。
+    """
+    empty = {"tldr": [], "sensitivity": "", "tags": [], "risks": [],
+             "targets": [], "timeline": [], "sections": []}
+    if not _ai_available() or not (text or "").strip():
+        return empty
+
+    # 输入截断：太长的抓不住重点，也费 token
+    body = text if len(text) <= 6000 else text[:6000] + "\n…（后文截断）"
+
+    import hashlib
+
+    key = hashlib.sha1(body.encode("utf-8", "ignore")).hexdigest()
+    if key in _STRUCT_CACHE:
+        return dict(_STRUCT_CACHE[key])
+
+    # 交互式预览不能等：超过 25 秒就按规则版走（聊天模型偶尔会慢到一分钟）
+    import asyncio
+
+    try:
+        resp = await asyncio.wait_for(
+            chat_real([
+                {"role": "system", "content": _STRUCT_SYSTEM},
+                {"role": "user", "content": body},
+            ]),
+            timeout=_STRUCT_TIMEOUT,
+        )
+    except Exception:
+        return empty
+    if not isinstance(resp, str):
+        return empty
+
+    raw = resp.strip()
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not m:
+        return empty
+    try:
+        data = json.loads(m.group(0))
+    except Exception:
+        return empty
+    if not isinstance(data, dict):
+        return empty
+
+    def _str_list(v, limit=4, maxlen=120):
+        out = []
+        if isinstance(v, list):
+            for x in v:
+                if isinstance(x, str) and x.strip():
+                    out.append(x.strip()[:maxlen])
+        elif isinstance(v, str) and v.strip():
+            out.append(v.strip()[:maxlen])
+        return out[:limit]
+
+    def _rows(v, keys: tuple[str, ...], limit=12):
+        out = []
+        if not isinstance(v, list):
+            return out
+        for x in v:
+            if not isinstance(x, dict):
+                continue
+            row = {k: str(x.get(k, "") or "").strip()[:120] for k in keys}
+            if any(row.values()):
+                out.append(row)
+        return out[:limit]
+
+    sens = str(data.get("sensitivity") or "").strip().lower()
+    if sens not in ("secret", "confidential", "public"):
+        sens = ""
+    tags = []
+    for t in _str_list(data.get("tags"), limit=6, maxlen=24):
+        t = re.sub(r"[^\w\u4e00-\u9fff-]", "", t.split("#")[-1])
+        if t and t not in tags:
+            tags.append(t)
+
+    if len(_STRUCT_CACHE) > 32:
+        _STRUCT_CACHE.clear()
+    _STRUCT_CACHE[key] = result = {
+        "tldr": _str_list(data.get("tldr"), limit=3, maxlen=90),
+        "sensitivity": sens,
+        "tags": tags,
+        "risks": _rows(data.get("risks"), ("id", "severity", "title", "evidence")),
+        "targets": _rows(data.get("targets"), ("name", "port", "stack", "result")),
+        "timeline": _rows(data.get("timeline"), ("time", "event")),
+        "sections": _str_list(data.get("sections"), limit=8, maxlen=24),
+    }
+    return dict(result)
+
+
 async def extract_tags(text: str, max_tags: int = 5) -> list[str]:
     """提取标签"""
     resp = await chat_real([

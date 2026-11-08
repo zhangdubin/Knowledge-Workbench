@@ -195,5 +195,62 @@ const has = (html, s) => html.includes(s)
   assert('callout 支持可折叠标记', has(html, 'is-foldable'))
 }
 
+// ---------- 规范 §3：callout 正文要按 Markdown 渲染 ----------
+{
+  const src = '> [!info] 元信息\n> - **创建**: 2026-11-08\n> - 状态: ✅ 生效'
+  const html = renderMarkdown(src, { headingOffset: 0 })
+  assert('callout 正文里的列表渲染成 ul', has(html, '<ul><li><strong>创建</strong>'))
+  assert('callout 正文里的粗体渲染出来（不是裸 **）', !has(html, '**创建**'))
+}
+
+// ---------- 安全回归：callout 标题里的 HTML 必须转义 ----------
+{
+  const html = renderMarkdown('> [!note] <img src=x onerror=alert(1)>', { headingOffset: 0 })
+  assert('callout 标题不执行注入的标签', !has(html, '<img'))
+  assert('callout 标题里的尖括号被转义', has(html, '&lt;img'))
+  const body = renderMarkdown('> [!note] 标题\n> <script>alert(1)</script>', { headingOffset: 0 })
+  assert('callout 正文不执行注入的 script', !has(body, '<script>'))
+}
+
+// ---------- 规范 §11：secret-toggle 白名单 ----------
+{
+  const span = '<span class="secret-toggle" tabindex="0">'
+    + '<span class="secret-mask">••••••</span>'
+    + '<span class="secret-value">p@ssw0rd</span></span>'
+  const html = renderMarkdown('密码: ' + span, { headingOffset: 0 })
+  assert('secret-toggle 渲染成真实标签', has(html, '<span class="secret-toggle"'))
+  assert('遮罩与明文都保留', has(html, '••••••') && has(html, 'p@ssw0rd'))
+  assert('没有把标签当源码吐出来', !has(html, '&lt;span'))
+
+  // 白名单只认 secret-toggle 这一种形态：别的 span 一律按文本处理
+  const evil = renderMarkdown('<span class="x" onclick="alert(1)">点</span>', { headingOffset: 0 })
+  assert('非白名单 span 被转义', has(evil, '&lt;span') && !has(evil, 'onclick="alert'))
+}
+
+// ---------- 规范 §8.2：details 折叠块 ----------
+{
+  const src = ['<details>', '<summary>展开日志</summary>', '', '```', 'log line', '```', '', '</details>'].join('\n')
+  const html = renderMarkdown(src, { headingOffset: 0 })
+  assert('details 渲染成折叠块', has(html, '<details class="md-details"'))
+  assert('summary 渲染出来', has(html, '<summary>展开日志</summary>'))
+  assert('details 里的代码块正常渲染', has(html, '<pre class="md-pre"'))
+  assert('没有残留裸源码标签', !has(html, '&lt;details>'))
+}
+
+// ---------- 行内键帽 ----------
+{
+  const html = renderMarkdown('按 <kbd>⌘</kbd>+<kbd>K</kbd> 搜索', { headingOffset: 0 })
+  assert('kbd 渲染成键帽', has(html, '<kbd>⌘</kbd>'))
+}
+
+// ---------- 规范 §8.3：任务列表勾选框 ----------
+{
+  const html = renderMarkdown('- [ ] 待办\n- [x] 已完成\n- [-] 进行中\n- [?] 待确认', { headingOffset: 0 })
+  assert('待办渲染成空框', has(html, 'md-task-box') && has(html, '☐'))
+  assert('已完成渲染成勾选框', has(html, 'is-done') && has(html, '☑'))
+  assert('不再出现字面量 [ ]', !has(html, '[ ]') && !has(html, '[x]'))
+  assert('任务项不再是普通圆点', has(html, 'class="md-task"'))
+}
+
 console.log(failed ? `\n❌ ${failed} 项失败` : '\n✅ 全部通过')
 process.exit(failed ? 1 : 0)

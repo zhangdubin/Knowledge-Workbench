@@ -142,13 +142,44 @@
             <span class="notes-composer-hint">
               {{ draftGroupId ? `将建在「${groupNameOf(draftGroupId)}」` : '将建在「未分组」' }}
             </span>
-            <!-- 套用排版模板：一建出来就是规范形态（Obsidian 的「从模板新建」）-->
+            <!-- 笔记类型：选一个类型 → 「套用模板」会出一份要素齐全的骨架 -->
+            <el-select
+              v-model="draftProfile"
+              size="small"
+              class="notes-composer-profile"
+              aria-label="笔记类型"
+              placeholder="类型"
+            >
+              <el-option
+                v-for="p in profiles"
+                :key="p.key"
+                :label="`${p.emoji} ${p.name}`"
+                :value="p.key"
+              >
+                <span>{{ p.emoji }} {{ p.name }}</span>
+                <span class="notes-profile-desc">{{ p.desc }}</span>
+              </el-option>
+            </el-select>
+            <!-- 自动排版：新建时按《笔记 UI 排版规范》排好（默认开） -->
+            <label
+              class="notes-composer-autofmt"
+              title="新建时自动补 front-matter、章节 emoji、代码语言、凭证遮盖（可关）"
+            >
+              <el-switch
+                v-model="autoFormat"
+                size="small"
+                aria-label="新建笔记时自动排版"
+                @change="onAutoFormatChange"
+              />
+              <span>自动排版</span>
+            </label>
+            <!-- 套用排版模板：把空笔记的骨架先铺好（Obsidian 的「从模板新建」）-->
             <el-button
               size="small"
               text
               class="notes-composer-template"
               :loading="templateLoading"
-              title="按《笔记 UI 排版规范》生成 front-matter 与标题层级"
+              title="按《笔记 UI 排版规范》生成 front-matter 与标题层级（不依赖 AI）"
               @click="applyTemplate"
             >
               <el-icon><Brush /></el-icon>套用排版模板
@@ -349,6 +380,34 @@ const creating = ref(false)
 const templateLoading = ref(false)
 const draft = ref({ title: '', content: '', tags: [] })
 const draftGroupId = ref(0)
+
+// 新建时自动排版（默认开）。
+// 存 localStorage：这是「手感」偏好，不该每开一次页面就重置。
+const AUTO_FMT_KEY = 'kb.notes.autofmt'
+function readAutoFormatPref() {
+  try {
+    const v = localStorage.getItem(AUTO_FMT_KEY)
+    return v === null ? true : v === '1'
+  } catch {
+    return true
+  }
+}
+const autoFormat = ref(readAutoFormatPref())
+
+// 笔记类型（决定「套用模板」的骨架长什么样）
+const profiles = ref([])
+const draftProfile = ref('generic')
+async function loadProfiles() {
+  try {
+    const r = await Api.noteProfiles()
+    profiles.value = r.profiles || []
+  } catch {
+    profiles.value = []
+  }
+}
+function onAutoFormatChange(v) {
+  try { localStorage.setItem(AUTO_FMT_KEY, v ? '1' : '0') } catch { /* 隐私模式忽略 */ }
+}
 
 // 键盘游标（选中项）
 const cursor = ref(-1)
@@ -664,10 +723,11 @@ async function applyTemplate() {
   templateLoading.value = true
   try {
     const title = (draft.value.title || '').trim()
-    const r = await Api.aiNoteTemplate({
+    const r = await Api.noteTemplate({
       title,
       tags: draft.value.tags || [],
       source: 'human',
+      profile: draftProfile.value,
     })
     const tpl = r.text || ''
     // front-matter **要留着** —— 它是规范 §2 的一部分，
@@ -684,9 +744,30 @@ async function applyTemplate() {
 }
 
 async function createNote() {
-  const content = draft.value.content || ''
+  const raw = draft.value.content || ''
   // Obsidian 行为：没起标题就用正文首行当标题；都空了就先建空笔记（先建后填）
-  const title = (draft.value.title || '').trim() || firstLineTitle(content)
+  const title = (draft.value.title || '').trim() || firstLineTitle(raw)
+  let content = raw
+  let formatted = null
+
+  // 自动排版：先排版、再入库。
+  // 排出来的是「能直接读」的笔记：front-matter + H1 + 摘要 + 元信息卡 +
+  // 章节 emoji + 代码语言 + 凭证遮盖（规范 §1-§11）。
+  // 排版失败就退回原文 —— 绝不能因为排版挂了把用户写的东西弄丢。
+  if (autoFormat.value && raw.trim()) {
+    try {
+      formatted = await Api.noteFormat({
+        content: raw,
+        title,
+        tags: draft.value.tags || [],
+        profile: draftProfile.value,
+      })
+      content = formatted?.text || raw
+    } catch (e) {
+      content = raw
+    }
+  }
+
   try {
     const r = await Api.createRecord(noteTypeId.value, {
       title,
@@ -698,7 +779,8 @@ async function createNote() {
     if (content) {
       await Api.syncNoteLinks(r.id, content)
     }
-    ElMessage.success('已创建')
+    const n = formatted?.changes?.length || 0
+    ElMessage.success(n ? `已创建 · 排版 ${n} 类改动` : '已创建')
     creating.value = false
     // 新建完直接进详情页继续写（Obsidian 的「新建文件 → 光标已在正文里」）
     router.push(`/notes/${r.id}`)
@@ -789,6 +871,7 @@ function onKeydown(e) {
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
+  loadProfiles()
   groupId.value = parseGroupParam(route.query.group)
   const et = await Api.getEntityTypeByKey('note')
   noteTypeId.value = et.id
@@ -1028,6 +1111,27 @@ html.dark .notes-tagchip.is-on { color: var(--primary-light); }
   font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
+/* 自动排版开关：和「套用模板」并排，但它是开关不是按钮 ——
+   用 label 包住 switch + 文字，点文字也能切 */
+/* 类型下拉：只放得下名字，说明文字在选项里 */
+.notes-composer-profile { width: 132px; flex-shrink: 0; }
+.notes-profile-desc {
+  float: right;
+  margin-left: 12px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.notes-composer-autofmt {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.notes-composer-autofmt .el-switch { flex-shrink: 0; }
 .notes-composer { margin-bottom: 0; }
 
 /* 列表 */

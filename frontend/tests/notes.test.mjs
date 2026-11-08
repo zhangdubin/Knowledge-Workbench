@@ -4,7 +4,7 @@
 import {
   stripMarkdown, collapseWhitespace, firstLineTitle, noteTitle, noteSnippet,
   normalizeTags, parseTags, matchTags, relativeTime,
-  extractWikilinks, extractHashtags, renderNoteHtml,
+  extractWikilinks, extractHashtags, renderNoteHtml, stripLeadingEmoji,
 } from '../src/utils/notes.js'
 
 let failed = 0
@@ -129,6 +129,23 @@ const has = (s, sub) => String(s).includes(sub)
 
   const xss = renderNoteHtml('<img src=x onerror=alert(1)>')
   assert('HTML 被转义', !has(xss, '<img') && has(xss, '&lt;img'))
+}
+
+// ---------- 规范 §11：摘要里不能漏明文 ----------
+{
+  const hidden = '密码: <span class="secret-toggle" tabindex="0">'
+    + '<span class="secret-mask">••••••</span>'
+    + '<span class="secret-value">p@ssw0rd</span></span>'
+  const out = collapseWhitespace(stripMarkdown(hidden))
+  assert('列表摘要不泄露明文', !has(out, 'p@ssw0rd'), out)
+  assert('列表摘要保留遮罩', has(out, '••••••'), out)
+}
+
+// ---------- H1 上的语义 emoji 不进标题字段 ----------
+{
+  assert('首行标题去掉 emoji', firstLineTitle('# ✅ 已成功登录 18001') === '已成功登录 18001',
+    JSON.stringify(firstLineTitle('# ✅ 已成功登录 18001')))
+  assert('stripLeadingEmoji 处理 ⚔️', stripLeadingEmoji('⚔️ 云海记录') === '云海记录', '')
 }
 
 console.log(failed ? `\n❌ ${failed} 项失败` : '\n✅ 全部通过')

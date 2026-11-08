@@ -8,6 +8,9 @@
       <div class="nd-topbar-actions">
         <template v-if="editing">
           <span class="nd-hint"><kbd>⌘</kbd><kbd>↵</kbd> 保存 · <kbd>Esc</kbd> 取消</span>
+          <el-button size="small" text @click="openFormat">
+            <el-icon><Brush /></el-icon>排版
+          </el-button>
           <el-button size="small" text @click="cancelEdit">取消</el-button>
           <el-button size="small" type="primary" @click="save">
             <el-icon><Check /></el-icon>保存
@@ -16,6 +19,9 @@
         <template v-else>
           <el-button size="small" @click="startEdit">
             <el-icon><Edit /></el-icon>编辑
+          </el-button>
+          <el-button size="small" text @click="openFormat">
+            <el-icon><Brush /></el-icon>排版
           </el-button>
           <el-button size="small" text @click="goGraph">
             <el-icon><Share /></el-icon>图谱
@@ -82,7 +88,7 @@
 
         <!-- 标题 + 标签 + 元信息（阅读态的页头） -->
         <header v-if="!editing" class="nd-header">
-          <h1 class="nd-title">{{ title }}</h1>
+          <h1 class="nd-title" :title="title">{{ title }}</h1>
           <div class="nd-tags">
             <button
               v-for="t in tags"
@@ -361,6 +367,15 @@
 
 
     <!-- 关联业务记录：搜到就挂上，挂完列表立刻更新 -->
+    <!-- 排版预览：先看改了什么，再决定要不要用（纯规则，不调模型）-->
+    <NoteFormatDialog
+      v-model="formatOpen"
+      :content="formatSource"
+      :title="formatTitle"
+      :tags="(editing ? formData.tags : record?.data?.tags) || []"
+      @apply="applyFormat"
+    />
+
     <el-dialog v-model="linkDialog" title="关联业务记录" width="560px" append-to-body>
       <div class="nd-link-form">
         <el-select
@@ -512,6 +527,7 @@ import { printPage } from '../utils/print'
 import NoteEditor from '../components/NoteEditor.vue'
 import JsonViewer from '../components/JsonViewer.vue'
 import AIAssistantDialog from '../components/AIAssistantDialog.vue'
+import NoteFormatDialog from '../components/NoteFormatDialog.vue'
 import NoteGroupSelect from '../components/note/NoteGroupSelect.vue'
 import NoteGroupBadge from '../components/note/NoteGroupBadge.vue'
 import { useNoteGroups } from '../components/note/useNoteGroups'
@@ -523,6 +539,8 @@ const noteId = computed(() => Number(route.params.id))
 const record = ref(null)
 const editing = ref(false)
 const formData = ref({ title: '', content: '', tags: [] })
+// 排版预览弹窗
+const formatOpen = ref(false)
 const originalContent = ref('')
 const outgoing = ref([])
 const backlinks = ref([])
@@ -783,6 +801,47 @@ function goRecord(rec) {
   router.push(`/records/${rec.entity_type_id}?id=${rec.record_id}`)
 }
 
+/**
+ * 打开「按规范排版」预览
+ *
+ * 编辑态：排的是编辑框里的内容，点「应用」只改编辑框（还能取消编辑）
+ * 阅读态：排的是已保存的正文，点「应用」调 /api/notes/{id}/format 落库
+ */
+const formatSource = computed(() => {
+  if (editing.value) return formData.value.content || ''
+  return record.value?.data?.content || ''
+})
+const formatTitle = computed(() => {
+  if (editing.value) return formData.value.title || ''
+  return record.value?.data?.title || ''
+})
+
+function openFormat() {
+  if (!formatSource.value.trim()) {
+    ElMessage.warning('这篇笔记还没有正文，没什么可排的')
+    return
+  }
+  formatOpen.value = true
+}
+
+async function applyFormat(text) {
+  if (editing.value) {
+    formData.value = { ...formData.value, content: text }
+    ElMessage.success('已排版，点保存写入')
+    return
+  }
+  // 阅读态：排完直接落库（后端顺手重算双链）
+  try {
+    const r = await Api.noteFormatRecord(noteId.value)
+    ElMessage.success(
+      r.changed ? `已按规范排版（${(r.changes || []).length} 类改动）` : '这篇笔记已经很规范'
+    )
+    await load()
+  } catch (e) {
+    ElMessage.error('排版失败：' + (e?.message || e))
+  }
+}
+
 function startEdit() {
   formData.value = {
     title: record.value.data.title || '',
@@ -1012,6 +1071,12 @@ watch(noteId, async () => {
   line-height: 1.3;
   font-family: var(--font-display);
   color: var(--text-primary);
+  /* 从聊天里整段复制，首行常是一整段结论；标题最多两行，
+     再长就截断（完整标题在 title 属性里，悬停可见） */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .nd-tags {
   display: flex;

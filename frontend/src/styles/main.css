@@ -2487,6 +2487,9 @@ html.dark {
   color: var(--text-secondary);
   line-height: 1.7;
 }
+.md-callout-body ul,
+.md-callout-body ol { margin: 2px 0 0; padding-left: 18px; }
+.md-callout-body li { margin: 1px 0; line-height: 1.65; }
 .md-callout-body > *:first-child { margin-top: 0; }
 .md-callout-body > *:last-child { margin-bottom: 0; }
 .md-callout-body p { margin: 0 0 6px; }
@@ -2540,6 +2543,117 @@ html.dark .md-callout-note     { --callout-fg: #b0b8c6; --callout-bg: #1e222a; }
 html.dark .md-callout-quote    { --callout-fg: #b6bcc6; --callout-bg: #20242b; }
 html.dark .md-callout-abstract { --callout-fg: #a8adf0; --callout-bg: #1c1e3a; }
 html.dark .md-callout-todo     { --callout-fg: #f2b478; --callout-bg: #2e2216; }
+
+/* ============ 敏感信息遮盖（规范 §11）============
+   笔记里常有口令、token、私钥。以前是明文摊在正文里，
+   截图/投屏/分享一次就漏一次。规范 v1.4 定下的写法是：
+
+     <span class="secret-toggle" tabindex="0">
+       <span class="secret-mask">••••••</span>
+       <span class="secret-value">明文</span>
+     </span>
+
+   桌面悬停、移动端点按/键盘聚焦都能看；不看的时候是一枚灰药丸。
+   遮罩固定成点号（不带明文），所以连口令长度都不泄露。
+   不依赖任何 JS —— v-html 出来的节点直接用 CSS 就够。
+*/
+.secret-toggle {
+  display: inline;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  border-radius: 4px;
+}
+.secret-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.secret-toggle .secret-mask {
+  display: inline;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+  letter-spacing: 2px;
+}
+.secret-toggle .secret-value {
+  display: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(16, 185, 129, .12);
+  color: var(--text-primary);
+  user-select: all;                 /* 一次性选中，方便粘到终端里 */
+  -webkit-user-select: all;
+}
+/* 桌面：悬停即看 */
+.secret-toggle:hover .secret-mask { display: none; }
+.secret-toggle:hover .secret-value { display: inline; }
+/* 移动端/键盘：点一下或 Tab 聚焦（tabindex=0 让 span 能聚焦） */
+.secret-toggle:focus-within .secret-mask { display: none; }
+.secret-toggle:focus-within .secret-value { display: inline; }
+
+/* ============ 折叠块 <details>（规范 §8.2）============ */
+.md-details {
+  margin: 8px 0 12px;
+  padding: 0 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+.md-details > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  list-style: none;
+}
+.md-details > summary::-webkit-details-marker { display: none; }
+.md-details > summary::before {
+  content: '▸';
+  margin-right: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.md-details[open] > summary::before { content: '▾'; }
+.md-details[open] > summary { border-bottom: 1px solid var(--border-light); margin-bottom: 8px; }
+
+/* 任务列表勾选框（规范 §8.3）
+   之前 `- [ ] xxx` 会渲染成「• [ ] xxx」——方括号原样显示，看起来像乱码 */
+.md-body li.md-task { list-style: none; margin-left: -1.1em; }
+.md-task-box {
+  display: inline-block;
+  width: 1.1em;
+  margin-right: 4px;
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+.md-task-box.is-done { color: var(--success, #2a9d8f); }
+.md-task-box.is-doing { color: var(--warning, #d99a2b); }
+.md-task-box.is-ask { color: var(--text-tertiary); }
+
+/* 键盘键帽（规范里的 <kbd>⌘</kbd>）*/
+.md-body kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+.md-body mark {
+  background: rgba(217, 154, 43, .22);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+}
 
 .md-body blockquote {
   margin: 6px 0 10px;
@@ -2654,7 +2768,7 @@ html.dark .md-callout-todo     { --callout-fg: #f2b478; --callout-bg: #2e2216; }
 .md-body.md-body-doc p { margin: 0 0 12px; }
 .md-body.md-body-doc ul,
 .md-body.md-body-doc ol { margin: 6px 0 13px; padding-left: 1.5em; }
-.md-body.md-body-doc li { margin: 5px 0; }
+.md-body.md-body-doc li { margin: 3px 0; }
 .md-body.md-body-doc li::marker { color: var(--primary); font-weight: 600; }
 
 /* 引用块：文档里常用来放结论/提示，给它左侧色条 + 浅底 */
@@ -2679,6 +2793,9 @@ html.dark .md-callout-todo     { --callout-fg: #f2b478; --callout-bg: #2e2216; }
 .md-body.md-body-doc table { font-size: 13px; }
 .md-body.md-body-doc th,
 .md-body.md-body-doc td { padding: 7px 11px; }
+/* 表格第一列多为「日期 / 编号 / 名称」，别被挤成两行（变更日志的 2026-11-08 尤其难看）*/
+.md-body.md-body-doc table td:first-child,
+.md-body.md-body-doc table th:first-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 .md-body.md-body-doc hr { margin: 22px 0; }
 

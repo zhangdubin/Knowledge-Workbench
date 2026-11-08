@@ -94,6 +94,21 @@ function safeUrl(u) {
  * 深层列表项会带上 lvl-2 / lvl-3 class：主样式里用它区分项目符号形状
  * （圆点 / 方块），缩进本身由嵌套结构天然提供。
  */
+/** 任务列表的勾选框（§8.3）：GitHub 风格的 - [ ] / - [x] / - [-] / - [?] */
+const TASK_BOX = {
+  ' ': '<span class="md-task-box" aria-hidden="true">☐</span>',
+  x: '<span class="md-task-box is-done" aria-hidden="true">☑</span>',
+  '-': '<span class="md-task-box is-doing" aria-hidden="true">◐</span>',
+  '?': '<span class="md-task-box is-ask" aria-hidden="true">?</span>',
+}
+
+function renderTaskText(text) {
+  const m = String(text).match(/^\[([ xX\-?])\]\s+(.*)$/)
+  if (!m) return null
+  const mark = m[1] === 'X' ? 'x' : m[1]
+  return `${TASK_BOX[mark] || TASK_BOX[' ']}<span class="md-task-text">${m[2]}</span>`
+}
+
 function renderListTree(items) {
   // ---- 1) 按缩进建树 ----
   const root = { children: [] }
@@ -114,8 +129,13 @@ function renderListTree(items) {
       while (i < nodes.length && nodes[i].ordered === ordered) { group.push(nodes[i]); i++ }
       const tag = ordered ? 'ol' : 'ul'
       out += `<${tag}>` + group.map(n => {
-        const cls = depth > 0 ? ` class="lvl-${Math.min(depth + 1, 3)}"` : ''
-        return `<li${cls}>${n.text}${n.children.length ? renderLevel(n.children, depth + 1) : ''}</li>`
+        const task = renderTaskText(n.raw || '')
+        const classes = []
+        if (depth > 0) classes.push(`lvl-${Math.min(depth + 1, 3)}`)
+        if (task !== null) classes.push('md-task')
+        const cls = classes.length ? ` class="${classes.join(' ')}"` : ''
+        const body = task === null ? n.text : task
+        return `<li${cls}>${body}${n.children.length ? renderLevel(n.children, depth + 1) : ''}</li>`
       }).join('') + `</${tag}>`
     }
     return out
@@ -153,20 +173,53 @@ export function highlightHtml(text, keyword) {
   return out
 }
 
-/** 行内：`代码` **粗** *斜* ~~删~~ [文字](链接) */
+/* ------------------------------------------------------------------
+   行内 HTML 白名单
+   ------------------------------------------------------------------
+   规范里有两个东西**必须用 HTML 写**，Markdown 没有对应语法：
+     §11 敏感信息遮盖：<span class="secret-toggle">… secret-mask … secret-value …</span>
+     §8.2 折叠块：<details>/<summary>
+   之前整个渲染器「先转义再解析」，这些标签会原样显示成一串源码 ——
+   于是规范写得再对，知识库里看到的仍是一坨尖括号。
+
+   所以这里先**摘出白名单内的标签**（内容照样转义），再整体转义其余部分。
+   只认下面这几种固定形态：属性只认 class="secret-toggle|secret-mask|secret-value"
+   和 tabindex，别的一概不认（不认就是纯文本，安全边界不会因为白名单变宽）。
+   ------------------------------------------------------------------ */
+const SECRET_SPAN_RE = new RegExp(
+  '<span\\s+class="secret-toggle"[^>]*>\\s*' +
+  '<span\\s+class="secret-mask">([\\s\\S]*?)</span>\\s*' +
+  '<span\\s+class="secret-value">([\\s\\S]*?)</span>\\s*' +
+  '</span>', 'g')
+
+/** 行内：`代码` **粗** *斜* ~~删~~ [文字](链接) —— 外加白名单 HTML */
 function inlineMd(s) {
-  const codes = []
-  let t = escAll(s).replace(/`([^`]+)`/g, (_m, c) => {
-    codes.push(c)
-    return `\u0001${codes.length - 1}\u0001`          // 先占位，免得代码里的 * 被当成强调
-  })
+  const stash = []
+  const hold = (html) => {
+    stash.push(html)
+    return `\u0001${stash.length - 1}\u0001`
+  }
+
+  let t = String(s ?? '')
+
+  // 白名单 HTML 先摘出来（里面的文字单独转义，标签由我们重建）
+  t = t.replace(SECRET_SPAN_RE, (_m, mask, val) => hold(
+    '<span class="secret-toggle" tabindex="0" title="悬停或点按查看">' +
+    `<span class="secret-mask">${escAll(mask)}</span>` +
+    `<span class="secret-value">${escAll(val)}</span></span>`))
+  t = t.replace(/<kbd>([\s\S]*?)<\/kbd>/gi, (_m, x) => hold(`<kbd>${escAll(x)}</kbd>`))
+  t = t.replace(/<mark>([\s\S]*?)<\/mark>/gi, (_m, x) => hold(`<mark>${escAll(x)}</mark>`))
+  t = t.replace(/<br\s*\/?>/gi, () => hold('<br>'))
+
+  t = escAll(t)
+  t = t.replace(/`([^`]+)`/g, (_m, c) => hold(`<code>${c}</code>`))  // 代码里的 * 不当强调
   t = t
     .replace(/\[([^\]]*)\]\(([^()\s]+)\)/g,
       (_m, txt, href) => `<a href="${safeUrl(href)}" target="_blank" rel="noopener noreferrer">${txt}</a>`)
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
     .replace(/~~([^~]+)~~/g, '<del>$1</del>')
-  return t.replace(/\u0001(\d+)\u0001/g, (_m, i) => `<code>${codes[+i]}</code>`)
+  return t.replace(/\u0001(\d+)\u0001/g, (_m, i) => stash[+i])
 }
 
 /** 拆表格行：| a | b | → ['a','b']，并还原转义的 \| */
@@ -206,7 +259,7 @@ const CALLOUT_ICON = {
   abstract: '📋', todo: '☑️',
 }
 
-function renderCallout(buf) {
+function renderCallout(buf, hOffset = 2) {
   const first = (buf[0] || '').trim()
   const m = first.match(/^\[!(\w+)\]([+-]?)\s*(.*)$/)
   if (!m) return null
@@ -219,8 +272,15 @@ function renderCallout(buf) {
   const cls = ['md-callout', `md-callout-${type}`]
   if (fold) cls.push('is-foldable', fold === '-' ? 'is-open' : 'is-collapsed')
 
-  const head = `<div class="md-callout-title"><span class="md-callout-ico">${CALLOUT_ICON[type] || '📝'}</span><span class="md-callout-name">${title}</span></div>`
-  const body = rest.trim() ? `<div class="md-callout-body">${rest.trim()}</div>` : ''
+  // 标题要转义（以前直接拼原文 —— 一个 `> [!note] <img onerror>` 就能执行脚本）
+  const head = `<div class="md-callout-title"><span class="md-callout-ico">${CALLOUT_ICON[type] || '📝'}</span><span class="md-callout-name">${inlineMd(title)}</span></div>`
+  // 正文按 Markdown 递归渲染：规范里 callout 里放的是列表/加粗/表格，
+  // 直接把原文塞进去的话，用户看到的是 `- **创建**: ...` 这种裸记号
+  const body = rest.trim()
+    ? `<div class="md-callout-body">${renderMarkdown(rest, {
+        headingOffset: Math.min(hOffset + 1, 4),
+      })}</div>`
+    : ''
   return `<div class="${cls.join(' ')}">${head}${body}</div>`
 }
 
@@ -339,6 +399,7 @@ export function renderMarkdown(src, opts = {}) {
     if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(l)) return true
     if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) return true
     if (l.indexOf('|') !== -1 && isTableSep(lines[n + 1] ?? '')) return true
+    if (/^\s*<details\b/i.test(l)) return true
     return false
   }
 
@@ -382,8 +443,37 @@ export function renderMarkdown(src, opts = {}) {
         buf.push(lines[i].replace(/^\s*>\s?\s?/, ''))
         i++
       }
-      const callout = renderCallout(buf)
+      const callout = renderCallout(buf, hOffset)
       out.push(callout || `<blockquote>${buf.map(inlineMd).join('<br>')}</blockquote>`)
+      continue
+    }
+
+    // ---- 折叠块 <details>（§8.2）----
+    //
+    // Obsidian 用原生 HTML 做折叠块，里面通常是日志/长配置。
+    // 不认它的话，整个块会被当成普通段落，`<details>` 原样显示。
+    if (/^\s*<details\b/i.test(line)) {
+      const buf = []
+      let depth = 1
+      i++
+      while (i < lines.length) {
+        const l = lines[i]
+        if (/^\s*<details\b/i.test(l)) depth++
+        if (/^\s*<\/details>/i.test(l)) {
+          depth--
+          if (depth === 0) { i++; break }
+        }
+        buf.push(l)
+        i++
+      }
+      const inner = buf.join('\n')
+      const m = inner.match(/<summary>([\s\S]*?)<\/summary>/i)
+      const summary = m ? m[1].trim() : '展开'
+      const rest = m ? inner.replace(m[0], '') : inner
+      out.push(
+        `<details class="md-details"><summary>${inlineMd(summary)}</summary>` +
+        renderMarkdown(rest, { headingOffset: Math.min(hOffset + 1, 4) }) +
+        '</details>')
       continue
     }
 
@@ -414,6 +504,7 @@ export function renderMarkdown(src, opts = {}) {
           indent: m[1].replace(/\t/g, '  ').length,
           ordered: /^\d+[.)]$/.test(m[2]),
           text: inlineMd(m[3]),
+          raw: m[3],
         })
         i++
       }

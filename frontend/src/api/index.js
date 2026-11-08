@@ -380,6 +380,20 @@ export const Api = {
   graphForNotes: (tag, limit = 300) =>
     api.get('/api/graph/notes', { params: { tag, limit } }),
 
+  // 按《笔记 UI 排版规范》排版 —— 纯规则，不依赖 AI
+  // 返回 { text, report, changes, stats }：changes 是「改了哪几类」，
+  // 前端拿它做预览，用户点了「应用」才动正文
+  noteFormat: (data) => api.post('/api/notes/format', data),
+  // 已存在的笔记：排完直接落库（详情页「排版」按钮走这条）
+  noteFormatRecord: (recordId, opts = {}) =>
+    api.post(`/api/notes/${recordId}/format`, opts),
+  // 排版规则清单：规范章节 ↔ 实际做了没有
+  noteFormatRules: () => api.get('/api/notes/format/rules'),
+  // 笔记类型（渗透记录 / 排障 / 教程 / 通用）：新建时出要素齐全的骨架
+  noteProfiles: () => api.get('/api/notes/profiles'),
+  // 新建笔记的模板（规则版，不需要 AI 授权）
+  noteTemplate: (data) => api.post('/api/notes/template', data),
+
   // 笔记双链
   syncNoteLinks: (recordId, content) =>
     api.post(`/api/notes/${recordId}/sync-links`, { content }),

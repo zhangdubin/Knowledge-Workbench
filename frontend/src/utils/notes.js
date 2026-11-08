@@ -25,8 +25,20 @@ export function escapeHtml(s) {
  * 剥掉 Markdown 标记，只留可读文本。
  * 列表摘要、搜索高亮、无障碍朗读都用它。
  */
+/** 前置 emoji（H1 上那个「语义图标」，标题字段里不该带）*/
+const LEADING_EMOJI = /^[\u2190-\u21FF\u2300-\u23FF\u2460-\u24FF\u25A0-\u27BF\u2900-\u297F\u2B00-\u2BFF\u{1F000}-\u{1FAFF}\uFE0F\u200D\u20E3]+\s*/u
+
+/** 去掉标题前的 emoji：正文 H1 带图标，标题字段要保持干净 */
+export function stripLeadingEmoji(s) {
+  return String(s ?? '').replace(LEADING_EMOJI, '').trim()
+}
+
 export function stripMarkdown(src) {
   let s = String(src ?? '')
+
+  // 敏感信息遮盖（规范 §11）：摘要里只留遮罩，
+  // 直接把标签剥掉的话，明文会跟着进列表/搜索结果 —— 遮蔽就白做了
+  s = s.replace(/<span\s+class="secret-toggle"[\s\S]*?<\/span>\s*<\/span>/g, '••••••')
 
   // YAML frontmatter（Obsidian 的文件属性）：整体丢掉，别糊在摘要里
   s = s.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
@@ -86,7 +98,7 @@ export function firstLineTitle(content) {
     const line = lines[i].trim()
     if (!line) continue
     if (/^```/.test(line)) continue
-    const t = collapseWhitespace(stripMarkdown(line))
+    const t = stripLeadingEmoji(collapseWhitespace(stripMarkdown(line)))
     if (t) return t
   }
   return ''

@@ -14,13 +14,17 @@
       <!-- 折叠态用 Element Plus 自己的 collapse：它会把标题收进悬浮气泡，
            鼠标停上去还能看到全名，比自己写一套更稳 -->
       <el-menu
+        ref="navMenuRef"
         :default-active="activeMenu"
         :router="true"
         :collapse="collapsed"
         :collapse-width="64"
         class="nav-menu"
+        :class="{ 'has-more-below': navHasMore }"
       >
-        <!-- gi 只用来判断「是不是第一组」：第一组不需要那么大的组间留白 -->
+        <!-- gi 只用来判断「是不是第一组」：
+             分组标题的高度必须**一律相同**（吸顶时要正好盖住上一组那条带），
+             所以第一组并不特殊，只是留个标记给以后要用的时候 -->
         <template v-for="(g, gi) in navGroups" :key="g.title">
           <div v-show="!collapsed" class="nav-group-title" :class="{ 'is-first': gi === 0 }">
             {{ g.title }}
@@ -39,12 +43,15 @@
       </el-menu>
 
       <div class="sidebar-footer">
-        <!-- 底部两个动作排在同一行：
-             「收起侧边栏」本来就是图标动作（一个箭头），
-             配一段「收起侧边栏」的文字既占地方又和图标重复说同一件事。
-             改成图标按钮并和「自定义导航」并排，底部区立刻省下一整行 ——
-             这行原来是被导航挤下去的（实测侧栏 23 个入口，
-             800px 高的屏上要溢出 260 多像素，能省一行是一行）。 -->
+        <!-- 底部只做一件事：两个动作 + 版本号，一行放完。
+             之前这里叠了三层信息 —— 带文字的「自定义导航」按钮、
+             30px 的方形收起按钮、再加一行「⌘K 快速搜索 / 版本号」，
+             61px 里三种东西各占一行，看着就是「底部乱」。
+
+             现在：两个**同样规格**的图标按钮（图标落在 21px 轴上，
+             和上面的导航项同一列），版本号右对齐到导航项同一条右边界。
+             「⌘K 快速搜索」那行删掉 —— 顶栏的搜索框上本来就有 ⌘K 的提示，
+             同一件事说两遍只会显得挤。 -->
         <div class="footer-actions">
           <!-- 自定义导航：管理员能直接在这里加一项，不用去「导航管理」页 -->
           <button
@@ -52,10 +59,10 @@
             type="button"
             class="collapse-btn nav-add-btn"
             title="给左侧导航加一项"
+            aria-label="给左侧导航加一项"
             @click="goNavManager"
           >
             <el-icon><Plus /></el-icon>
-            <span v-show="!collapsed">自定义导航</span>
           </button>
           <button
             type="button"
@@ -65,20 +72,13 @@
             @click="toggleCollapse"
           >
             <el-icon><component :is="collapsed ? 'DArrowRight' : 'DArrowLeft'" /></el-icon>
-            <span v-show="!collapsed">收起侧边栏</span>
           </button>
         </div>
-        <div v-show="!collapsed" class="kbd-hint">
-          <span class="kbd">⌘K</span>
-          <span>快速搜索</span>
-          <!-- 版本标识：取自后端 /auth/status（auth store），升级后自动变。
-               不写死在构建里 —— 离线包升级只换镜像，前端静态资源与后端版本必须同源。
-               和 ⌘K 提示并排放在一行：底部区原本 140px 高，
-               其中光一个版本号就占了一整行 —— 那点地方留给导航更值。 -->
-          <span v-if="auth.sysVersion" class="sys-version" title="系统版本">
-            v{{ auth.sysVersion }}
-          </span>
-        </div>
+        <!-- 版本标识：取自后端 /auth/status（auth store），升级后自动变。
+             不写死在构建里 —— 离线包升级只换镜像，前端静态资源与后端版本必须同源。 -->
+        <span v-if="auth.sysVersion && !collapsed" class="sys-version" title="系统版本">
+          v{{ auth.sysVersion }}
+        </span>
       </div>
     </el-aside>
 
@@ -210,9 +210,11 @@
       </div>
 
       <el-menu
+        ref="drawerMenuRef"
         :default-active="activeMenu"
         :router="true"
         class="nav-menu"
+        :class="{ 'has-more-below': drawerHasMore }"
         @select="drawerOpen = false"
       >
         <template v-for="(g, gi) in navGroups" :key="g.title">
@@ -258,7 +260,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, nextTick, reactive, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AgentChat from './AgentChat.vue'
 import GenePicker from './GenePicker.vue'
@@ -408,6 +410,62 @@ async function doLogout() {
 const searchKw = ref('')
 const searchFocused = ref(false)
 const drawerOpen = ref(false)
+
+/* ---- 菜单边缘渐隐：只在「下面还有」时才挂 ----
+   菜单装不下时，最后一格会被切掉一截，看着像「排版坏了」。
+
+   早先的做法是在底部盖一层渐变（::after）——
+   但那层渐变是**盖在内容上面**的：它把最后一行压暗，
+   看着像「这一行发灰、发虚」，而不是「下面还有，滚一下」；
+   而且它盖住整整 24px，落在渐变里的那一格永远是半透明的。
+
+   现在改成遮罩（mask）：渐变作用在内容自己身上，
+   文字是**自己淡出去**的，切口是软的；
+   并且只在真的还有内容时才挂 —— 滚到底了就该干干净净地停住，
+   不该再淡一次（那会让人以为下面还有）。
+
+   两个菜单（侧栏 + 移动端抽屉）各算各的：
+   抽屉比侧栏矮，两者能装下的条目数不一样。 */
+const navMenuRef = ref(null)
+const drawerMenuRef = ref(null)
+const navHasMore = ref(false)
+const drawerHasMore = ref(false)
+
+/** 这个滚动容器下面还有没有内容（差 2px 以内当作没有，避免亚像素抖动） */
+function hasContentBelow(el) {
+  if (!el) return false
+  return el.scrollHeight - el.clientHeight - el.scrollTop > 2
+}
+
+function syncMenuEdges() {
+  const s = navMenuRef.value && navMenuRef.value.$el
+  const d = drawerMenuRef.value && drawerMenuRef.value.$el
+  const ns = hasContentBelow(s)
+  const ds = hasContentBelow(d)
+  if (ns !== navHasMore.value) navHasMore.value = ns
+  if (ds !== drawerHasMore.value) drawerHasMore.value = ds
+}
+
+/** 侧栏宽度会变（折叠/展开、窗口缩放），内容高度跟着变，
+    「下面还有没有」也得跟着重算 */
+let menuResizeObserver = null
+const boundMenuEls = new WeakSet()
+function bindMenuEdges() {
+  const els = [navMenuRef.value && navMenuRef.value.$el, drawerMenuRef.value && drawerMenuRef.value.$el]
+    .filter(Boolean)
+  els.forEach(el => {
+    // 抽屉是懒渲染的：第一次打开时菜单才挂上，
+    // 所以这里要能重复调用，但同一个元素只绑一次
+    if (boundMenuEls.has(el)) return
+    boundMenuEls.add(el)
+    el.addEventListener('scroll', syncMenuEdges, { passive: true })
+    if (typeof ResizeObserver !== 'undefined') {
+      menuResizeObserver = new ResizeObserver(() => syncMenuEdges())
+      menuResizeObserver.observe(el)
+    }
+  })
+  syncMenuEdges()
+}
 const agentOpen = ref(false)
 /* 顶栏「引用养料库」：任何页面都能把库里的一条知识拿去用 */
 const genePickerOpen = ref(false)
@@ -489,6 +547,14 @@ onMounted(async () => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
 
+  // 菜单边缘渐隐：绑滚动事件、盯住尺寸变化
+  bindMenuEdges()
+  watch(drawerOpen, async (open) => {
+    if (!open) return
+    await nextTick()
+    bindMenuEdges()      // 抽屉里的菜单是懒渲染的，这时才挂上
+  })
+
   // 定期核对版本号
   //
   // 版本号原来只在首次加载时拉一次（拉过就再也不拉）——
@@ -521,6 +587,7 @@ onUnmounted(() => {
   if (versionTimer) clearInterval(versionTimer)
   window.removeEventListener('keydown', handleKey)
   window.removeEventListener('resize', checkMobile)
+  if (menuResizeObserver) menuResizeObserver.disconnect()
 })
 </script>
 
@@ -553,9 +620,13 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 13px 16px 12px;
+  /* 左内边距 21px：品牌块里的 logo 要和导航项的图标落在同一条竖线上
+     （logo 16px 的盒子居中 → 21px；导航项的图标也是 21px）。
+     以前品牌是 16px、导航是 21px，顶部和下面差 5px ——
+     一眼看过去就是「歪的」。 */
+  padding: 11px 16px 11px 21px;
   border-bottom: 1px solid var(--nav-hairline);
-  min-height: 62px;
+  min-height: 56px;
   /* 抽屉里品牌块压在菜单之上，菜单一长就会被挤扁 —— 固定住 */
   flex-shrink: 0;
   /* 顶部那点柔光挪到品牌块里：
@@ -618,7 +689,7 @@ onUnmounted(() => {
      菜单留 4px 上内边距，标题就吸在菜单顶边下方 4px ——
      那一道 4px 的缝里会漏出滚过去的内容，看着像没对齐。
      顶部留白改由第一个分组标题自己的 padding 承担。 */
-  padding: 0 0 16px;
+  padding: 0 0 8px;
   overflow-y: auto;
   overflow-x: hidden;
   /* 全局滚动条是浅灰滑块，落在深色侧栏上亮得刺眼 */
@@ -641,25 +712,44 @@ onUnmounted(() => {
   background-clip: padding-box;
   border: 2px solid transparent;
 }
-/* 底部渐隐：菜单装不下时，最后一行会被硬生生切一半，
-   看着像「排版坏了」而不是「下面还有，滚一下」。
-   一层从底色渐隐出去的薄雾，就自然了。 */
-.nav-menu::after {
-  content: '';
-  position: sticky;
-  bottom: -1px;
-  display: block;
-  height: 24px;
-  margin-top: -24px;
-  background: linear-gradient(to top, var(--bg-sidebar) 15%, transparent);
-  pointer-events: none;
+/* 图标盒子必须**贴着图标本身**。
+   Element Plus 在 :root 里给了 --el-menu-icon-width: 24px，
+   菜单项的图标一律套在这个宽度的盒子里；
+   而这里的图标只有 16px —— 24px 的盒子套 16px 的图标，
+   图标被居中后左右各空 4px。
+
+   后果不是「多了一点空隙」，是**整列歪了**：
+     图标实际落在 25px（盒子左沿 21 + 4），
+     而分组标题在 21px、底部按钮的图标也在 21px —— 同一列上三个左轴。
+   文字则被推到 55px（盒子 21→45 + gap 10），
+   图标与文字之间实际空了 14px（4px 死区 + 10px gap）。
+
+   把盒子收到 16px：图标回到 21px 轴上，文字回到 47px，
+   和底部按钮、分组标题重新对齐成一条竖线。
+   （用 .sidebar / .mobile-drawer 提高一级特异性，
+     免得和 :root 里的 24px 撞成「谁后写谁赢」。） */
+.sidebar .nav-menu,
+.mobile-drawer .nav-menu {
+  --el-menu-icon-width: 16px;
 }
 
-/* 菜单项：一格 32px（31 高的行 + 上下各 1px），
-   分组标题也占一格 —— 标题与项落在同一套网格上，节奏才一致。
-   比原来的 38px 收一点：实测这台机器上侧栏有 23 个入口、4 个分组，
-   800px 高的笔记本屏上按 34px 排要滚 376px 才够得着最后一组；
-   收到 32px、再把分组标题也压一压，能露出来的就多出一大截。 */
+/* 底部边缘渐隐：只在「下面还有内容」时才挂遮罩。
+   为什么用遮罩（mask）而不是盖一层渐变：
+   盖渐变是把一层底色**压在内容上面** —— 最后一行被压暗，
+   看着像「这一行发灰发虚」，而不是「下面还有，滚一下」；
+   遮罩是让内容**自己淡出去**，切口是软的，文字边缘是渐隐的。
+   而且必须「有才挂」：滚到底了就该干干净净地停住，
+   再淡一次会让人以为下面还有。 */
+.sidebar .nav-menu.has-more-below,
+.mobile-drawer .nav-menu.has-more-below {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 36px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 36px), transparent 100%);
+}
+
+/* 菜单项：一格 32px，分组标题 28px —— 标题与项落在同一套网格上，节奏才一致。
+   曾经试过收到 28px（一屏能多露 60px），实测太挤、看着发木 ——
+   **排版的第一原则是看着舒服，不是能塞多少**。
+   省空间要从别处省：底部那块从 61px 压到 45px，比压行距管用得多。 */
 .nav-menu :deep(.el-menu-item) {
   /* 「这一格的底色」交给一个局部变量承载：
      hover / 当前项只是改这个变量的值，
@@ -672,7 +762,7 @@ onUnmounted(() => {
   gap: 10px;
   height: 32px;
   line-height: 32px;
-  margin: 1px 10px;
+  margin: 0 10px;
   padding: 0 11px !important;
   border-radius: 8px;
   font-size: 13px;
@@ -715,21 +805,19 @@ onUnmounted(() => {
    改成主色淡染之后，当前项与 logo 是同一个色系，
    侧栏终于有了一个视觉重心，不再是一片灰。
 
+   但**只用平涂，不用渐变**：渐变从左到右渐隐，一眼看过去是「一条彩带」——
+   整条侧栏只有这一处有颜色，它就变成了花哨的代名词。
+   平涂的淡色底 + 一根主色竖条，一个信号就够安静。
+
    淡染用 color-mix 而不是固定 rgba：主色在明暗两套主题里不同，
    固定 rgba 会出现「一边刚好、一边发灰」。 */
 .nav-menu :deep(.el-menu-item.is-active) {
-  --nav-item-bg: linear-gradient(90deg,
-    var(--nav-accent-tint) 0%,
-    var(--nav-accent-tint-soft) 68%,
-    transparent 100%);
+  --nav-item-bg: var(--nav-accent-tint);
   color: #fff;
   font-weight: 600;
 }
 .nav-menu :deep(.el-menu-item.is-active:hover) {
-  --nav-item-bg: linear-gradient(90deg,
-    var(--nav-accent-tint-hover) 0%,
-    var(--nav-accent-tint) 68%,
-    var(--nav-accent-tint-soft) 100%);
+  --nav-item-bg: var(--nav-accent-tint-hover);
 }
 .nav-menu :deep(.el-menu-item.is-active) .el-icon {
   color: var(--nav-accent);
@@ -797,11 +885,13 @@ onUnmounted(() => {
   align-items: center;
   gap: 9px;
   margin: 0;
-  padding: 10px 21px 4px;
+  padding: 8px 21px 4px;
   /* 12px：项目里 11px 的小字在 1x 屏上已经发糊 */
   font-size: var(--text-xs);
   font-weight: 600;
   line-height: 16px;
+  /* 标题带的高度 = padding(8+4) + line-height(16) = 28px，
+     与菜单项的 32px 同一套节奏 */
   letter-spacing: 0;
   text-transform: none;
   color: var(--nav-fg-faint);
@@ -812,18 +902,17 @@ onUnmounted(() => {
   background: var(--bg-sidebar);
 }
 .nav-group-title::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  /* 比通用分隔线深一档：这条线有活干 ——
-     它得把下面这一组「框」住，太淡就等于没画（0.07 时只有 1.19:1，肉眼找不着）。
-     右端渐隐：一条到头齐刷刷断掉的线像被刀切过，渐隐才像「这一组到这里」。 */
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0));
+  /* 分组标题后面**不拖线**了。
+     原来那条渐隐细线是想「把这一组框住」，但它跟分组标题的暗色小字、
+     菜单项、当前项的竖条叠在一起，侧栏里就有了三四种线 ——
+     看久了就是「排版乱」。
+     标题本身就够分组了：小一号、暗一档、上下留白比行距大。 */
+  content: none;
 }
-/* 所有分组标题一律同高（30px）：
+/* 所有分组标题一律同高（28px）：
    吸顶时每一组的标题要正好盖住上一组的那一条带 ——
-   高度不一致的话，先吸住的那组会从下面露出半截（第一组原本矮 6px）。
-   第一组不再特殊：品牌块下面那点留白，由它自己的 10px 上内边距给，
+   高度不一致的话，先吸住的那组会从下面露出半截。
+   第一组不再特殊：品牌块下面那点留白，由它自己的 8px 上内边距给，
    刚好和别的组之间的留白一致，横着看也是一排。 */
 /* 「没有任何权限」是一句提示，不是一个分组标题，别给它拖条尾巴 */
 .nav-group-empty::after { display: none; }
@@ -848,10 +937,19 @@ onUnmounted(() => {
    现在按菜单项的规格重做：同高、同圆角、同一水平对齐轴 ——
    图标都落在距侧栏左边 21px 处，文字都落在 47px 处。 */
 .sidebar-footer {
-  padding: 6px 10px 8px;
+  /* 底部只做一件事：两个动作 + 版本号，一行放完。
+     之前是三层信息叠在 61px 里（带文字的按钮 + 方形按钮 + 一行快捷键提示），
+     每样东西各占一行 —— 视觉上就成了「底部乱」。
+     现在一行、两个同规格的图标按钮、版本号右对齐。 */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
   border-top: 1px solid var(--nav-hairline);
-  /* 比导航区略沉一档，把「导航」与「操作」分成两块 */
-  background: rgba(255, 255, 255, 0.035);
+  /* 不铺色块：底部再来一层底色 + 一条分隔线，
+     会让人以为这里另有一个模块。上面是导航、下面是操作，
+     一条发丝线就分得开了。 */
+  background: transparent;
   flex-shrink: 0;
 }
 /* 底部动作区：两个动作并排一行 */
@@ -860,22 +958,15 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
 }
-/* 「自定义导航」占满剩下的宽度 */
-.footer-actions .nav-add-btn { flex: 1; min-width: 0; }
-/* 收起/展开是纯图标动作：给它一个方块，
-   宽度和菜单图标方块（折叠态 38px）同一套语言。 */
-.footer-actions .collapse-toggle {
-  width: 30px;
-  flex-shrink: 0;
-  justify-content: center;
-  padding: 0;
-}
+/* 两个按钮**同样规格**（38×28）：
+   一个带文字、一个是 30px 方形，并排放着就是大小不一、看着别扭。
+   统一成图标按钮，图标落在 21px 轴上 —— 和上面的导航项同一列。 */
 .collapse-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  height: 30px;
+  justify-content: center;
+  width: 38px;
+  height: 28px;
   padding: 0 11px;
   margin-bottom: 0;
   border: none;
@@ -901,38 +992,40 @@ onUnmounted(() => {
   transition: color var(--duration-fast) var(--ease-out);
 }
 .collapse-btn:hover .el-icon { color: var(--nav-fg-strong); }
-/* 折叠态：按钮只剩图标，收到和菜单图标方块一样的 38px，排得才整齐 */
-.sidebar.is-collapsed .sidebar-footer { padding: 8px 12px 10px; }
-.sidebar.is-collapsed .footer-actions { flex-direction: column; gap: 6px; }
+/* 折叠态的图标必须**在方块里居中**。
+   Element Plus 折叠时会把图标包进一个绝对定位的触发器，
+   那个触发器带着 20px 的左内边距（--el-menu-base-level-padding），
+   于是图标被顶到方块的 20px 处 ——
+   在 38px 宽的方块里，图标（16px）落在 20..36，中心在 28，
+   而方块的中心是 19：**偏右 9px**，一列图标看着是歪的。
+   （v1.5.3 更糟：那时图标盒子 24px，图标中心偏到 32，偏 13px。）
+
+   把内边距清掉、用 justify-content 居中，图标就回到方块正中。 */
+.sidebar.is-collapsed :deep(.el-menu-item .el-menu-tooltip__trigger) {
+  padding: 0;
+  justify-content: center;
+}
+
+/* 折叠态：两个按钮缩成两个小方块并排放（26+4+26 = 56px，正好塞进 64px 宽的侧栏），
+   版本号没有位置就收起来 —— 折叠态本来就只剩图标了。 */
+.sidebar.is-collapsed .sidebar-footer { padding: 6px 4px; }
+.sidebar.is-collapsed .footer-actions { gap: 4px; }
 .sidebar.is-collapsed .collapse-btn {
   justify-content: center;
   padding: 0;
-  width: 38px;
-  height: 38px;
-  margin: 0 auto;
+  width: 26px;
+  height: 26px;
+  /* 全局有 `button { min-height: 28px; min-width: 28px }`，
+     min-* 的优先级高于 width/height —— 不一起改掉，
+     这里写 26px 也会被顶回 28px（两个方块就塞不进 64px 的侧栏了）。 */
+  min-width: 26px;
+  min-height: 26px;
+  margin: 0;
 }
-.sidebar.is-collapsed .footer-actions .nav-add-btn { flex: none; }
 
-.kbd-hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 22px;
-  padding: 0 11px;
-  font-size: 12px;
-  color: var(--nav-fg-ghost);
-}
-.kbd {
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  padding: 1px 6px;
-  border-radius: 5px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--nav-fg-muted);
-}
 .sys-version {
-  /* 版本号跟提示排在同一行，右对齐 —— 底部区省下一整行 */
+  /* 版本号右对齐到导航项同一条右边界（底部区右内边距 10px，
+     导航项的右外边距也是 10px —— 两条线对齐） */
   margin-left: auto;
   font-family: var(--font-mono);
   font-size: 11px;

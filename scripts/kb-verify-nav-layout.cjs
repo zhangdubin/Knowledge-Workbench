@@ -2,7 +2,7 @@
  * 左侧导航栏的排版体检
  *
  * 为什么要有这个脚本：
- *   侧栏好不好看，眼睛一看就知道；但「一屏放不放得下」「对比度够不够」
+ *   侧栏好不好看，眼睛一看就知道；但「一屏放不放得下」「对齐不对不对」
  *   靠眼睛看不出来 —— 得量。
  *   这台机器上侧栏有 23 个入口、4 个分组，
  *   排版松一点，800px 高的笔记本屏上就得往下滚半屏才够得着「系统设置」，
@@ -10,10 +10,12 @@
  *
  * 这里量的都是能判对错的东西：
  *   · 菜单内容高度 vs 可视高度（溢出多少像素）
- *   · 图标与文字的左对齐轴是否一致
+ *   · **左对齐轴**：图标字形、分组标题、底部按钮图标、文字起始位置
+ *     是不是在同一条竖线上（v1.5.3 就是栽在这儿：图标盒子 24px 套 16px 图标，
+ *     图标被推到 25px，标题在 21px —— 同一列三个左轴）
  *   · 分组标题、菜单项、正文的对比度（WCAG AA：正文 ≥ 4.5:1）
  *   · 折叠态与展开态的宽度、图标方块尺寸
- *   · 底部区两个动作是不是在同一行、收起是不是纯图标
+ *   · 底部边缘是「软渐隐」还是「硬切」
  *   · 侧栏与移动端抽屉是不是同一套（菜单项同高、品牌块同款）
  *
  * 用法：node scripts/kb-verify-nav-layout.cjs
@@ -52,6 +54,72 @@ function contrast(fg, bg) {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
 }
 
+/**
+ * 量侧栏的对齐轴。
+ *
+ * 「图标在哪」要看**字形**（svg），不是图标盒子：
+ *   Element Plus 给菜单项的图标留了 24px 的盒子，
+ *   16px 的图标被居中在盒子里 —— 量盒子会以为图标在 21px，
+ *   实际字形在 25px，差了 4px，肉眼看就是「歪」。
+ *
+ * 「文字在哪」要用 Range 量：
+ *   Element Plus 的菜单项文字是**裸文本节点**（没有 span），
+ *   querySelector('span') 找不到它。
+ */
+async function measureAxes(page) {
+  return page.evaluate(() => {
+    const q = s => document.querySelector(s)
+    const sb = q('.sidebar').getBoundingClientRect()
+    const menu = q('.nav-menu')
+    const items = [...menu.querySelectorAll('.el-menu-item')]
+    const groups = [...menu.querySelectorAll('.nav-group-title')]
+
+    const glyphXs = []
+    const textXs = []
+    const gaps = []
+    for (const it of items) {
+      const svg = it.querySelector('.el-icon svg') || it.querySelector('svg')
+      if (svg) glyphXs.push(Math.round(svg.getBoundingClientRect().left - sb.left))
+      const tn = [...it.childNodes].find(n => n.nodeType === 3 && n.textContent.trim())
+      if (tn) {
+        const r = document.createRange()
+        r.setStart(tn, 0)
+        r.setEnd(tn, 1)
+        const cx = r.getBoundingClientRect().left - sb.left
+        textXs.push(Math.round(cx))
+        if (svg) gaps.push(Math.round(cx - svg.getBoundingClientRect().right))
+      }
+    }
+    // 分组标题文字的左沿（标题是 div 里的裸文本，同样用 Range 量）
+    const groupTextXs = []
+    for (const g of groups) {
+      const tn = [...g.childNodes].find(n => n.nodeType === 3 && n.textContent.trim())
+      if (tn) {
+        const r = document.createRange()
+        r.setStart(tn, 0)
+        r.setEnd(tn, 1)
+        groupTextXs.push(Math.round(r.getBoundingClientRect().left - sb.left))
+      }
+    }
+    // 底部按钮的图标左沿（它属于另一套 DOM，但必须跟导航项同轴）
+    const footIconX = (() => {
+      const i = q('.sidebar-footer .el-icon')
+      return i ? Math.round(i.getBoundingClientRect().left - sb.left) : null
+    })()
+    return {
+      glyphXs: [...new Set(glyphXs)].sort((a, b) => a - b),
+      textXs: [...new Set(textXs)].sort((a, b) => a - b),
+      groupTextXs: [...new Set(groupTextXs)].sort((a, b) => a - b),
+      gaps: [...new Set(gaps)].sort((a, b) => a - b),
+      footIconX,
+      iconBoxW: (() => {
+        const i = q('.nav-menu .el-menu-item .el-icon')
+        return i ? Math.round(i.getBoundingClientRect().width) : null
+      })(),
+    }
+  })
+}
+
 async function main() {
   const token = execFileSync('python3', [path.join(ROOT, 'scripts/kb-session-token.py')], { encoding: 'utf8' }).trim()
   const browser = await puppeteer.launch({
@@ -82,7 +150,10 @@ async function main() {
     const acts = [...document.querySelectorAll('.footer-actions button')]
     const actBoxes = acts.map(b => {
       const r = b.getBoundingClientRect()
+      const i = b.querySelector('.el-icon')
       return { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top),
+               left: Math.round(r.left - document.querySelector('.sidebar').getBoundingClientRect().left),
+               iconLeft: i ? Math.round(i.getBoundingClientRect().left - document.querySelector('.sidebar').getBoundingClientRect().left) : null,
                text: (b.innerText || '').trim(), title: b.getAttribute('title') || '' }
     })
 
@@ -102,14 +173,15 @@ async function main() {
       }
     }
 
+    const menuCs = cs(menu)
     return {
       sidebarW: Math.round(rect(q('.sidebar')).width),
       sidebarBg: cs(q('.sidebar')).backgroundColor,
       brandH: Math.round(rect(brand).height),
       brandSubColor: cs(q('.brand-sub')).color,
+      footerH: Math.round(rect(footer).height),
       menuScrollH: menu.scrollHeight,
       menuClientH: menu.clientHeight,
-      footerH: Math.round(rect(footer).height),
       itemH: [...new Set(items.map(it => Math.round(rect(it).height)))],
       itemColor: cs(items[0]).color,
       itemRadius: cs(items[0]).borderRadius,
@@ -119,13 +191,10 @@ async function main() {
       iconXs: [...new Set(icons.map(i => Math.round(rect(i).x)))],
       iconColor: cs(items[0].querySelector('.el-icon')).color,
       activeBgImage: cs(active).backgroundImage,
+      activeBgColor: cs(active).backgroundColor,
       activeColor: cs(active).color,
-      hasFade: (() => {
-        // 注意：要显式传第二个参数取伪元素 —— getComputedStyle(el) 拿到的是元素本身，
-        // 取 ::after 得写成 getComputedStyle(el, '::after')。
-        const a = getComputedStyle(menu, '::after')
-        return a.content !== 'none' && a.position === 'sticky' && a.height !== '0px'
-      })(),
+      hasMoreClass: menu.classList.contains('has-more-below'),
+      maskImage: (menuCs.maskImage || menuCs.webkitMaskImage || 'none'),
       itemCount: items.length,
       groupCount: groups.length,
       actBoxes,
@@ -147,16 +216,34 @@ async function main() {
   console.log('  菜单内容 ' + m.menuScrollH + 'px / 可视 ' + m.menuClientH + 'px')
 
   check(m.groupSticky === 'sticky', '分组标题吸顶（滚到哪组知道是哪组）', m.groupSticky)
-  check(m.hasFade, '菜单底部有渐隐（被截断的一行看起来是「下面还有」）')
-  check(m.itemH.length === 1 && m.itemH[0] <= 34, '菜单项高度统一且收紧', JSON.stringify(m.itemH))
-  check(m.iconXs.length === 1, '所有图标在同一条左对齐轴上', 'x=' + JSON.stringify(m.iconXs))
+  check(m.itemH.length === 1 && m.itemH[0] <= 34, '菜单项高度统一且不挤', JSON.stringify(m.itemH))
+  check(m.groupH.length === 1, '分组标题高度统一（吸顶时不会从下面露出半截）', JSON.stringify(m.groupH))
   check(m.footerH <= 100, '底部区不超过 100px（≈ 三个菜单项，别占掉导航的空间）', m.footerH + 'px')
   check(cr(m.itemColor) >= 4.5, '菜单项正文对比度 ≥ 4.5:1', cr(m.itemColor).toFixed(2) + ':1')
   check(cr(m.groupColor) >= 4.5, '分组标题对比度 ≥ 4.5:1', cr(m.groupColor).toFixed(2) + ':1')
   check(cr(m.brandSubColor) >= 4.5, '品牌副标题对比度 ≥ 4.5:1', cr(m.brandSubColor).toFixed(2) + ':1')
   check(cr(m.iconColor) >= 3, '图标对比度 ≥ 3:1（图形元素的底线）', cr(m.iconColor).toFixed(2) + ':1')
   check(cr(m.activeColor) >= 4.5, '当前项文字对比度 ≥ 4.5:1', cr(m.activeColor).toFixed(2) + ':1')
-  check(m.activeBgImage.includes('gradient'), '当前项有底色（不是只靠字重区分）')
+  // 当前项的底色：平涂的淡染（不是渐变，也不是「一层白」）
+  check(m.activeBgImage.includes('gradient') || m.activeBgColor !== 'rgba(0, 0, 0, 0)',
+    '当前项有底色（不是只靠字重区分）', m.activeBgColor)
+
+  // ---- 对齐轴：这是 v1.5.3 真正翻车的地方 ----
+  const ax = await measureAxes(page)
+  console.log('  图标字形左沿 ' + JSON.stringify(ax.glyphXs) +
+              ' / 标题左沿 ' + JSON.stringify(ax.groupTextXs) +
+              ' / 文字左沿 ' + JSON.stringify(ax.textXs))
+  check(ax.glyphXs.length === 1 && ax.glyphXs[0] === 21,
+    '图标字形落在 21px 轴上（不是被 24px 的盒子推到 25px）', JSON.stringify(ax.glyphXs))
+  check(ax.groupTextXs.length === 1 && ax.groupTextXs[0] === 21,
+    '分组标题文字落在同一条 21px 轴上', JSON.stringify(ax.groupTextXs))
+  check(ax.footIconX === 21, '底部按钮的图标也在同一条轴上', String(ax.footIconX))
+  check(ax.textXs.length === 1 && ax.textXs[0] === 47,
+    '菜单项文字落在 47px 轴上', JSON.stringify(ax.textXs))
+  check(ax.gaps.length === 1 && ax.gaps[0] === 10,
+    '图标与文字之间正好 10px（没有多出来的死区）', JSON.stringify(ax.gaps))
+  check(ax.iconBoxW === 16,
+    '图标盒子贴着图标本身（16px，不是 Element Plus 的 24px）', String(ax.iconBoxW))
 
   // ---- 底部区：两个动作并排、收起是纯图标、版本号在位 ----
   check(m.actBoxes.length >= 2, '底部区有两个动作（自定义导航 + 收起侧边栏）',
@@ -166,19 +253,51 @@ async function main() {
     check(add.top === toggle.top, '两个动作排在同一行', add.top + ' / ' + toggle.top)
     check(toggle.w <= 40, '收起是纯图标按钮（不配一段重复的文字）',
       toggle.w + 'px · 「' + toggle.text + '」')
+    // 两个按钮必须**同样规格**：一个带文字、一个是方形，并排就是大小不一
+    check(add.w === toggle.w && add.h === toggle.h,
+      '两个动作同样规格（不再一个宽一个方）',
+      add.w + '×' + add.h + ' / ' + toggle.w + '×' + toggle.h)
+    check(m.footerH <= 50, '底部只有一行（不超过 50px）', m.footerH + 'px')
   }
   check(/^v\d+\.\d+\.\d+/.test(m.versionText.trim()),
     '版本号在位（取自后端 /auth/status，不写死在构建里）', m.versionText.trim())
-  // 侧栏专属令牌：主题色改了只改这一处，不用翻遍样式表
   const missingVars = Object.keys(m.navVars).filter(k => !m.navVars[k])
   check(missingVars.length === 0, '侧栏专属令牌（--nav-*）齐全', missingVars.join(','))
-
-  // 「没有权限」的空分组样式：规则必须在样式表里（不然真到那一步会多出一条尾巴）
   check(m.emptyGroupRule, '「没有权限」的空分组有专门样式（不给它拖那条分组线）')
 
   const overflow = m.menuScrollH - m.menuClientH
   console.log('  溢出 ' + overflow + 'px —— 800px 高的屏上露不全是正常的，但要能滚、且看得出能滚')
-  check(overflow < 400, '溢出控制在 400px 内（原来是 376+）', overflow + 'px')
+  check(overflow < 200, '溢出压在 200px 内（v1.5.3 是 228px）', overflow + 'px')
+
+  // ---- 底部边缘：软渐隐，不是硬切；滚到底就该干净停住 ----
+  check(m.hasMoreClass && m.maskImage !== 'none',
+    '下面还有内容时，底部用遮罩渐隐（软切口，不是硬切）',
+    'mask=' + m.maskImage.slice(0, 46))
+  const bottomState = await page.evaluate(async () => {
+    const menu = document.querySelector('.nav-menu')
+    menu.scrollTop = menu.scrollHeight
+    await new Promise(r => setTimeout(r, 400))
+    const cs = getComputedStyle(menu)
+    const items = [...menu.querySelectorAll('.el-menu-item')]
+    const last = items[items.length - 1]
+    const mr = menu.getBoundingClientRect()
+    const lr = last.getBoundingClientRect()
+    return {
+      hasMore: menu.classList.contains('has-more-below'),
+      mask: (cs.maskImage || cs.webkitMaskImage || 'none'),
+      lastBottom: Math.round(lr.bottom - mr.top),
+      menuH: Math.round(mr.height),
+      lastText: (last.innerText || '').trim(),
+    }
+  })
+  check(!bottomState.hasMore && bottomState.mask === 'none',
+    '滚到底后撤掉渐隐（别让人以为下面还有）',
+    'hasMore=' + bottomState.hasMore + ' mask=' + bottomState.mask.slice(0, 30))
+  check(bottomState.lastBottom <= bottomState.menuH,
+    '滚到底时最后一项完整露出（没有被切）',
+    bottomState.lastText + ' 底部 ' + bottomState.lastBottom + '/' + bottomState.menuH)
+  await page.evaluate(() => { document.querySelector('.nav-menu').scrollTop = 0 })
+  await sleep(300)
 
   // 吸顶标题的实际行为：滚到中间时，应该有一个标题正好贴在菜单顶边，
   // 并且它下面不该有内容从缝里穿过去。
@@ -231,16 +350,21 @@ async function main() {
       })
     const acts = [...document.querySelectorAll('.footer-actions button')]
       .map(b => Math.round(b.getBoundingClientRect().width))
+    // 折叠态图标要居中在 38px 的方块里
+    const svg = item.querySelector('svg')
+    const ir = rect(item), sr = rect(svg)
     return {
       w: Math.round(rect(q('.sidebar')).width),
-      itemW: Math.round(rect(item).width),
-      itemH: Math.round(rect(item).height),
+      itemW: Math.round(ir.width),
+      itemH: Math.round(ir.height),
       menuScrollH: menu.scrollHeight,
       menuClientH: menu.clientHeight,
       activeBg: getComputedStyle(active).backgroundImage,
       activeIconColor: getComputedStyle(active.querySelector('.el-icon')).color,
       dividers,
       actWidths: acts,
+      iconOffset: sr ? Math.round(sr.left - ir.left) : null,
+      iconSize: sr ? Math.round(sr.width) : null,
     }
   })
   console.log('  ' + c.w + 'px 宽，图标方块 ' + c.itemW + '×' + c.itemH)
@@ -253,6 +377,9 @@ async function main() {
     c.dividers.length + ' 条 · 宽 ' + (c.dividers[0] ? c.dividers[0].w + 'px' : '-'))
   check(c.actWidths.length >= 1 && c.actWidths.every(w => w <= 64),
     '折叠态底部动作也是图标方块（不超过侧栏宽度）', JSON.stringify(c.actWidths))
+  check(c.iconOffset !== null &&
+        Math.abs(c.iconOffset - (c.itemW - c.iconSize) / 2) <= 1,
+    '折叠态图标在方块里居中', 'offset=' + c.iconOffset)
 
   // ---- 移动端抽屉：必须是同一套，不是「长得像」 ----
   console.log('▸ 移动端抽屉（390×844）')
@@ -270,14 +397,22 @@ async function main() {
     const brand = q('.mobile-drawer .brand')
     const items = [...document.querySelectorAll('.mobile-drawer .nav-menu .el-menu-item')]
     const groups = [...document.querySelectorAll('.mobile-drawer .nav-group-title')]
+    const menu = q('.mobile-drawer .nav-menu')
+    const svg = items[0] ? items[0].querySelector('svg') : null
+    const dr = drawer ? rect(drawer) : null
     return {
       open: !!drawer,
       brandTitle: brand ? (brand.querySelector('.brand-title') || {}).innerText || '' : '',
       brandSub: brand ? (brand.querySelector('.brand-sub') || {}).innerText || '' : '',
-      brandH: brand ? Math.round(rect(brand).height) : 0,
       itemH: [...new Set(items.map(it => Math.round(rect(it).height)))],
       groupCount: groups.length,
       groupFont: groups[0] ? getComputedStyle(groups[0]).fontSize : '',
+      // 量相对**菜单**的左沿，而不是相对抽屉外壳 ——
+      // 抽屉外壳有 1px 边框，拿它当基准会凭空多出 1px
+      iconGlyphX: svg && menu ? Math.round(svg.getBoundingClientRect().left - menu.getBoundingClientRect().left) : null,
+      menuScrollW: menu ? menu.scrollWidth : null,
+      menuClientW: menu ? menu.clientWidth : null,
+      hasMore: menu ? menu.classList.contains('has-more-below') : null,
     }
   })
   check(d.open, '抽屉能打开')
@@ -288,6 +423,9 @@ async function main() {
   check(d.itemH.length === 1 && d.itemH[0] === 32,
     '抽屉里的菜单项与侧栏同高 32px（同一套设计）', JSON.stringify(d.itemH))
   check(d.groupCount >= 1, '抽屉里也分组（侧栏有的它也得有）', d.groupCount + ' 组')
+  check(d.iconGlyphX === 21, '抽屉里的图标也在 21px 轴上（同一套设计）', String(d.iconGlyphX))
+  check(d.menuScrollW <= d.menuClientW, '抽屉里没有横向滚动（内容没被裁掉）',
+    d.menuScrollW + '/' + d.menuClientW)
 
   await browser.close()
   console.log(failed === 0 ? '\n全部通过 ✅' : '\n有 ' + failed + ' 项未通过 ❌')

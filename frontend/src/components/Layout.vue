@@ -850,7 +850,10 @@ onUnmounted(() => {
   border-radius: 9px;
 }
 .sidebar.is-collapsed :deep(.el-menu-item .el-icon) {
-  font-size: 17px;
+  /* 16px：图标盒子（--el-menu-icon-width）也是 16px，
+     字形必须和盒子一样大 —— 17px 的字形放在 16px 的盒子里，
+     盒子就不是正方了（实测 16×17）。 */
+  font-size: 16px;
 }
 /* 折叠态当前项：整块点亮成主色渐变。
    64px 宽里「文字加粗」这个信号已经没了，得给一个看得见的标记；

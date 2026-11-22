@@ -1,0 +1,4808 @@
+[
+  {
+    "path": "/docs/foundry/action-types/overview/",
+    "url": "https://www.palantir.com/docs/foundry/action-types/overview",
+    "status": "read",
+    "title": "Action types",
+    "headings": [
+      "Action types"
+    ],
+    "characters": 2191
+  },
+  {
+    "path": "/docs/foundry/functions/overview/",
+    "url": "https://www.palantir.com/docs/foundry/functions/overview",
+    "status": "read",
+    "title": "Functions",
+    "headings": [
+      "Functions"
+    ],
+    "characters": 1794
+  },
+  {
+    "path": "/docs/foundry/interfaces/interface-overview/",
+    "url": "https://www.palantir.com/docs/foundry/interfaces/interface-overview",
+    "status": "read",
+    "title": "Interfaces",
+    "headings": [
+      "Interfaces",
+      "Interface features",
+      "Differences between interfaces and object types",
+      "Interface permissions",
+      "Current levels of support",
+      "Get started with interfaces"
+    ],
+    "characters": 4342
+  },
+  {
+    "path": "/docs/foundry/object-link-types/object-types-overview/",
+    "url": "https://www.palantir.com/docs/foundry/object-link-types/object-types-overview",
+    "status": "read",
+    "title": "Object types",
+    "headings": [
+      "Object types"
+    ],
+    "characters": 2477
+  },
+  {
+    "path": "/docs/foundry/ontology/applications/",
+    "url": "https://www.palantir.com/docs/foundry/ontology/applications",
+    "status": "read",
+    "title": "Ontology-aware applications",
+    "headings": [
+      "Ontology-aware applications",
+      "Application reference",
+      "Object Views",
+      "Object Explorer",
+      "Quiver",
+      "Workshop",
+      "Slate",
+      "Carbon",
+      "Map",
+      "Application comparison",
+      "Use cases",
+      "Workflow style",
+      "Configuration model"
+    ],
+    "characters": 9490
+  },
+  {
+    "path": "/docs/foundry/ontology/core-concepts/",
+    "url": "https://www.palantir.com/docs/foundry/ontology/core-concepts",
+    "status": "read",
+    "title": "Core concepts",
+    "headings": [
+      "Core concepts",
+      "Ontology",
+      "Object type",
+      "Property",
+      "Shared property",
+      "Link type",
+      "Action type",
+      "Roles",
+      "Functions",
+      "Interfaces",
+      "Object Views"
+    ],
+    "characters": 4470
+  },
+  {
+    "path": "/docs/foundry/ontology/overview/",
+    "url": "https://www.palantir.com/docs/foundry/ontology/overview",
+    "status": "read",
+    "title": "Ontology building",
+    "headings": [
+      "Ontology building",
+      "Object and link types",
+      "Action types and functions",
+      "Interfaces",
+      "Powering decision-making"
+    ],
+    "characters": 2574
+  },
+  {
+    "path": "/docs/zh/foundry/",
+    "url": "https://www.palantir.com/docs/zh/foundry",
+    "status": "empty",
+    "title": "",
+    "headings": [],
+    "characters": 0
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/action-log/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/action-log",
+    "status": "read",
+    "title": "操作日志",
+    "headings": [
+      "操作日志",
+      "背景",
+      "操作日志Ontology",
+      "操作日志架构",
+      "基于函数的操作类型的操作日志",
+      "操作日志时间线"
+    ],
+    "characters": 1389
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/action-metrics/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/action-metrics",
+    "status": "read",
+    "title": "操作指标 [测试版]",
+    "headings": [
+      "操作指标 [测试版]"
+    ],
+    "characters": 401
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/action-reverts/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/action-reverts",
+    "status": "read",
+    "title": "撤销或取消操作",
+    "headings": [
+      "撤销或取消操作",
+      "配置可撤销的操作",
+      "撤销操作",
+      "注意事项",
+      "在没有撤销操作提示的情况下撤销删除操作"
+    ],
+    "characters": 893
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/configure-sections/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/configure-sections",
+    "status": "read",
+    "title": "配置部分",
+    "headings": [
+      "配置部分",
+      "向操作表单添加部分",
+      "向部分添加参数"
+    ],
+    "characters": 601
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/dropdown-security/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/dropdown-security",
+    "status": "read",
+    "title": "对象下拉菜单安全注意事项",
+    "headings": [
+      "对象下拉菜单安全注意事项",
+      "示例：数据隐私问题",
+      "技术细节"
+    ],
+    "characters": 918
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/function-actions-getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/function-actions-getting-started",
+    "status": "read",
+    "title": "入门",
+    "headings": [
+      "入门",
+      "先决条件",
+      "创建一个基于函数的操作",
+      "更改函数逻辑"
+    ],
+    "characters": 1199
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/function-actions-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/function-actions-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 554
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/getting-started",
+    "status": "read",
+    "title": "入门",
+    "headings": [
+      "入门",
+      "先决条件",
+      "创建新的操作类型",
+      "编辑参数",
+      "添加提交条件",
+      "将操作添加到对象视图",
+      "应用操作",
+      "解决用户编辑（操作）和数据源更新的冲突",
+      "下一步"
+    ],
+    "characters": 2036
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/inline-edits/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/inline-edits",
+    "status": "read",
+    "title": "行内编辑",
+    "headings": [
+      "行内编辑",
+      "Object Explorer 行内编辑",
+      "配置",
+      "行内编辑的操作类型要求",
+      "Workshop 行内编辑",
+      "背景",
+      "有效的行内操作",
+      "无效的行内操作",
+      "示例：无效的行内操作"
+    ],
+    "characters": 1699
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/marketplace-action-types/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/marketplace-action-types",
+    "status": "read",
+    "title": "将操作类型添加到Marketplace产品 [Beta]",
+    "headings": [
+      "将操作类型添加到Marketplace产品 [Beta]",
+      "支持的功能",
+      "将操作类型添加到产品"
+    ],
+    "characters": 381
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/notifications/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/notifications",
+    "status": "read",
+    "title": "通知",
+    "headings": [
+      "通知",
+      "收件人",
+      "内容",
+      "内容组件",
+      "示例配置",
+      "其他关键信息",
+      "最大收件人限制",
+      "内容长度限制",
+      "严格编辑",
+      "收件人用户帐户",
+      "链接到新创建的对象",
+      "收件人所需的数据访问权限"
+    ],
+    "characters": 3351
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 753
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/parameter-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/parameter-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 653
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/parameters-default-value/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/parameters-default-value",
+    "status": "read",
+    "title": "设置参数默认值",
+    "headings": [
+      "设置参数默认值",
+      "默认值与局部变量的交互",
+      "配置默认值",
+      "静态默认值",
+      "Object属性默认值",
+      "类型类预填"
+    ],
+    "characters": 1068
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/parameters-filter/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/parameters-filter",
+    "status": "read",
+    "title": "筛选参数下拉菜单的结果",
+    "headings": [
+      "筛选参数下拉菜单的结果",
+      "多选参数下拉菜单",
+      "对象下拉菜单",
+      "数据隐私影响",
+      "支持的操作",
+      "在属性上筛选",
+      "更改起始对象集",
+      "搜索范围"
+    ],
+    "characters": 858
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/parameters-override/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/parameters-override",
+    "status": "read",
+    "title": "覆盖",
+    "headings": [
+      "覆盖",
+      "添加和编辑覆盖",
+      "覆盖块",
+      "\"If\"和条件",
+      "\"Then\"和覆盖",
+      "多个覆盖块"
+    ],
+    "characters": 865
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/permissions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/permissions",
+    "status": "read",
+    "title": "权限",
+    "headings": [
+      "权限",
+      "应用操作",
+      "提交标准",
+      "Object编辑权限",
+      "副作用权限"
+    ],
+    "characters": 1616
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/rules/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/rules",
+    "status": "read",
+    "title": "规则",
+    "headings": [
+      "规则",
+      "Ontology规则",
+      "值和参数",
+      "创建对象和多对多链接",
+      "无效组合",
+      "其他规则"
+    ],
+    "characters": 1594
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/scale-property-limits/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/scale-property-limits",
+    "status": "read",
+    "title": "规模和属性限制",
+    "headings": [
+      "规模和属性限制",
+      "编辑限制",
+      "支持的属性类型",
+      "支持的属性",
+      "其他限制",
+      "行内编辑",
+      "通知接收者"
+    ],
+    "characters": 1072
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/set-up-notification/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/set-up-notification",
+    "status": "read",
+    "title": "设置通知",
+    "headings": [
+      "设置通知",
+      "前提条件",
+      "完成入门教程",
+      "向您的对象类型添加指派人属性",
+      "添加通知",
+      "配置收件人",
+      "配置通知内容",
+      "配置链接",
+      "发送测试通知",
+      "后续步骤"
+    ],
+    "characters": 1656
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/set-up-webhook/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/set-up-webhook",
+    "status": "read",
+    "title": "设置 Webhook",
+    "headings": [
+      "设置 Webhook",
+      "前提条件",
+      "步骤",
+      "下一步"
+    ],
+    "characters": 946
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/side-effects-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/side-effects-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 523
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/submission-criteria/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/submission-criteria",
+    "status": "read",
+    "title": "提交标准",
+    "headings": [
+      "提交标准",
+      "条件",
+      "当前用户",
+      "参数",
+      "选择一个值",
+      "运算符",
+      "值",
+      "逻辑运算符",
+      "失败消息"
+    ],
+    "characters": 3013
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/upload-attachments/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/upload-attachments",
+    "status": "read",
+    "title": "上传附件",
+    "headings": [
+      "上传附件",
+      "配置操作类型",
+      "配置Object类型",
+      "架构和限制"
+    ],
+    "characters": 892
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/use-actions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/use-actions",
+    "status": "read",
+    "title": "在平台中使用操作",
+    "headings": [
+      "在平台中使用操作",
+      "对象视图",
+      "Object Explorer",
+      "Workshop"
+    ],
+    "characters": 992
+  },
+  {
+    "path": "/docs/zh/foundry/action-types/webhooks/",
+    "url": "https://www.palantir.com/docs/zh/foundry/action-types/webhooks",
+    "status": "read",
+    "title": "Webhooks",
+    "headings": [
+      "Webhooks",
+      "Webhooks: 数据输出与副作用",
+      "数据输出 Webhooks",
+      "副作用 Webhooks",
+      "输入参数",
+      "输出参数"
+    ],
+    "characters": 4307
+  },
+  {
+    "path": "/docs/zh/foundry/administration/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/administration/overview",
+    "status": "read",
+    "title": "管理和使能",
+    "headings": [
+      "管理和使能",
+      "控制面板",
+      "配置和管理注册",
+      "认证",
+      "资源管理",
+      "平台体验"
+    ],
+    "characters": 1026
+  },
+  {
+    "path": "/docs/zh/foundry/analytics/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/analytics/overview",
+    "status": "read",
+    "title": "分析",
+    "headings": [
+      "分析",
+      "核心应用",
+      "分析连通性"
+    ],
+    "characters": 880
+  },
+  {
+    "path": "/docs/zh/foundry/app-building/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/app-building/overview",
+    "status": "read",
+    "title": "应用案例开发",
+    "headings": [
+      "应用案例开发",
+      "应用程序搭建",
+      "Workshop",
+      "Slate",
+      "工作流搭建",
+      "Workflow lineage",
+      "Automate",
+      "Carbon",
+      "Solution Designer",
+      "Use Cases",
+      "开发者工具链",
+      "Ontology SDK",
+      "APIs"
+    ],
+    "characters": 2335
+  },
+  {
+    "path": "/docs/zh/foundry/data-integration/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/data-integration/overview",
+    "status": "read",
+    "title": "数据连接与集成",
+    "headings": [
+      "数据连接与集成",
+      "连接数据",
+      "数据变换",
+      "管道管理"
+    ],
+    "characters": 911
+  },
+  {
+    "path": "/docs/zh/foundry/devops/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/devops/overview",
+    "status": "read",
+    "title": "产品交付",
+    "headings": [
+      "产品交付",
+      "Foundry DevOps [测试版]",
+      "市场"
+    ],
+    "characters": 699
+  },
+  {
+    "path": "/docs/zh/foundry/dynamic-scheduling/scheduling-calendar-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-calendar-overview",
+    "status": "read",
+    "title": "日程安排日历微件",
+    "headings": [
+      "日程安排日历微件"
+    ],
+    "characters": 200
+  },
+  {
+    "path": "/docs/zh/foundry/dynamic-scheduling/scheduling-calendar-widget/",
+    "url": "https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-calendar-widget",
+    "status": "read",
+    "title": "微件配置",
+    "headings": [
+      "微件配置",
+      "微件模式",
+      "输入数据（pucks）",
+      "显示配置"
+    ],
+    "characters": 1155
+  },
+  {
+    "path": "/docs/zh/foundry/dynamic-scheduling/scheduling-concepts/",
+    "url": "https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-concepts",
+    "status": "read",
+    "title": "核心概念",
+    "headings": [
+      "核心概念",
+      "Schedule object",
+      "Resource object",
+      "调度甘特图",
+      "Scenarios",
+      "Schedule save action",
+      "Suggestion Function",
+      "Search Function",
+      "验证规则"
+    ],
+    "characters": 1411
+  },
+  {
+    "path": "/docs/zh/foundry/dynamic-scheduling/scheduling-gantt-chart-widget/",
+    "url": "https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-gantt-chart-widget",
+    "status": "read",
+    "title": "调度甘特图微件",
+    "headings": [
+      "调度甘特图微件",
+      "微件设计",
+      "微件设置",
+      "时间轴",
+      "输入数据（行）",
+      "输入数据（Pucks）",
+      "界面",
+      "输出"
+    ],
+    "characters": 4277
+  },
+  {
+    "path": "/docs/zh/foundry/dynamic-scheduling/scheduling-getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-getting-started",
+    "status": "read",
+    "title": "起始",
+    "headings": [
+      "起始",
+      "1. 创建核心Ontology对象",
+      "2. （非必填）定义验证规则",
+      "3. 在Ontology Manager中启用功能",
+      "4. 在Workshop中使用动态调度"
+    ],
+    "characters": 1331
+  },
+  {
+    "path": "/docs/zh/foundry/dynamic-scheduling/scheduling-ontology-primitives/",
+    "url": "https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-ontology-primitives",
+    "status": "read",
+    "title": "Ontology 原语和数据模型配置",
+    "headings": [
+      "Ontology 原语和数据模型配置",
+      "示例：飞机维护计划",
+      "简单配置",
+      "高级配置",
+      "Ontology 要求",
+      "所需的计划对象属性",
+      "所需的 Ontology 链接",
+      "Ontology 管理器向导"
+    ],
+    "characters": 1496
+  },
+  {
+    "path": "/docs/zh/foundry/dynamic-scheduling/scheduling-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 445
+  },
+  {
+    "path": "/docs/zh/foundry/dynamic-scheduling/scheduling-search-functions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-search-functions",
+    "status": "read",
+    "title": "搜索函数",
+    "headings": [
+      "搜索函数",
+      "函数界面"
+    ],
+    "characters": 1745
+  },
+  {
+    "path": "/docs/zh/foundry/dynamic-scheduling/scheduling-suggestion-functions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-suggestion-functions",
+    "status": "read",
+    "title": "建议函数",
+    "headings": [
+      "建议函数",
+      "函数接口"
+    ],
+    "characters": 1587
+  },
+  {
+    "path": "/docs/zh/foundry/dynamic-scheduling/scheduling-validation-rules/",
+    "url": "https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-validation-rules",
+    "status": "read",
+    "title": "验证规则",
+    "headings": [
+      "验证规则",
+      "编排",
+      "实现验证规则",
+      "函数界面",
+      "示例函数"
+    ],
+    "characters": 3475
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/add-a-custom-property/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/add-a-custom-property",
+    "status": "read",
+    "title": "添加自定义属性",
+    "headings": [
+      "添加自定义属性"
+    ],
+    "characters": 1110
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/author-and-run-a-rule/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/author-and-run-a-rule",
+    "status": "read",
+    "title": "编写并运行规则",
+    "headings": [
+      "编写并运行规则"
+    ],
+    "characters": 522
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/common-issues/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/common-issues",
+    "status": "read",
+    "title": "故障排除参考",
+    "headings": [
+      "故障排除参考",
+      "错误信息",
+      "ReadonlyObjectError",
+      "400: Actions",
+      "自定义属性的提案差异未正确显示",
+      "较旧的错误",
+      "Taurus",
+      "TransformsGradlePlugin",
+      "规则编辑器预览与Foundry Rules变换的输出不匹配",
+      "Taurus"
+    ],
+    "characters": 2623
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/configure-rule-actions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/configure-rule-actions",
+    "status": "read",
+    "title": "配置规则操作",
+    "headings": [
+      "配置规则操作"
+    ],
+    "characters": 799
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/configure-timeseries-foundry-rules/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/configure-timeseries-foundry-rules",
+    "status": "read",
+    "title": "配置时间序列",
+    "headings": [
+      "配置时间序列",
+      "Workshop应用程序",
+      "变换管道",
+      "额外输入",
+      "示例",
+      "项目引用"
+    ],
+    "characters": 2057
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/configure-transforms-pipeline/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/configure-transforms-pipeline",
+    "status": "read",
+    "title": "配置变换管道",
+    "headings": [
+      "配置变换管道",
+      "示例变换",
+      "使用@AdditionalInputs添加Ontology输入",
+      "输入和输出数据集",
+      "Foundry规则运行器",
+      "规则操作数据集",
+      "参考实现"
+    ],
+    "characters": 7055
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/configure-workflow/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/configure-workflow",
+    "status": "read",
+    "title": "配置工作流",
+    "headings": [
+      "配置工作流",
+      "高级配置",
+      "备用支持数据集"
+    ],
+    "characters": 937
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/configure-workshop-app/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/configure-workshop-app",
+    "status": "read",
+    "title": "配置 Workshop 应用程序",
+    "headings": [
+      "配置 Workshop 应用程序"
+    ],
+    "characters": 1111
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/core-concepts/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/core-concepts",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 424
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/customization/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/customization",
+    "status": "read",
+    "title": "定制 Foundry Rules",
+    "headings": [
+      "定制 Foundry Rules"
+    ],
+    "characters": 254
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/customize-foundry-rules-pipeline/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/customize-foundry-rules-pipeline",
+    "status": "read",
+    "title": "自定义您的 Foundry Rules 流水线",
+    "headings": [
+      "自定义您的 Foundry Rules 流水线",
+      "应用案例",
+      "指南"
+    ],
+    "characters": 927
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/deploy-foundry-rules/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/deploy-foundry-rules",
+    "status": "read",
+    "title": "部署 Foundry Rules",
+    "headings": [
+      "部署 Foundry Rules"
+    ],
+    "characters": 509
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/deploy-timeseries-foundry-rules/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/deploy-timeseries-foundry-rules",
+    "status": "read",
+    "title": "部署时间序列 Foundry 规则",
+    "headings": [
+      "部署时间序列 Foundry 规则"
+    ],
+    "characters": 456
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/deploy-workflow/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/deploy-workflow",
+    "status": "read",
+    "title": "部署工作流",
+    "headings": [
+      "部署工作流",
+      "常见问题",
+      "如何更改操作类型上的提交标准？"
+    ],
+    "characters": 782
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/enable-optional-features/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/enable-optional-features",
+    "status": "read",
+    "title": "启用非必填功能",
+    "headings": [
+      "启用非必填功能"
+    ],
+    "characters": 408
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/foundry-rules-workflow-configuration/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/foundry-rules-workflow-configuration",
+    "status": "read",
+    "title": "Foundry Rules 工作流配置",
+    "headings": [
+      "Foundry Rules 工作流配置",
+      "工作流输入",
+      "工作流输出",
+      "变换配置",
+      "规则执行"
+    ],
+    "characters": 807
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/legacy-foundry-rules-setup-taurus/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/legacy-foundry-rules-setup-taurus",
+    "status": "read",
+    "title": "旧版 Foundry 规则设置 (Taurus)",
+    "headings": [
+      "旧版 Foundry 规则设置 (Taurus)",
+      "变换管道",
+      "Workshop 应用程序",
+      "规则操作"
+    ],
+    "characters": 784
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/marketplace/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/marketplace",
+    "status": "read",
+    "title": "将 Foundry Rules 添加到 Marketplace 产品 [Beta]",
+    "headings": [
+      "将 Foundry Rules 添加到 Marketplace 产品 [Beta]",
+      "支持的功能",
+      "将 Foundry Rules 工作流添加到产品中"
+    ],
+    "characters": 676
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/migrate-to-foundry-rules/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/migrate-to-foundry-rules",
+    "status": "read",
+    "title": "迁移到 Foundry Rules",
+    "headings": [
+      "迁移到 Foundry Rules",
+      "迁移注意事项",
+      "将Taurus工作流迁移到Foundry Rules工作流",
+      "验证迁移",
+      "常见问题"
+    ],
+    "characters": 3103
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/object-model/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/object-model",
+    "status": "read",
+    "title": "Object模型",
+    "headings": [
+      "Object模型",
+      "规则",
+      "提案"
+    ],
+    "characters": 757
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/overview",
+    "status": "read",
+    "title": "Foundry Rules",
+    "headings": [
+      "Foundry Rules",
+      "应用案例示例"
+    ],
+    "characters": 533
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/permitted-and-default-output-values/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/permitted-and-default-output-values",
+    "status": "read",
+    "title": "允许和默认输出值",
+    "headings": [
+      "允许和默认输出值",
+      "行为和应用案例",
+      "配置选项",
+      "列值",
+      "静态值"
+    ],
+    "characters": 1492
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/rule-logic/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/rule-logic",
+    "status": "read",
+    "title": "规则逻辑",
+    "headings": [
+      "规则逻辑",
+      "输入",
+      "逻辑块",
+      "规则输出"
+    ],
+    "characters": 861
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/rule-permissions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/rule-permissions",
+    "status": "read",
+    "title": "编辑规则的权限",
+    "headings": [
+      "编辑规则的权限"
+    ],
+    "characters": 558
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/timeseries-concepts/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/timeseries-concepts",
+    "status": "read",
+    "title": "时间序列规则",
+    "headings": [
+      "时间序列规则",
+      "概述",
+      "时间序列面板",
+      "添加时间序列面板",
+      "时间序列搜索面板"
+    ],
+    "characters": 760
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/upgrade-to-use-rule-actions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/upgrade-to-use-rule-actions",
+    "status": "read",
+    "title": "升级以使用规则操作",
+    "headings": [
+      "升级以使用规则操作"
+    ],
+    "characters": 1249
+  },
+  {
+    "path": "/docs/zh/foundry/foundry-rules/workshop-application/",
+    "url": "https://www.palantir.com/docs/zh/foundry/foundry-rules/workshop-application",
+    "status": "read",
+    "title": "Workshop 应用",
+    "headings": [
+      "Workshop 应用",
+      "规则编辑器",
+      "提案审核"
+    ],
+    "characters": 757
+  },
+  {
+    "path": "/docs/zh/foundry/functions/add-dependencies/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/add-dependencies",
+    "status": "read",
+    "title": "添加 npm 依赖项",
+    "headings": [
+      "添加 npm 依赖项",
+      "启用从公共 npm 注册表获取依赖项",
+      "在代码存储库中添加依赖项",
+      "手动添加依赖项"
+    ],
+    "characters": 1234
+  },
+  {
+    "path": "/docs/zh/foundry/functions/api-attachments/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/api-attachments",
+    "status": "read",
+    "title": "API: 附件",
+    "headings": [
+      "API: 附件",
+      "函数中的附件",
+      "读取附件数据",
+      "创建附件"
+    ],
+    "characters": 2344
+  },
+  {
+    "path": "/docs/zh/foundry/functions/api-media/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/api-media",
+    "status": "read",
+    "title": "API：媒体",
+    "headings": [
+      "API：媒体",
+      "通用操作",
+      "读取原始媒体数据",
+      "获取媒体元数据",
+      "类型守卫",
+      "文档特定操作",
+      "文本提取",
+      "音频特定操作",
+      "转录"
+    ],
+    "characters": 4074
+  },
+  {
+    "path": "/docs/zh/foundry/functions/api-object-sets/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/api-object-sets",
+    "status": "read",
+    "title": "API：对象集",
+    "headings": [
+      "API：对象集",
+      "对象搜索",
+      "筛选",
+      "组合筛选",
+      "以模糊搜索筛选字符串属性",
+      "模糊匹配任意词元",
+      "模糊匹配所有词元",
+      "字符串数组属性上的模糊匹配",
+      "周边搜索",
+      "K近邻（KNN）",
+      "集合操作",
+      "检索所有对象",
+      "排序和限制",
+      "计算聚合",
+      "通过属性对 Objects 进行分组",
+      "选择聚合指标"
+    ],
+    "characters": 11289
+  },
+  {
+    "path": "/docs/zh/foundry/functions/api-objects-links/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/api-objects-links",
+    "status": "read",
+    "title": "API: Object和链接",
+    "headings": [
+      "API: Object和链接",
+      "属性",
+      "数组属性",
+      "链接类型",
+      "Ontology 元数据",
+      "Object 属性元数据"
+    ],
+    "characters": 3259
+  },
+  {
+    "path": "/docs/zh/foundry/functions/api-ontology-edits/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/api-ontology-edits",
+    "status": "read",
+    "title": "API: Ontology编辑",
+    "headings": [
+      "API: Ontology编辑",
+      "声明编辑函数",
+      "更新属性",
+      "更新链接",
+      "创建对象",
+      "删除Objects"
+    ],
+    "characters": 2245
+  },
+  {
+    "path": "/docs/zh/foundry/functions/chunking/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/chunking",
+    "status": "read",
+    "title": "分块",
+    "headings": [
+      "分块",
+      "分块示例"
+    ],
+    "characters": 2440
+  },
+  {
+    "path": "/docs/zh/foundry/functions/configure-notifications/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/configure-notifications",
+    "status": "read",
+    "title": "配置通知",
+    "headings": [
+      "配置通知",
+      "定义自定义通知",
+      "检索用户和组",
+      "返回接收者"
+    ],
+    "characters": 4084
+  },
+  {
+    "path": "/docs/zh/foundry/functions/create-custom-aggregation/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/create-custom-aggregation",
+    "status": "read",
+    "title": "创建自定义聚合",
+    "headings": [
+      "创建自定义聚合",
+      "加载聚合",
+      "操作聚合结果",
+      "返回聚合结果"
+    ],
+    "characters": 2990
+  },
+  {
+    "path": "/docs/zh/foundry/functions/debug/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/debug",
+    "status": "read",
+    "title": "调试函数",
+    "headings": [
+      "调试函数",
+      "控制台日志记录"
+    ],
+    "characters": 522
+  },
+  {
+    "path": "/docs/zh/foundry/functions/decorators/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/decorators",
+    "status": "read",
+    "title": "装饰器",
+    "headings": [
+      "装饰器"
+    ],
+    "characters": 1515
+  },
+  {
+    "path": "/docs/zh/foundry/functions/edits-generate-id/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/edits-generate-id",
+    "status": "read",
+    "title": "为新Objects生成唯一ID",
+    "headings": [
+      "为新Objects生成唯一ID",
+      "导入包",
+      "在代码中使用包"
+    ],
+    "characters": 1133
+  },
+  {
+    "path": "/docs/zh/foundry/functions/edits-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/edits-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "编辑何时应用",
+      "编辑如何被捕获",
+      "检索编辑后的值",
+      "注意事项：编辑和Object搜索",
+      "手动指定编辑的对象类型",
+      "示例"
+    ],
+    "characters": 5355
+  },
+  {
+    "path": "/docs/zh/foundry/functions/enforced-limits/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/enforced-limits",
+    "status": "read",
+    "title": "强制限制",
+    "headings": [
+      "强制限制",
+      "时间限制",
+      "内存限制",
+      "单线程",
+      "对象集加载限制",
+      "对象集限制"
+    ],
+    "characters": 511
+  },
+  {
+    "path": "/docs/zh/foundry/functions/external-sources/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/external-sources",
+    "status": "read",
+    "title": "函数中的外部来源",
+    "headings": [
+      "函数中的外部来源",
+      "将来源导入到函数库中",
+      "在函数中使用 webhooks",
+      "示例：从一个函数进行多次调用",
+      "错误处理",
+      "示例：处理从单个函数进行多个webhook调用时的出错",
+      "限制",
+      "不支持的webhook特性",
+      "处理函数和webhooks的版本更改",
+      "权限",
+      "监控、故障排除和调试",
+      "最佳实践"
+    ],
+    "characters": 10978
+  },
+  {
+    "path": "/docs/zh/foundry/functions/foo-getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/foo-getting-started",
+    "status": "read",
+    "title": "入门",
+    "headings": [
+      "入门",
+      "导入Ontology类型",
+      "添加一个基于Object的函数",
+      "在实时预览中测试",
+      "发布新的函数",
+      "下一步"
+    ],
+    "characters": 2130
+  },
+  {
+    "path": "/docs/zh/foundry/functions/functions-on-models/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/functions-on-models",
+    "status": "read",
+    "title": "模型上的函数",
+    "headings": [
+      "模型上的函数",
+      "导入实时部署",
+      "编写一个模型支持的函数",
+      "由模型数据集支持的函数",
+      "性能考量"
+    ],
+    "characters": 2076
+  },
+  {
+    "path": "/docs/zh/foundry/functions/functions-on-objects/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/functions-on-objects",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 501
+  },
+  {
+    "path": "/docs/zh/foundry/functions/getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/getting-started",
+    "status": "read",
+    "title": "入门",
+    "headings": [
+      "入门",
+      "创建 TypeScript 函数代码库",
+      "浏览代码库",
+      "添加另一个函数",
+      "在实时预览中测试",
+      "发布函数",
+      "使用新函数",
+      "后续步骤"
+    ],
+    "characters": 1735
+  },
+  {
+    "path": "/docs/zh/foundry/functions/input-output-types/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/input-output-types",
+    "status": "read",
+    "title": "输入和输出类型",
+    "headings": [
+      "输入和输出类型",
+      "标量类型",
+      "非必填类型",
+      "集合",
+      "聚合",
+      "Ontology类型：Objects 和对象集",
+      "主体、用户和组",
+      "搜索 Foundry 用户",
+      "通知",
+      "自定义类型",
+      "其他类型",
+      "参数选项",
+      "非必填参数和默认值",
+      "文档"
+    ],
+    "characters": 5941
+  },
+  {
+    "path": "/docs/zh/foundry/functions/language-models/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/language-models",
+    "status": "read",
+    "title": "函数中的语言模型",
+    "headings": [
+      "函数中的语言模型",
+      "导入语言模型",
+      "编写使用语言模型的函数",
+      "嵌入",
+      "性能注意事项"
+    ],
+    "characters": 2400
+  },
+  {
+    "path": "/docs/zh/foundry/functions/marketplace-functions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/marketplace-functions",
+    "status": "read",
+    "title": "将函数添加到 Marketplace 产品 [Beta]",
+    "headings": [
+      "将函数添加到 Marketplace 产品 [Beta]",
+      "支持的功能",
+      "将函数添加到产品中",
+      "安装时的函数覆盖"
+    ],
+    "characters": 1608
+  },
+  {
+    "path": "/docs/zh/foundry/functions/model-functions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/model-functions",
+    "status": "read",
+    "title": "创建模型函数",
+    "headings": [
+      "创建模型函数",
+      "术语",
+      "模型函数的使用",
+      "如何编写模型函数",
+      "模型函数支持的输入",
+      "模型函数支持的输出",
+      "如何提交模型到建模目标",
+      "如何配置模型以用于Vertex"
+    ],
+    "characters": 1386
+  },
+  {
+    "path": "/docs/zh/foundry/functions/object-identifiers/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/object-identifiers",
+    "status": "read",
+    "title": "Object标识符",
+    "headings": [
+      "Object标识符",
+      "标识符类型",
+      "Object RIDs",
+      "主键",
+      "对代码的影响",
+      "检查相等性",
+      "Object 映射"
+    ],
+    "characters": 1912
+  },
+  {
+    "path": "/docs/zh/foundry/functions/ontology-imports/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/ontology-imports",
+    "status": "read",
+    "title": "导入Object和链接类型",
+    "headings": [
+      "导入Object和链接类型"
+    ],
+    "characters": 801
+  },
+  {
+    "path": "/docs/zh/foundry/functions/optimize-performance/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/optimize-performance",
+    "status": "read",
+    "title": "优化性能",
+    "headings": [
+      "优化性能",
+      "使用性能选项卡提升函数性能",
+      "尽量使用Objects API",
+      "优化链接遍历",
+      "优化派生列生成"
+    ],
+    "characters": 10268
+  },
+  {
+    "path": "/docs/zh/foundry/functions/overview-semantic-search/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/overview-semantic-search",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 499
+  },
+  {
+    "path": "/docs/zh/foundry/functions/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "函数功能支持的语言",
+      "无服务器函数超时",
+      "部署函数超时"
+    ],
+    "characters": 1144
+  },
+  {
+    "path": "/docs/zh/foundry/functions/pdf-handling/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/pdf-handling",
+    "status": "read",
+    "title": "PDF处理",
+    "headings": [
+      "PDF处理",
+      "设置语义搜索以在PDF中进行搜索"
+    ],
+    "characters": 484
+  },
+  {
+    "path": "/docs/zh/foundry/functions/permissions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/permissions",
+    "status": "read",
+    "title": "权限",
+    "headings": [
+      "权限",
+      "函数编写",
+      "Ontology实体权限",
+      "Object加载权限",
+      "已发布函数执行",
+      "函数权限",
+      "Object加载权限"
+    ],
+    "characters": 1725
+  },
+  {
+    "path": "/docs/zh/foundry/functions/python-function-types/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/python-function-types",
+    "status": "read",
+    "title": "类型参考",
+    "headings": [
+      "类型参考",
+      "自定义类型和结构体",
+      "使用dataclasses.dataclass的自定义类型示例",
+      "使用API类型的自定义类型示例（不使用dataclass.dataclass）",
+      "下一步"
+    ],
+    "characters": 3317
+  },
+  {
+    "path": "/docs/zh/foundry/functions/python-functions-advanced-usage/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/python-functions-advanced-usage",
+    "status": "read",
+    "title": "高级用法",
+    "headings": [
+      "高级用法",
+      "发布查询函数",
+      "调用查询函数"
+    ],
+    "characters": 1121
+  },
+  {
+    "path": "/docs/zh/foundry/functions/python-functions-api-calls/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/python-functions-api-calls",
+    "status": "read",
+    "title": "从Python函数进行API调用",
+    "headings": [
+      "从Python函数进行API调用",
+      "配置对外部API的访问",
+      "在函数中使用外部来源"
+    ],
+    "characters": 880
+  },
+  {
+    "path": "/docs/zh/foundry/functions/python-functions-builder/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/python-functions-builder",
+    "status": "read",
+    "title": "在Pipeline Builder中使用Python函数",
+    "headings": [
+      "在Pipeline Builder中使用Python函数",
+      "前提条件",
+      "架构",
+      "在Pipeline Builder管道中使用您的函数",
+      "在Pipeline Builder中进行外部API调用"
+    ],
+    "characters": 1061
+  },
+  {
+    "path": "/docs/zh/foundry/functions/python-functions-on-objects/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/python-functions-on-objects",
+    "status": "read",
+    "title": "对象上的函数",
+    "headings": [
+      "对象上的函数",
+      "生成Python Ontology SDK",
+      "示例"
+    ],
+    "characters": 1518
+  },
+  {
+    "path": "/docs/zh/foundry/functions/python-functions-workshop/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/python-functions-workshop",
+    "status": "read",
+    "title": "在Workshop中使用Python函数",
+    "headings": [
+      "在Workshop中使用Python函数",
+      "先决条件",
+      "架构",
+      "部署Python函数",
+      "在Workshop中使用Python函数",
+      "发布新版本",
+      "调试错误"
+    ],
+    "characters": 1380
+  },
+  {
+    "path": "/docs/zh/foundry/functions/python-getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/python-getting-started",
+    "status": "read",
+    "title": "起始步骤",
+    "headings": [
+      "起始步骤",
+      "创建 Python 函数库",
+      "探索库",
+      "在实时预览中测试",
+      "提交并发布您的函数",
+      "添加另一个函数"
+    ],
+    "characters": 1878
+  },
+  {
+    "path": "/docs/zh/foundry/functions/python-ontology-edits/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/python-ontology-edits",
+    "status": "read",
+    "title": "Ontology 更改",
+    "headings": [
+      "Ontology 更改",
+      "定义编辑函数",
+      "构建 Ontology 编辑容器",
+      "更新属性",
+      "更新链接",
+      "创建Objects",
+      "删除Objects"
+    ],
+    "characters": 3661
+  },
+  {
+    "path": "/docs/zh/foundry/functions/query-functions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/query-functions",
+    "status": "read",
+    "title": "查询",
+    "headings": [
+      "查询",
+      "查询装饰器",
+      "示例：简单查询",
+      "示例: API命名查询",
+      "API 名称验证",
+      "版本和更新 API 命名查询",
+      "搜索和查看查询",
+      "在其他函数库中调用查询"
+    ],
+    "characters": 3331
+  },
+  {
+    "path": "/docs/zh/foundry/functions/resource-imports-sidebar/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/resource-imports-sidebar",
+    "status": "read",
+    "title": "将资源导入代码库",
+    "headings": [
+      "将资源导入代码库",
+      "选择一个 Ontology",
+      "导入资源",
+      "管理导入的资源",
+      "导入没有 API 名称的资源",
+      "启用资源类型"
+    ],
+    "characters": 2043
+  },
+  {
+    "path": "/docs/zh/foundry/functions/undefined-values/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/undefined-values",
+    "status": "read",
+    "title": "处理未定义值",
+    "headings": [
+      "处理未定义值",
+      "显式检查",
+      "非空断言操作符"
+    ],
+    "characters": 959
+  },
+  {
+    "path": "/docs/zh/foundry/functions/unit-test-dates-timestamps/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/unit-test-dates-timestamps",
+    "status": "read",
+    "title": "模拟日期、时间戳和UUID",
+    "headings": [
+      "模拟日期、时间戳和UUID",
+      "UUID函数",
+      "高级UUID函数",
+      "Timestamp.now() 函数",
+      "LocalDate.now() 函数"
+    ],
+    "characters": 7357
+  },
+  {
+    "path": "/docs/zh/foundry/functions/unit-test-debugging/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/unit-test-debugging",
+    "status": "read",
+    "title": "调试",
+    "headings": [
+      "调试",
+      "设置断点",
+      "运行调试器",
+      "检查变量",
+      "桢",
+      "变量",
+      "控制台"
+    ],
+    "characters": 813
+  },
+  {
+    "path": "/docs/zh/foundry/functions/unit-test-getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/unit-test-getting-started",
+    "status": "read",
+    "title": "入门指南",
+    "headings": [
+      "入门指南",
+      "示例",
+      "运行测试",
+      "下一步"
+    ],
+    "characters": 1136
+  },
+  {
+    "path": "/docs/zh/foundry/functions/unit-test-object-searches/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/unit-test-object-searches",
+    "status": "read",
+    "title": "存根对象搜索和聚合",
+    "headings": [
+      "存根对象搜索和聚合",
+      "测试对象集上的筛选",
+      "使用存根测试对象属性上的聚合",
+      "使用存根测试对象",
+      "使用存根测试不同的对象集"
+    ],
+    "characters": 1951
+  },
+  {
+    "path": "/docs/zh/foundry/functions/unit-test-ontology-edits/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/unit-test-ontology-edits",
+    "status": "read",
+    "title": "验证Ontology编辑",
+    "headings": [
+      "验证Ontology编辑",
+      "单数与复数验证方法",
+      "验证Object创建",
+      "验证新创建对象上的编辑",
+      "验证Object属性编辑",
+      "验证对象没有其他编辑",
+      "验证到对象的链接创建",
+      "验证从对象中移除链接",
+      "验证删除Object",
+      "验证多个对象已创建",
+      "异步Ontology编辑",
+      "多重验证"
+    ],
+    "characters": 15242
+  },
+  {
+    "path": "/docs/zh/foundry/functions/unit-test-stub-objects/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/unit-test-stub-objects",
+    "status": "read",
+    "title": "创建存根对象",
+    "headings": [
+      "创建存根对象"
+    ],
+    "characters": 868
+  },
+  {
+    "path": "/docs/zh/foundry/functions/unit-test-users-groups/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/unit-test-users-groups",
+    "status": "read",
+    "title": "模拟用户和组",
+    "headings": [
+      "模拟用户和组",
+      "用户模拟",
+      "分组模拟"
+    ],
+    "characters": 2719
+  },
+  {
+    "path": "/docs/zh/foundry/functions/use-functions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/use-functions",
+    "status": "read",
+    "title": "在平台中使用函数",
+    "headings": [
+      "在平台中使用函数",
+      "Workshop",
+      "变量",
+      "对象表：派生属性",
+      "图表：派生聚合",
+      "操作",
+      "函数支持的操作",
+      "副作用：通知",
+      "副作用：Webhooks",
+      "Slate",
+      "Quiver"
+    ],
+    "characters": 1908
+  },
+  {
+    "path": "/docs/zh/foundry/functions/user-facing-error/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/user-facing-error",
+    "status": "read",
+    "title": "抛出用户界面错误",
+    "headings": [
+      "抛出用户界面错误"
+    ],
+    "characters": 759
+  },
+  {
+    "path": "/docs/zh/foundry/functions/using-custom-models-to-create-a-semantic-search-workflow/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/using-custom-models-to-create-a-semantic-search-workflow",
+    "status": "read",
+    "title": "使用自定义模型创建语义搜索工作流",
+    "headings": [
+      "使用自定义模型创建语义搜索工作流",
+      "1. 使用Foundry中的模型创建嵌入",
+      "2. 创建对象类型",
+      "3. 创建实时建模部署",
+      "4. 在模型上使用函数创建嵌入",
+      "文件结构",
+      "functions-typescript/src/types.ts",
+      "functions-typescript/src/service.ts",
+      "functions-typescript/src/semanticSearch.ts",
+      "functions-typescript/src/index.ts",
+      "5. 发布函数并在示例中使用"
+    ],
+    "characters": 8802
+  },
+  {
+    "path": "/docs/zh/foundry/functions/using-palantir-provided-models-to-create-a-semantic-search-workflow/",
+    "url": "https://www.palantir.com/docs/zh/foundry/functions/using-palantir-provided-models-to-create-a-semantic-search-workflow",
+    "status": "read",
+    "title": "使用Palantir提供的模型创建语义搜索工作流",
+    "headings": [
+      "使用Palantir提供的模型创建语义搜索工作流",
+      "说明",
+      "生成嵌入并创建对象类型",
+      "在Workshop中使用KNN对象集（无代码）创建简单的语义搜索工作流",
+      "使用AIP Agent（无代码）",
+      "创建一个函数以在Workshop或AIP Logic中使用",
+      "functions-typescript/src/index.ts",
+      "在Workshop中使用语义搜索函数",
+      "在AIP Logic中使用语义搜索函数"
+    ],
+    "characters": 3206
+  },
+  {
+    "path": "/docs/zh/foundry/getting-started/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/getting-started/overview",
+    "status": "read",
+    "title": "开始使用Palantir",
+    "headings": [
+      "开始使用Palantir",
+      "获取访问权限",
+      "开始搭建",
+      "继续学习"
+    ],
+    "characters": 841
+  },
+  {
+    "path": "/docs/zh/foundry/interfaces/create-interface/",
+    "url": "https://www.palantir.com/docs/zh/foundry/interfaces/create-interface",
+    "status": "read",
+    "title": "创建界面",
+    "headings": [
+      "创建界面",
+      "创建界面链接类型（非必填）"
+    ],
+    "characters": 635
+  },
+  {
+    "path": "/docs/zh/foundry/interfaces/edit-interface-definition/",
+    "url": "https://www.palantir.com/docs/zh/foundry/interfaces/edit-interface-definition",
+    "status": "read",
+    "title": "编辑接口定义",
+    "headings": [
+      "编辑接口定义",
+      "添加共享属性",
+      "添加链接类型约束",
+      "移除共享属性",
+      "移除或编辑链接类型约束"
+    ],
+    "characters": 485
+  },
+  {
+    "path": "/docs/zh/foundry/interfaces/edit-interface-implementation/",
+    "url": "https://www.palantir.com/docs/zh/foundry/interfaces/edit-interface-implementation",
+    "status": "read",
+    "title": "编辑接口实现",
+    "headings": [
+      "编辑接口实现",
+      "1. 删除接口实现",
+      "更新实现映射"
+    ],
+    "characters": 258
+  },
+  {
+    "path": "/docs/zh/foundry/interfaces/extend-interface/",
+    "url": "https://www.palantir.com/docs/zh/foundry/interfaces/extend-interface",
+    "status": "read",
+    "title": "扩展接口",
+    "headings": [
+      "扩展接口"
+    ],
+    "characters": 433
+  },
+  {
+    "path": "/docs/zh/foundry/interfaces/implement-interface/",
+    "url": "https://www.palantir.com/docs/zh/foundry/interfaces/implement-interface",
+    "status": "read",
+    "title": "实现接口",
+    "headings": [
+      "实现接口",
+      "如何在Ontology Manager中实现接口",
+      "1. 选择您的接口和对象类型",
+      "2. 映射本地属性",
+      "3. 映射链接类型约束",
+      "4. 保存更改",
+      "如何在Pipeline Builder中实现接口",
+      "1. 打开输出类型配置",
+      "2. 选择要实现的接口",
+      "3. 映射本地属性",
+      "4. 查看已实现的接口"
+    ],
+    "characters": 1300
+  },
+  {
+    "path": "/docs/zh/foundry/interfaces/interface-link-types-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/interfaces/interface-link-types-overview",
+    "status": "read",
+    "title": "接口链接类型",
+    "headings": [
+      "接口链接类型",
+      "链接类型约束",
+      "接口链接目标",
+      "对象类型链接目标",
+      "接口链接类型基数"
+    ],
+    "characters": 1321
+  },
+  {
+    "path": "/docs/zh/foundry/interfaces/interface-metadata/",
+    "url": "https://www.palantir.com/docs/zh/foundry/interfaces/interface-metadata",
+    "status": "read",
+    "title": "元数据参考",
+    "headings": [
+      "元数据参考"
+    ],
+    "characters": 644
+  },
+  {
+    "path": "/docs/zh/foundry/interfaces/interface-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/interfaces/interface-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "接口和对象类型之间的区别",
+      "接口类型",
+      "功能接口",
+      "抽象对象接口",
+      "接口示例",
+      "接口权限",
+      "当前支持级别",
+      "开始使用接口"
+    ],
+    "characters": 1899
+  },
+  {
+    "path": "/docs/zh/foundry/logic/aip-logic-integration-automate/",
+    "url": "https://www.palantir.com/docs/zh/foundry/logic/aip-logic-integration-automate",
+    "status": "read",
+    "title": "AIP Logic与自动化的集成",
+    "headings": [
+      "AIP Logic与自动化的集成",
+      "从AIP Logic文件创建新的自动化",
+      "常见问题",
+      "为什么我看不到任何提案？",
+      "为什么创建自动化按钮不可用？",
+      "为什么自动化摘要页面没有条件块？"
+    ],
+    "characters": 798
+  },
+  {
+    "path": "/docs/zh/foundry/logic/compute-usage/",
+    "url": "https://www.palantir.com/docs/zh/foundry/logic/compute-usage",
+    "status": "read",
+    "title": "使用 AIP Logic 计算资源消耗",
+    "headings": [
+      "使用 AIP Logic 计算资源消耗",
+      "核心概念：资源、块和工具",
+      "使用 AIP Logic 测量 Foundry 计算",
+      "AIP LLM 词元",
+      "LLM 块执行",
+      "额外的 Foundry 计算使用",
+      "管理 AIP Logic 对 Foundry 计算的使用",
+      "词元使用",
+      "逻辑块执行总数",
+      "Foundry 计算",
+      "AIP Logic 计算使用示例"
+    ],
+    "characters": 1933
+  },
+  {
+    "path": "/docs/zh/foundry/logic/concepts/",
+    "url": "https://www.palantir.com/docs/zh/foundry/logic/concepts",
+    "status": "read",
+    "title": "核心概念",
+    "headings": [
+      "核心概念",
+      "Logic函数",
+      "块",
+      "提示",
+      "工具",
+      "评估",
+      "调试"
+    ],
+    "characters": 1055
+  },
+  {
+    "path": "/docs/zh/foundry/logic/evaluations-create-suite/",
+    "url": "https://www.palantir.com/docs/zh/foundry/logic/evaluations-create-suite",
+    "status": "read",
+    "title": "创建评估套件",
+    "headings": [
+      "创建评估套件",
+      "添加测试用例",
+      "评估函数",
+      "内置评估函数",
+      "市场部署函数",
+      "自定义评估函数",
+      "配置评估函数"
+    ],
+    "characters": 1285
+  },
+  {
+    "path": "/docs/zh/foundry/logic/evaluations-getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/logic/evaluations-getting-started",
+    "status": "read",
+    "title": "入门",
+    "headings": [
+      "入门"
+    ],
+    "characters": 510
+  },
+  {
+    "path": "/docs/zh/foundry/logic/evaluations-metrics-dashboard/",
+    "url": "https://www.palantir.com/docs/zh/foundry/logic/evaluations-metrics-dashboard",
+    "status": "read",
+    "title": "评估指标仪表盘",
+    "headings": [
+      "评估指标仪表盘"
+    ],
+    "characters": 198
+  },
+  {
+    "path": "/docs/zh/foundry/logic/evaluations-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/logic/evaluations-overview",
+    "status": "read",
+    "title": "评估",
+    "headings": [
+      "评估",
+      "核心概念"
+    ],
+    "characters": 316
+  },
+  {
+    "path": "/docs/zh/foundry/logic/faq/",
+    "url": "https://www.palantir.com/docs/zh/foundry/logic/faq",
+    "status": "read",
+    "title": "AIP Logic 常见问题解答",
+    "headings": [
+      "AIP Logic 常见问题解答",
+      "我如何将 AIP Logic 与平台的其他部分一起使用？",
+      "我如何减少我的词元计数？",
+      "什么时候我应该将我的 Logic 函数保留在一个块中，而不是拆分成多个块？",
+      "我如何提高 AIP Logic 块的性能？",
+      "有没有办法修改 LLM 或其他模型参数的温度？",
+      "可以使用Logic支持语义搜索工作流吗？",
+      "LLM如何从反馈中“学习”？",
+      "如何确保我的Logic输出是正确的？",
+      "我可以查看我Logic的以前版本吗？",
+      "一个LLM块可以返回多个值吗？",
+      "我可以配置我的工具提供给LLM块的Object数量吗？",
+      "为什么我的函数在AIP Logic调试器中成功执行，但在Workshop或通过API调用时失败？"
+    ],
+    "characters": 2406
+  },
+  {
+    "path": "/docs/zh/foundry/logic/getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/logic/getting-started",
+    "status": "read",
+    "title": "入门指南",
+    "headings": [
+      "入门指南",
+      "访问 AIP Logic",
+      "应用界面",
+      "工作流概述",
+      "输入、块和输出配置",
+      "输入",
+      "块",
+      "创建变量",
+      "获取对象属性",
+      "使用 LLM",
+      "变换块",
+      "应用操作块",
+      "执行块",
+      "提示",
+      "工具",
+      "输出",
+      "调试器",
+      "运行面板",
+      "使用 Logic 函数",
+      "使用 Logic 函数进行 Ontology 编辑",
+      "下一步"
+    ],
+    "characters": 3814
+  },
+  {
+    "path": "/docs/zh/foundry/logic/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/logic/overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 680
+  },
+  {
+    "path": "/docs/zh/foundry/map/actions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/actions",
+    "status": "read",
+    "title": "操作",
+    "headings": [
+      "操作",
+      "对形状和点的操作",
+      "对Ontology Objects的操作"
+    ],
+    "characters": 543
+  },
+  {
+    "path": "/docs/zh/foundry/map/add-to-map/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/add-to-map",
+    "status": "read",
+    "title": "将数据添加到地图",
+    "headings": [
+      "将数据添加到地图",
+      "添加 Ontology 对象",
+      "筛选对象",
+      "选择并添加结果",
+      "地理空间搜索对象",
+      "添加地图叠加层",
+      "周围搜索"
+    ],
+    "characters": 1327
+  },
+  {
+    "path": "/docs/zh/foundry/map/annotations/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/annotations",
+    "status": "read",
+    "title": "注释",
+    "headings": [
+      "注释",
+      "创建注释",
+      "编辑注释",
+      "注释样式"
+    ],
+    "characters": 854
+  },
+  {
+    "path": "/docs/zh/foundry/map/control-panel/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/control-panel",
+    "status": "read",
+    "title": "控制面板",
+    "headings": [
+      "控制面板",
+      "地图默认设置",
+      "配置数据加载",
+      "API 密钥",
+      "Mapbox：在地图上启用查找位置",
+      "Bing地图：启用Bing地图基础图层"
+    ],
+    "characters": 677
+  },
+  {
+    "path": "/docs/zh/foundry/map/core-concepts/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/core-concepts",
+    "status": "read",
+    "title": "核心概念",
+    "headings": [
+      "核心概念",
+      "图层",
+      "Object样式",
+      "时间选择"
+    ],
+    "characters": 551
+  },
+  {
+    "path": "/docs/zh/foundry/map/create-save-maps/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/create-save-maps",
+    "status": "read",
+    "title": "创建、保存和导出地图",
+    "headings": [
+      "创建、保存和导出地图",
+      "创建新地图",
+      "保存地图",
+      "导出地图"
+    ],
+    "characters": 340
+  },
+  {
+    "path": "/docs/zh/foundry/map/events/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/events",
+    "status": "read",
+    "title": "事件",
+    "headings": [
+      "事件",
+      "使用事件进行样式设计",
+      "与Object相关联的事件",
+      "在系列面板上显示",
+      "在标签中显示计数"
+    ],
+    "characters": 792
+  },
+  {
+    "path": "/docs/zh/foundry/map/getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/getting-started",
+    "status": "read",
+    "title": "入门指南",
+    "headings": [
+      "入门指南",
+      "创建新地图",
+      "Map应用程序界面概览",
+      "向地图添加Object",
+      "周边搜索关联Object",
+      "地理空间搜索"
+    ],
+    "characters": 1479
+  },
+  {
+    "path": "/docs/zh/foundry/map/histogram/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/histogram",
+    "status": "read",
+    "title": "直方图",
+    "headings": [
+      "直方图",
+      "使用直方图",
+      "选择",
+      "筛选"
+    ],
+    "characters": 919
+  },
+  {
+    "path": "/docs/zh/foundry/map/integrate-actions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/integrate-actions",
+    "status": "read",
+    "title": "Ontology 操作",
+    "headings": [
+      "Ontology 操作",
+      "点操作",
+      "形状操作",
+      "使用操作编辑对象geoshape属性"
+    ],
+    "characters": 807
+  },
+  {
+    "path": "/docs/zh/foundry/map/integrate-objects/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/integrate-objects",
+    "status": "read",
+    "title": "Ontology Object",
+    "headings": [
+      "Ontology Object",
+      "配置地理空间对象",
+      "点",
+      "圆形",
+      "多边形和线条",
+      "H3 六边形",
+      "地理校正图像",
+      "来自媒体集的切片影像 [测试版]",
+      "轨迹",
+      "时间序列和时间序列属性",
+      "事件",
+      "地图上的事件对象",
+      "链接到地图上对象的事件对象",
+      "搜索周围",
+      "链接搜索周围",
+      "合并链接搜索周围",
+      "将中介对象类型设置为始终链接合并",
+      "设置特定的链接遍历以进行链接合并",
+      "搜索周围函数",
+      "派生属性函数"
+    ],
+    "characters": 5093
+  },
+  {
+    "path": "/docs/zh/foundry/map/integrate-searcharound-functions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/integrate-searcharound-functions",
+    "status": "read",
+    "title": "地图搜索周围函数",
+    "headings": [
+      "地图搜索周围函数",
+      "实现地图搜索周围函数",
+      "返回类型",
+      "参数",
+      "提示和故障排除",
+      "示例"
+    ],
+    "characters": 5767
+  },
+  {
+    "path": "/docs/zh/foundry/map/layer-editor/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/layer-editor",
+    "status": "read",
+    "title": "地图图层编辑器",
+    "headings": [
+      "地图图层编辑器",
+      "创建新地图图层",
+      "矢量图层",
+      "栅格图层",
+      "对象图层",
+      "Mapbox JSON 图层"
+    ],
+    "characters": 1283
+  },
+  {
+    "path": "/docs/zh/foundry/map/layer-management/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/layer-management",
+    "status": "read",
+    "title": "图层管理",
+    "headings": [
+      "图层管理",
+      "切换图层可见性",
+      "重命名图层",
+      "重新排序图层",
+      "移动对象到新的或现有的图层"
+    ],
+    "characters": 316
+  },
+  {
+    "path": "/docs/zh/foundry/map/map-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/map-overview",
+    "status": "read",
+    "title": "地图界面概述",
+    "headings": [
+      "地图界面概述",
+      "面板",
+      "工具栏"
+    ],
+    "characters": 531
+  },
+  {
+    "path": "/docs/zh/foundry/map/marketplace-map-templates/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/marketplace-map-templates",
+    "status": "read",
+    "title": "将地图模板添加到Marketplace产品 [Beta]",
+    "headings": [
+      "将地图模板添加到Marketplace产品 [Beta]",
+      "支持的功能",
+      "将地图模板添加到产品中"
+    ],
+    "characters": 228
+  },
+  {
+    "path": "/docs/zh/foundry/map/navigation/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/navigation",
+    "status": "read",
+    "title": "导航",
+    "headings": [
+      "导航",
+      "基本地图控件",
+      "将地图居中于项目",
+      "使用查找面板",
+      "在地图上查找Objects",
+      "查找位置",
+      "导航到坐标"
+    ],
+    "characters": 687
+  },
+  {
+    "path": "/docs/zh/foundry/map/objects-high-scale/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/objects-high-scale",
+    "status": "read",
+    "title": "显示高规模对象数据 [Beta]",
+    "headings": [
+      "显示高规模对象数据 [Beta]",
+      "启用高规模渲染",
+      "添加具有高规模渲染的对象",
+      "高规模渲染功能兼容性",
+      "样式选项",
+      "筛选",
+      "形状"
+    ],
+    "characters": 815
+  },
+  {
+    "path": "/docs/zh/foundry/map/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/overview",
+    "status": "read",
+    "title": "概览",
+    "headings": [
+      "概览",
+      "地图上的地理空间数据"
+    ],
+    "characters": 422
+  },
+  {
+    "path": "/docs/zh/foundry/map/selection/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/selection",
+    "status": "read",
+    "title": "选择",
+    "headings": [
+      "选择",
+      "在地图上选择项目",
+      "使用直方图选择项目",
+      "在地图上锁定Object",
+      "选择面板",
+      "从地图中移除项目"
+    ],
+    "characters": 1595
+  },
+  {
+    "path": "/docs/zh/foundry/map/settings/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/settings",
+    "status": "read",
+    "title": "设置",
+    "headings": [
+      "设置",
+      "单位",
+      "启用GeoJSON面板",
+      "轮询间隔",
+      "时区",
+      "启用实验性标签"
+    ],
+    "characters": 568
+  },
+  {
+    "path": "/docs/zh/foundry/map/shapes/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/shapes",
+    "status": "read",
+    "title": "形状",
+    "headings": [
+      "形状",
+      "创建形状",
+      "绘制形状",
+      "从选择中创建",
+      "修改形状",
+      "使用活动形状执行操作",
+      "测量"
+    ],
+    "characters": 1058
+  },
+  {
+    "path": "/docs/zh/foundry/map/templates/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/templates",
+    "status": "read",
+    "title": "地图模板",
+    "headings": [
+      "地图模板",
+      "创建地图模板",
+      "配置地图模板",
+      "参数",
+      "Search Arounds",
+      "图层",
+      "系列",
+      "界面",
+      "使用地图模板"
+    ],
+    "characters": 1268
+  },
+  {
+    "path": "/docs/zh/foundry/map/time-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/time-overview",
+    "status": "read",
+    "title": "地图中的时间和时间数据",
+    "headings": [
+      "地图中的时间和时间数据",
+      "时间序列",
+      "事件",
+      "轨迹"
+    ],
+    "characters": 395
+  },
+  {
+    "path": "/docs/zh/foundry/map/time-selection/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/time-selection",
+    "status": "read",
+    "title": "时间选择",
+    "headings": [
+      "时间选择",
+      "更改选择的时间",
+      "查看最新数据",
+      "更改时间窗口"
+    ],
+    "characters": 316
+  },
+  {
+    "path": "/docs/zh/foundry/map/time-series/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/time-series",
+    "status": "read",
+    "title": "时间序列",
+    "headings": [
+      "时间序列",
+      "探索相关时间序列",
+      "使用时间序列进行样式设置"
+    ],
+    "characters": 656
+  },
+  {
+    "path": "/docs/zh/foundry/map/timeline/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/timeline",
+    "status": "read",
+    "title": "时间轴",
+    "headings": [
+      "时间轴",
+      "查看时间事件",
+      "筛选时间事件",
+      "更改光标位置",
+      "展开时间轴",
+      "设置时间轴样式",
+      "跟踪面包屑",
+      "时间轴播放"
+    ],
+    "characters": 1022
+  },
+  {
+    "path": "/docs/zh/foundry/map/visualize-objects/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/visualize-objects",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "编辑图层样式",
+      "图层样式",
+      "标签和工具提示",
+      "对象图层的标签内容",
+      "几何图形",
+      "图例",
+      "基于值的样式",
+      "颜色样式",
+      "固定",
+      "基于值",
+      "数值样式",
+      "固定",
+      "基于值",
+      "不透明度样式",
+      "几何图形按缩放级别的可见性"
+    ],
+    "characters": 2762
+  },
+  {
+    "path": "/docs/zh/foundry/map/visualize-points/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/visualize-points",
+    "status": "read",
+    "title": "点几何图形",
+    "headings": [
+      "点几何图形",
+      "图标配置",
+      "图标",
+      "旋转",
+      "标记形状",
+      "圆形配置"
+    ],
+    "characters": 729
+  },
+  {
+    "path": "/docs/zh/foundry/map/visualize-polygons-lines/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/visualize-polygons-lines",
+    "status": "read",
+    "title": "多边形和线几何图形",
+    "headings": [
+      "多边形和线几何图形",
+      "笔触宽度",
+      "笔触样式",
+      "填充多边形"
+    ],
+    "characters": 481
+  },
+  {
+    "path": "/docs/zh/foundry/map/visualize-tracks/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/visualize-tracks",
+    "status": "read",
+    "title": "轨迹几何",
+    "headings": [
+      "轨迹几何",
+      "移动几何插值",
+      "轨迹线",
+      "轨迹面包屑"
+    ],
+    "characters": 742
+  },
+  {
+    "path": "/docs/zh/foundry/map/widget/",
+    "url": "https://www.palantir.com/docs/zh/foundry/map/widget",
+    "status": "read",
+    "title": "在 Workshop 模块中嵌入地图模板",
+    "headings": [
+      "在 Workshop 模块中嵌入地图模板",
+      "在 Workshop 中添加地图应用模板微件",
+      "选择资源",
+      "配置微件"
+    ],
+    "characters": 1901
+  },
+  {
+    "path": "/docs/zh/foundry/model-integration/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/model-integration/overview",
+    "status": "read",
+    "title": "模型连接和开发",
+    "headings": [
+      "模型连接和开发",
+      "来源",
+      "建模目标",
+      "Ontology中的模型"
+    ],
+    "characters": 947
+  },
+  {
+    "path": "/docs/zh/foundry/object-backend/aggregation-considerations/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-backend/aggregation-considerations",
+    "status": "read",
+    "title": "聚合注意事项",
+    "headings": [
+      "聚合注意事项",
+      "Object Explorer 和 Workshop",
+      "Quiver 透视表和 Workshop 透视表",
+      "Ontology SDK (OSDK)",
+      "函数"
+    ],
+    "characters": 2750
+  },
+  {
+    "path": "/docs/zh/foundry/object-backend/object-storage-v2-breaking-changes/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-backend/object-storage-v2-breaking-changes",
+    "status": "read",
+    "title": "Object Storage v1与Object Storage v2之间的重大变更",
+    "headings": [
+      "Object Storage v1与Object Storage v2之间的重大变更",
+      "永久性重大变更",
+      "临时性重大变更"
+    ],
+    "characters": 2435
+  },
+  {
+    "path": "/docs/zh/foundry/object-backend/osv1-osv2-migration/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-backend/osv1-osv2-migration",
+    "status": "read",
+    "title": "从对象存储 V1 (Phonograph) 迁移到对象存储 V2",
+    "headings": [
+      "从对象存储 V1 (Phonograph) 迁移到对象存储 V2",
+      "运行迁移前的考虑事项",
+      "迁移行为",
+      "不兼容的使用",
+      "非阻塞不兼容使用",
+      "阻塞不兼容使用",
+      "无不兼容使用",
+      "迁移实体",
+      "启动迁移",
+      "过渡窗口",
+      "浸泡期",
+      "迁移数据输出数据集",
+      "中止迁移",
+      "同步失败",
+      "批量迁移"
+    ],
+    "characters": 3449
+  },
+  {
+    "path": "/docs/zh/foundry/object-backend/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-backend/overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "功能组件和架构",
+      "Ontology 元数据服务 (OMS)",
+      "对象数据库",
+      "对象集服务 (OSS)",
+      "对象集",
+      "操作",
+      "对象数据漏斗",
+      "对象上的函数",
+      "Ontology 后端的演变",
+      "对象存储 V1 (Phonograph) 架构",
+      "对象存储 V2 架构"
+    ],
+    "characters": 2909
+  },
+  {
+    "path": "/docs/zh/foundry/object-databases/object-storage-v1/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-databases/object-storage-v1",
+    "status": "read",
+    "title": "[遗留] Object Storage v1 (Phonograph)",
+    "headings": [
+      "[遗留] Object Storage v1 (Phonograph)",
+      "目的",
+      "注册",
+      "索引状态",
+      "增量和批量重新索引"
+    ],
+    "characters": 1321
+  },
+  {
+    "path": "/docs/zh/foundry/object-edits/how-edits-applied/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-edits/how-edits-applied",
+    "status": "read",
+    "title": "用户编辑的应用方式",
+    "headings": [
+      "用户编辑的应用方式",
+      "通过操作编辑对象",
+      "实时数据上的用户编辑",
+      "如何丢弃/清除/删除现有用户编辑",
+      "Ontology实体版本控制",
+      "前端消费者与操作服务器之间的实体版本控制",
+      "操作服务器内的实体版本控制",
+      "对象存储V1（Phonograph）",
+      "对象存储V2",
+      "跨后端操作",
+      "用户编辑的持久存储",
+      "解决用户编辑和数据源更新冲突",
+      "策略1：应用用户编辑（默认）",
+      "策略2：应用最新值",
+      "配置",
+      "行为",
+      "仅编辑属性",
+      "仅考虑输入数据源值"
+    ],
+    "characters": 6596
+  },
+  {
+    "path": "/docs/zh/foundry/object-edits/materializations/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-edits/materializations",
+    "status": "read",
+    "title": "物化",
+    "headings": [
+      "物化",
+      "物化的应用案例",
+      "创建物化数据集",
+      "数据输出数据集与物化数据集的比较",
+      "数据输出和物化数据集中的搭建计划",
+      "数据输出和物化数据集的保留",
+      "数据输出和物化数据集中的数据集架构",
+      "数据输出和物化数据集中的限制视图"
+    ],
+    "characters": 2467
+  },
+  {
+    "path": "/docs/zh/foundry/object-edits/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-edits/overview",
+    "status": "read",
+    "title": "Object编辑和物化",
+    "headings": [
+      "Object编辑和物化"
+    ],
+    "characters": 449
+  },
+  {
+    "path": "/docs/zh/foundry/object-edits/permission-checks/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-edits/permission-checks",
+    "status": "read",
+    "title": "应用操作时的权限检查",
+    "headings": [
+      "应用操作时的权限检查",
+      "单数据源Object的编辑",
+      "多数据源Object的编辑",
+      "创建Object",
+      "编辑或修改Object",
+      "删除Object",
+      "创建链接",
+      "删除链接"
+    ],
+    "characters": 1457
+  },
+  {
+    "path": "/docs/zh/foundry/object-edits/schema-migrations/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-edits/schema-migrations",
+    "status": "read",
+    "title": "管理模式更改",
+    "headings": [
+      "管理模式更改",
+      "更改对象类型模式",
+      "示例工作流",
+      "重大模式更改列表",
+      "非重大模式更改列表",
+      "OSv2中支持的模式迁移列表"
+    ],
+    "characters": 2151
+  },
+  {
+    "path": "/docs/zh/foundry/object-edits/user-edit-history/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-edits/user-edit-history",
+    "status": "read",
+    "title": "启用用户编辑历史",
+    "headings": [
+      "启用用户编辑历史",
+      "常见问题和注意事项",
+      "禁用编辑历史"
+    ],
+    "characters": 669
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/apply-actions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/apply-actions",
+    "status": "read",
+    "title": "应用操作",
+    "headings": [
+      "应用操作",
+      "操作",
+      "在其他应用中打开",
+      "导出"
+    ],
+    "characters": 475
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/compare-object-sets/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/compare-object-sets",
+    "status": "read",
+    "title": "比较对象集",
+    "headings": [
+      "比较对象集",
+      "进入比较模式",
+      "筛选",
+      "协作",
+      "保存比较视图",
+      "共享比较视图",
+      "搜索比较视图"
+    ],
+    "characters": 961
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/configure/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/configure",
+    "status": "read",
+    "title": "配置Object Explorer",
+    "headings": [
+      "配置Object Explorer",
+      "首页可自定义Object类型分组",
+      "从操作成功提示链接到Object视图",
+      "在Object Explorer中隐藏操作",
+      "动态对象集上的操作",
+      "默认设计管理用户"
+    ],
+    "characters": 2709
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/explore-charts/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/explore-charts",
+    "status": "read",
+    "title": "使用图表进行探索",
+    "headings": [
+      "使用图表进行探索",
+      "图表",
+      "添加、移除和排序图表",
+      "链接对象上的图表",
+      "图表类型",
+      "Listogram",
+      "饼图",
+      "直方图",
+      "网格图",
+      "单一统计",
+      "统计表",
+      "地图",
+      "撤销和重做对探索的更改",
+      "保存设计",
+      "预览面板"
+    ],
+    "characters": 2721
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/filter-results/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/filter-results",
+    "status": "read",
+    "title": "筛选结果",
+    "headings": [
+      "筛选结果",
+      "搜索栏",
+      "以属性（主要对象类型）筛选",
+      "以关键词筛选",
+      "添加术语修饰符",
+      "添加逻辑运算符（AND/OR）",
+      "以链接筛选"
+    ],
+    "characters": 1563
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/generate-urls/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/generate-urls",
+    "status": "read",
+    "title": "生成 Object Explorer 链接",
+    "headings": [
+      "生成 Object Explorer 链接",
+      "生成仅关键字搜索",
+      "链接到探索",
+      "[高级] 生成复杂搜索"
+    ],
+    "characters": 3158
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/getting-started",
+    "status": "read",
+    "title": "入门",
+    "headings": [
+      "入门",
+      "全局搜索栏 (A)",
+      "分组探索 (B, C, D)",
+      "使用对象类型分组进行搜索 (B)",
+      "在图上探索对象类型组 (D)",
+      "预览对象类型 (E)",
+      "添加对象类型为收藏 (F)",
+      "探索与列表 (G)"
+    ],
+    "characters": 1245
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 508
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/pivot-linked/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/pivot-linked",
+    "status": "read",
+    "title": "通过旋转探索关联对象",
+    "headings": [
+      "通过旋转探索关联对象"
+    ],
+    "characters": 414
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/save-explorations/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/save-explorations",
+    "status": "read",
+    "title": "保存探索",
+    "headings": [
+      "保存探索",
+      "保存探索",
+      "访问已保存的探索"
+    ],
+    "characters": 542
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/save-lists/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/save-lists",
+    "status": "read",
+    "title": "保存列表",
+    "headings": [
+      "保存列表",
+      "保存列表",
+      "访问保存的列表"
+    ],
+    "characters": 608
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/search-objects/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/search-objects",
+    "status": "read",
+    "title": "搜索Objects",
+    "headings": [
+      "搜索Objects",
+      "使用侧边栏导航",
+      "结果类型",
+      "排序结果",
+      "探索链接到特定结果的Objects"
+    ],
+    "characters": 1227
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/search-syntax/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/search-syntax",
+    "status": "read",
+    "title": "搜索语法",
+    "headings": [
+      "搜索语法",
+      "引号",
+      "逻辑运算符 (AND/OR)",
+      "通配符",
+      "模糊搜索"
+    ],
+    "characters": 870
+  },
+  {
+    "path": "/docs/zh/foundry/object-explorer/view-results/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-explorer/view-results",
+    "status": "read",
+    "title": "查看结果",
+    "headings": [
+      "查看结果",
+      "按列排序表格",
+      "配置列",
+      "更改列顺序",
+      "调整列大小",
+      "添加和删除列",
+      "预览结果",
+      "查看时间序列属性",
+      "行内编辑"
+    ],
+    "characters": 1356
+  },
+  {
+    "path": "/docs/zh/foundry/object-indexing/faq/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-indexing/faq",
+    "status": "read",
+    "title": "常见问题解答",
+    "headings": [
+      "常见问题解答",
+      "如何知道一个对象类型何时已被索引到 OSv2 中？",
+      "为什么即使之前成功注册到 Object Storage v1（Phonograph），索引任务仍可能失败？",
+      "其中一个任务失败了，但如果我重试可能会成功。我该如何触发重建？",
+      "索引的数据大小是否有限制？",
+      "我可以回填大规模历史数据到具有流数据源的对象类型吗？",
+      "流入 Ontology 的预期延迟是多少？",
+      "流入 Ontology 的预期吞吐量是多少？",
+      "使用 Ontology 中的流数据源时，我可以指定一个时间戳以便对我的对象进行去重吗？",
+      "Ontology 流支持变更数据捕获 (CDC) 工作流吗？",
+      "使用流数据源时，我可以将部分行写入 Ontology 吗？我可以一次更新几个属性而不是提供整个对象吗？",
+      "我可以使用 Ontology 流处理多对多链接类型吗？",
+      "除了 Object Storage v2（物化或自动化等）外，流是否支持其他对象数据库？",
+      "流数据源的对象类型是否支持物化？",
+      "我的 Funnel 流管道一直在运行。我该如何取消它？",
+      "如何在不中断的情况下将我的流数据源从一个流切换到另一个流？",
+      "可能导致意外后果的一些常见错误是什么？",
+      "Ontology 流的成本是多少？",
+      "保留窗口如何工作？",
+      "为什么我的流源被批处理索引或由于重复错误而失败？",
+      "我可以通过Ontology 函数查询具有流数据源的对象类型吗？"
+    ],
+    "characters": 3119
+  },
+  {
+    "path": "/docs/zh/foundry/object-indexing/funnel-batch-pipelines/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-indexing/funnel-batch-pipelines",
+    "status": "read",
+    "title": "Funnel批处理管道",
+    "headings": [
+      "Funnel批处理管道",
+      "Funnel批处理管道的组成部分",
+      "更改记录",
+      "合并更改",
+      "索引",
+      "数据灌注",
+      "实时和替换Funnel管道",
+      "实时管道",
+      "替换管道",
+      "增量和全量重新索引",
+      "增量索引（默认）",
+      "增量数据集的增量索引",
+      "全量重新索引（特殊情况）",
+      "监控 Funnel 管道",
+      "调试管道"
+    ],
+    "characters": 3432
+  },
+  {
+    "path": "/docs/zh/foundry/object-indexing/funnel-streaming-pipelines/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-indexing/funnel-streaming-pipelines",
+    "status": "read",
+    "title": "Funnel流式管道",
+    "headings": [
+      "Funnel流式管道",
+      "流式Object类型的当前产品限制",
+      "配置流式Object类型",
+      "调试流式管道"
+    ],
+    "characters": 1405
+  },
+  {
+    "path": "/docs/zh/foundry/object-indexing/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-indexing/overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 373
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/allow-editing/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/allow-editing",
+    "status": "read",
+    "title": "允许用户编辑Objects和链接",
+    "headings": [
+      "允许用户编辑Objects和链接",
+      "从Foundry Object应用程序编辑数据",
+      "从外部应用程序编辑数据",
+      "设置先决条件"
+    ],
+    "characters": 1024
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/conditional-formatting/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/conditional-formatting",
+    "status": "read",
+    "title": "添加条件格式化",
+    "headings": [
+      "添加条件格式化",
+      "使用规则编辑器编辑规则",
+      "复制规则",
+      "常见问题",
+      "这是否适用于现有类型类？",
+      "这是否适用于Object Views中的可编辑属性？"
+    ],
+    "characters": 1831
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/create-link-type/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/create-link-type",
+    "status": "read",
+    "title": "创建链接类型",
+    "headings": [
+      "创建链接类型",
+      "配置新链接类型",
+      "故障排除",
+      "出错: Phonograph2:DatasetAndBranchAlreadyRegistered"
+    ],
+    "characters": 1980
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/create-object-type/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/create-object-type",
+    "status": "read",
+    "title": "创建 Object 类型",
+    "headings": [
+      "创建 Object 类型",
+      "使用助手创建新 Object 类型",
+      "创建新 Object 类型并添加支持数据源",
+      "选择支持数据源",
+      "Object 类型元数据",
+      "为 Object 类型创建属性",
+      "配置主键和标题键",
+      "生成操作",
+      "完成新 Object 类型",
+      "手动创建新 Object 类型",
+      "为新 Object 类型添加元数据",
+      "为 Object 类型添加组",
+      "为新 Object 类型添加支持数据源",
+      "添加新属性",
+      "将单个属性映射到数据",
+      "将列映射为新属性",
+      "将列映射到现有属性",
+      "将属性映射到列",
+      "将所有未映射的列映射为新属性",
+      "配置主键和标题键",
+      "配置 API 名称",
+      "命名指南",
+      "故障排除",
+      "必填的 Object 类型字段",
+      "有效 ID 检查表",
+      "Object 类型 ID",
+      "属性类型 ID",
+      "API 名称",
+      "错误",
+      "错误：Phonograph2:DatasetAndBranchAlreadyRegistered"
+    ],
+    "characters": 6356
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/create-shared-property/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/create-shared-property",
+    "status": "read",
+    "title": "创建共享属性",
+    "headings": [
+      "创建共享属性"
+    ],
+    "characters": 888
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/create-struct-type/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/create-struct-type",
+    "status": "read",
+    "title": "创建结构属性类型",
+    "headings": [
+      "创建结构属性类型"
+    ],
+    "characters": 402
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/create-value-type/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/create-value-type",
+    "status": "read",
+    "title": "创建值类型",
+    "headings": [
+      "创建值类型"
+    ],
+    "characters": 326
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/edit-link-types/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/edit-link-types",
+    "status": "read",
+    "title": "编辑链接类型",
+    "headings": [
+      "编辑链接类型",
+      "潜在破坏性更改",
+      "无数据输出的链接类型",
+      "启用了数据输出的链接类型",
+      "编辑现有链接类型",
+      "导航到现有链接类型",
+      "删除链接类型",
+      "更改支持数据源",
+      "编辑链接类型的元数据"
+    ],
+    "characters": 2153
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/edit-object-type/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/edit-object-type",
+    "status": "read",
+    "title": "编辑Object类型",
+    "headings": [
+      "编辑Object类型",
+      "潜在破坏性更改",
+      "无数据输出的Object类型",
+      "具有数据输出的Object类型",
+      "编辑现有的Object类型",
+      "导航到现有Object类型",
+      "删除Object类型",
+      "更改支持数据源",
+      "编辑Object类型的元数据",
+      "故障排除",
+      "错误：Phonograph2:FoundryColumnNameNotFound",
+      "错误：Phonograph2:InvalidColumnRemoval",
+      "错误：Phonograph2:InvalidColumnFieldSchemaChange",
+      "错误：OntologyMetadata:IncompatibleFoundryFieldSchemaForPropertyType",
+      "错误：Phonograph2:SchemaMismatch",
+      "错误：FieldTypeIncompatibleWithOntologyPropertyType"
+    ],
+    "characters": 3475
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/edit-only-properties/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/edit-only-properties",
+    "status": "read",
+    "title": "仅编辑属性",
+    "headings": [
+      "仅编辑属性",
+      "仅编辑属性概述",
+      "创建仅编辑属性",
+      "将仅编辑属性映射到数据集列"
+    ],
+    "characters": 707
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/edit-properties/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/edit-properties",
+    "status": "read",
+    "title": "编辑Object类型属性",
+    "headings": [
+      "编辑Object类型属性",
+      "删除属性",
+      "更改属性对应的列",
+      "编辑属性类型的元数据",
+      "批量编辑多个属性"
+    ],
+    "characters": 1454
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/edit-shared-property/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/edit-shared-property",
+    "status": "read",
+    "title": "编辑共享属性",
+    "headings": [
+      "编辑共享属性",
+      "编辑共享属性元数据",
+      "删除共享属性"
+    ],
+    "characters": 1129
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/edit-struct-type/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/edit-struct-type",
+    "status": "read",
+    "title": "编辑结构属性类型",
+    "headings": [
+      "编辑结构属性类型"
+    ],
+    "characters": 292
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/enable-gotham-integration/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/enable-gotham-integration",
+    "status": "read",
+    "title": "通过类型映射启用 Gotham 集成",
+    "headings": [
+      "通过类型映射启用 Gotham 集成",
+      "在 Foundry 的 Ontology Manager 中开启类型映射",
+      "配置 Object 类型的父类别和 Gotham 属性类型"
+    ],
+    "characters": 2444
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/link-type-metadata/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/link-type-metadata",
+    "status": "read",
+    "title": "元数据参考",
+    "headings": [
+      "元数据参考"
+    ],
+    "characters": 1930
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/link-types-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/link-types-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 1116
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/marketplace-ontology-types/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/marketplace-ontology-types",
+    "status": "read",
+    "title": "将Object和链接类型添加到Marketplace产品 [Beta]",
+    "headings": [
+      "将Object和链接类型添加到Marketplace产品 [Beta]",
+      "支持的功能",
+      "将Object类型添加到产品中",
+      "将链接类型添加到产品中",
+      "将共享属性添加到产品中",
+      "将接口类型添加到产品中"
+    ],
+    "characters": 741
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/metadata-render-hints/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/metadata-render-hints",
+    "status": "read",
+    "title": "渲染提示",
+    "headings": [
+      "渲染提示"
+    ],
+    "characters": 1775
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/metadata-statuses/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/metadata-statuses",
+    "status": "read",
+    "title": "状态",
+    "headings": [
+      "状态",
+      "不允许的操作",
+      "编辑状态",
+      "批量编辑状态",
+      "属性",
+      "Object类型",
+      "故障排除",
+      "属性状态与链接类型状态之间的冲突",
+      "Object类型状态与链接类型状态之间的冲突"
+    ],
+    "characters": 2153
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/metadata-typeclasses/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/metadata-typeclasses",
+    "status": "read",
+    "title": "类型类",
+    "headings": [
+      "类型类"
+    ],
+    "characters": 6553
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/object-type-metadata/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/object-type-metadata",
+    "status": "read",
+    "title": "元数据参考",
+    "headings": [
+      "元数据参考"
+    ],
+    "characters": 1188
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/object-types-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/object-types-overview",
+    "status": "read",
+    "title": "概览",
+    "headings": [
+      "概览"
+    ],
+    "characters": 902
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/properties-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/properties-overview",
+    "status": "read",
+    "title": "概览",
+    "headings": [
+      "概览",
+      "支持的属性类型"
+    ],
+    "characters": 1104
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/property-metadata/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/property-metadata",
+    "status": "read",
+    "title": "元数据参考",
+    "headings": [
+      "元数据参考",
+      "支持有限的属性基本类型"
+    ],
+    "characters": 1870
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/required-properties/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/required-properties",
+    "status": "read",
+    "title": "必填属性",
+    "headings": [
+      "必填属性",
+      "必填属性摘要",
+      "创建必填属性",
+      "多个支持数据源的对象类型的必填属性"
+    ],
+    "characters": 1837
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/shared-property-metadata/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/shared-property-metadata",
+    "status": "read",
+    "title": "元数据参考",
+    "headings": [
+      "元数据参考"
+    ],
+    "characters": 806
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/shared-property-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/shared-property-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 512
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/struct-automapping/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/struct-automapping",
+    "status": "read",
+    "title": "自动映射结构属性",
+    "headings": [
+      "自动映射结构属性",
+      "在Ontology Manager中自动映射结构类型",
+      "在Pipeline Builder中自动映射结构类型"
+    ],
+    "characters": 462
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/struct-shared-properties/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/struct-shared-properties",
+    "status": "read",
+    "title": "结构属性和共享属性类型",
+    "headings": [
+      "结构属性和共享属性类型",
+      "创建一个结构类型的共享属性",
+      "附加一个结构类型的共享属性",
+      "将结构属性类型转换为共享属性"
+    ],
+    "characters": 695
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/structs-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/structs-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "Struct 配置",
+      "当前支持水平"
+    ],
+    "characters": 984
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/type-groups/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/type-groups",
+    "status": "read",
+    "title": "Object 类型组",
+    "headings": [
+      "Object 类型组",
+      "组配置",
+      "组搜索与发现",
+      "组权限",
+      "传统组迁移",
+      "组名称可见性",
+      "局部可见组的迁移"
+    ],
+    "characters": 1163
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/type-reference/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/type-reference",
+    "status": "read",
+    "title": "类型参考",
+    "headings": [
+      "类型参考",
+      "Ontology类型",
+      "Object类型",
+      "属性",
+      "共享属性",
+      "链接类型",
+      "操作类型",
+      "接口",
+      "数据类型",
+      "字段类型",
+      "基础类型",
+      "值类型"
+    ],
+    "characters": 1638
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/use-shared-property/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/use-shared-property",
+    "status": "read",
+    "title": "在对象类型上使用共享属性",
+    "headings": [
+      "在对象类型上使用共享属性",
+      "从对象中分离共享属性"
+    ],
+    "characters": 552
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/use-value-type/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/use-value-type",
+    "status": "read",
+    "title": "使用值类型",
+    "headings": [
+      "使用值类型"
+    ],
+    "characters": 360
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/value-formatting/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/value-formatting",
+    "status": "read",
+    "title": "支持的值格式化",
+    "headings": [
+      "支持的值格式化",
+      "添加值格式化",
+      "数字格式化选项",
+      "日期和时间格式化选项",
+      "时区",
+      "用户ID格式化",
+      "常见问题",
+      "这会与现有的类型类一起工作吗？",
+      "这会与Object Views中的可编辑属性一起工作吗？"
+    ],
+    "characters": 1759
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/value-type-constraints/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/value-type-constraints",
+    "status": "read",
+    "title": "值类型约束",
+    "headings": [
+      "值类型约束"
+    ],
+    "characters": 747
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/value-types-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/value-types-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 790
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/value-types-permissions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/value-types-permissions",
+    "status": "read",
+    "title": "值类型权限",
+    "headings": [
+      "值类型权限"
+    ],
+    "characters": 231
+  },
+  {
+    "path": "/docs/zh/foundry/object-link-types/value-types-versions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-link-types/value-types-versions",
+    "status": "read",
+    "title": "值类型版本",
+    "headings": [
+      "值类型版本"
+    ],
+    "characters": 349
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/actions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/actions",
+    "status": "read",
+    "title": "操作",
+    "headings": [
+      "操作",
+      "配置操作",
+      "受影响的对象",
+      "操作可见性设置",
+      "权限"
+    ],
+    "characters": 652
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/activity/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/activity",
+    "status": "read",
+    "title": "活动",
+    "headings": [
+      "活动",
+      "活动事件类型",
+      "监视器触发",
+      "监视器恢复",
+      "条件编辑",
+      "已订阅",
+      "已取消订阅",
+      "评估失败",
+      "静音",
+      "取消静音",
+      "禁用",
+      "启用"
+    ],
+    "characters": 792
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/condition/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/condition",
+    "status": "read",
+    "title": "条件",
+    "headings": [
+      "条件",
+      "事件",
+      "阈值",
+      "函数支持"
+    ],
+    "characters": 1527
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/create_new_object_monitor/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/create_new_object_monitor",
+    "status": "read",
+    "title": "创建一个新Object监视器",
+    "headings": [
+      "创建一个新Object监视器",
+      "从Object Explorer创建",
+      "创建一个Object监视器",
+      "保存后",
+      "从Object监视器应用程序创建"
+    ],
+    "characters": 1126
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/errors/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/errors",
+    "status": "read",
+    "title": "错误参考",
+    "headings": [
+      "错误参考",
+      "评估错误",
+      "监控器不同步",
+      "通知效果错误",
+      "操作效果错误",
+      "权限"
+    ],
+    "characters": 792
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/evaluation/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/evaluation",
+    "status": "read",
+    "title": "评估",
+    "headings": [
+      "评估",
+      "实时评估",
+      "调度监控器",
+      "非实时评估",
+      "手动评估"
+    ],
+    "characters": 1294
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/input/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/input",
+    "status": "read",
+    "title": "输入",
+    "headings": [
+      "输入"
+    ],
+    "characters": 434
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/limits/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/limits",
+    "status": "read",
+    "title": "限制",
+    "headings": [
+      "限制",
+      "规模限制"
+    ],
+    "characters": 434
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/monitor/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/monitor",
+    "status": "read",
+    "title": "监控",
+    "headings": [
+      "监控",
+      "存储",
+      "保留",
+      "过期"
+    ],
+    "characters": 814
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/notifications/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/notifications",
+    "status": "read",
+    "title": "通知",
+    "headings": [
+      "通知",
+      "自定义通知内容",
+      "模板化渲染",
+      "函数支持渲染"
+    ],
+    "characters": 639
+  },
+  {
+    "path": "/docs/zh/foundry/object-monitors/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-monitors/overview",
+    "status": "read",
+    "title": "Object Monitors",
+    "headings": [
+      "Object Monitors",
+      "访问 Object Monitors"
+    ],
+    "characters": 1234
+  },
+  {
+    "path": "/docs/zh/foundry/object-permissioning/configuring-rv-access-controls/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-permissioning/configuring-rv-access-controls",
+    "status": "read",
+    "title": "配置受限视图支持的对象类型",
+    "headings": [
+      "配置受限视图支持的对象类型",
+      "使用受限视图支持对象类型",
+      "安全配置"
+    ],
+    "characters": 1309
+  },
+  {
+    "path": "/docs/zh/foundry/object-permissioning/managing-object-security/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-permissioning/managing-object-security",
+    "status": "read",
+    "title": "管理Object类型和Object实例安全性",
+    "headings": [
+      "管理Object类型和Object实例安全性",
+      "Object输入数据源",
+      "Foundry Ontology中的细粒度访问控制",
+      "Foundry受限视图（RVs）",
+      "多数据源Object类型（MDOs）"
+    ],
+    "characters": 1973
+  },
+  {
+    "path": "/docs/zh/foundry/object-permissioning/multi-datasource-objects/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-permissioning/multi-datasource-objects",
+    "status": "read",
+    "title": "多数据源Object类型（MDOs）",
+    "headings": [
+      "多数据源Object类型（MDOs）",
+      "多数据源Object类型（MDOs）的类型",
+      "配置多数据源Object类型",
+      "常见问题解答",
+      "多数据源Object类型是否可用于索引到Object Storage v1（Phonograph）的Object类型？",
+      "列式MDO和行式MDO是否都支持？",
+      "是否支持用户编辑和物化MDO？",
+      "如果用户无法查看给定Object类型的一些输入数据源，会发生什么？用户体验会是怎样的？",
+      "是否支持属性多重性？",
+      "如果对应于受限视图策略的属性可以映射到多个共享相同策略的受限视图数据源，这是否被支持？",
+      "MDOs与通过外键关系链接两个不同Object类型有什么区别？用户应如何在这些选项之间进行选择？",
+      "如果一个Object的两个列式数据源有不同的主键集，哪些Object会出现？",
+      "一个Object类型可以有多少个数据源的限制？"
+    ],
+    "characters": 1825
+  },
+  {
+    "path": "/docs/zh/foundry/object-permissioning/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-permissioning/overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "Ontology元数据",
+      "Ontology数据"
+    ],
+    "characters": 581
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/comment-on-objects/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/comment-on-objects",
+    "status": "read",
+    "title": "对Object发表评论",
+    "headings": [
+      "对Object发表评论"
+    ],
+    "characters": 224
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/config-app-sidebar/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/config-app-sidebar",
+    "status": "read",
+    "title": "配置应用程序侧边栏",
+    "headings": [
+      "配置应用程序侧边栏",
+      "设置应用程序侧边栏",
+      "编辑应用程序侧边栏",
+      "在侧边栏中添加/更改应用程序"
+    ],
+    "characters": 1794
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/config-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/config-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "默认配置",
+      "编辑Object视图",
+      "使用Object视图编辑器"
+    ],
+    "characters": 1281
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/config-profiles/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/config-profiles",
+    "status": "read",
+    "title": "配置配置文件",
+    "headings": [
+      "配置配置文件",
+      "配置配置文件",
+      "指派配置文件给对象视图",
+      "作为用户切换配置文件",
+      "作为编辑器切换配置文件",
+      "为用户设置默认配置文件"
+    ],
+    "characters": 846
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/config-tabs/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/config-tabs",
+    "status": "read",
+    "title": "配置标签页",
+    "headings": [
+      "配置标签页",
+      "管理标签页",
+      "添加新标签页",
+      "删除标签页",
+      "移动标签页",
+      "配置标签页内容",
+      "Workshop支持的标签页",
+      "基于微件的标签页（遗留）",
+      "配置标签页设置",
+      "标签页可见性",
+      "标签页设置"
+    ],
+    "characters": 1728
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/config-widgets/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/config-widgets",
+    "status": "read",
+    "title": "配置微件（旧版）",
+    "headings": [
+      "配置微件（旧版）",
+      "微件配置",
+      "微件特定设置",
+      "微件格式设置",
+      "重用微件配置"
+    ],
+    "characters": 1007
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/config-workshop-tabs/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/config-workshop-tabs",
+    "status": "read",
+    "title": "配置 Workshop 标签页",
+    "headings": [
+      "配置 Workshop 标签页",
+      "创建新的 Workshop 标签页",
+      "编辑 Workshop 标签页",
+      "配置参数",
+      "权限"
+    ],
+    "characters": 1312
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/generate-urls/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/generate-urls",
+    "status": "read",
+    "title": "生成Object视图URL",
+    "headings": [
+      "生成Object视图URL",
+      "生成Object链接"
+    ],
+    "characters": 663
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/manage-versions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/manage-versions",
+    "status": "read",
+    "title": "管理Object视图版本",
+    "headings": [
+      "管理Object视图版本",
+      "使用说明",
+      "保存新版本",
+      "浏览历史记录",
+      "发布新版本",
+      "预览",
+      "重新发布旧版本",
+      "自动发布"
+    ],
+    "characters": 1394
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/marketplace-object-views/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/marketplace-object-views",
+    "status": "read",
+    "title": "添加Object视图到Marketplace产品 [Beta]",
+    "headings": [
+      "添加Object视图到Marketplace产品 [Beta]",
+      "支持的功能",
+      "将Object视图添加到产品中"
+    ],
+    "characters": 372
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/overview",
+    "status": "read",
+    "title": "概览",
+    "headings": [
+      "概览"
+    ],
+    "characters": 271
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/use-object-views-in-platform/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/use-object-views-in-platform",
+    "status": "read",
+    "title": "在平台中使用Object View",
+    "headings": [
+      "在平台中使用Object View",
+      "配置Object View",
+      "使用Object View",
+      "Workshop",
+      "Object Explorer"
+    ],
+    "characters": 911
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/widgets-apps-files/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/widgets-apps-files",
+    "status": "read",
+    "title": "应用程序和文件",
+    "headings": [
+      "应用程序和文件",
+      "Quiver Object 画布",
+      "Slate 应用程序",
+      "配置",
+      "在 Slate 中使用参数",
+      "访问 Object 视图筛选",
+      "从 Slate 触发事件",
+      "媒体预览",
+      "配置",
+      "超链接",
+      "配置",
+      "链接文件",
+      "配置",
+      "Iframe",
+      "配置",
+      "其他配置",
+      "评论",
+      "配置",
+      "当源数据集更改时的评论行为",
+      "评论的数据输出"
+    ],
+    "characters": 9727
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/widgets-filtering/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/widgets-filtering",
+    "status": "read",
+    "title": "筛选",
+    "headings": [
+      "筛选",
+      "多选筛选",
+      "配置",
+      "下拉筛选",
+      "配置",
+      "按钮筛选",
+      "配置",
+      "日期范围筛选",
+      "配置",
+      "链接 Object 筛选侧边栏",
+      "配置",
+      "筛选沙箱容器",
+      "配置",
+      "筛选容器",
+      "配置",
+      "活动筛选",
+      "配置"
+    ],
+    "characters": 8253
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/widgets-layout/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/widgets-layout",
+    "status": "read",
+    "title": "设计",
+    "headings": [
+      "设计",
+      "水平分布",
+      "配置",
+      "垂直堆叠容器",
+      "配置",
+      "标签容器",
+      "配置",
+      "条件容器",
+      "配置",
+      "Markdown",
+      "配置"
+    ],
+    "characters": 3873
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/widgets-properties-links/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/widgets-properties-links",
+    "status": "read",
+    "title": "属性和链接",
+    "headings": [
+      "属性和链接",
+      "属性微件",
+      "属性微件配置",
+      "Ontology Manager中的属性定义",
+      "属性微件本身的配置",
+      "常见问题和注意事项",
+      "属性卡片",
+      "属性卡片配置",
+      "每张卡片的配置",
+      "属性卡片微件中所有卡片的配置",
+      "常见问题和注意事项",
+      "链接",
+      "链接微件配置",
+      "常见问题和注意事项",
+      "编辑历史",
+      "编辑历史配置",
+      "常见问题和注意事项"
+    ],
+    "characters": 3908
+  },
+  {
+    "path": "/docs/zh/foundry/object-views/widgets-visualization/",
+    "url": "https://www.palantir.com/docs/zh/foundry/object-views/widgets-visualization",
+    "status": "read",
+    "title": "可视化",
+    "headings": [
+      "可视化",
+      "链接Object视图",
+      "配置",
+      "设置选项卡",
+      "时间轴",
+      "配置",
+      "设置选项卡",
+      "格式选项卡",
+      "常见问题和注意事项",
+      "分组事件时间轴和表格",
+      "配置",
+      "设置",
+      "格式",
+      "常见问题和注意事项"
+    ],
+    "characters": 5577
+  },
+  {
+    "path": "/docs/zh/foundry/ontologies/compute-usage/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontologies/compute-usage",
+    "status": "read",
+    "title": "计算使用：Ontology 索引",
+    "headings": [
+      "计算使用：Ontology 索引",
+      "衡量 Ontology 索引的计算使用",
+      "调查 Ontology 索引的使用情况",
+      "Ontology 索引使用的驱动因素",
+      "管理 Ontology 索引计算",
+      "索引计算计算示例"
+    ],
+    "characters": 3107
+  },
+  {
+    "path": "/docs/zh/foundry/ontologies/ontologies-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontologies/ontologies-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "与空间的关系"
+    ],
+    "characters": 566
+  },
+  {
+    "path": "/docs/zh/foundry/ontologies/ontologies-proposals/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontologies/ontologies-proposals",
+    "status": "read",
+    "title": "Ontology 提案",
+    "headings": [
+      "Ontology 提案",
+      "定义",
+      "提案工作流程",
+      "提案导航",
+      "提案视图",
+      "审查",
+      "变更记录",
+      "提案权限",
+      "提案设置"
+    ],
+    "characters": 3578
+  },
+  {
+    "path": "/docs/zh/foundry/ontologies/ontology-migration/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontologies/ontology-migration",
+    "status": "read",
+    "title": "在Ontologies之间迁移本体资源",
+    "headings": [
+      "在Ontologies之间迁移本体资源"
+    ],
+    "characters": 591
+  },
+  {
+    "path": "/docs/zh/foundry/ontologies/ontology-permissions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontologies/ontology-permissions",
+    "status": "read",
+    "title": "权限",
+    "headings": [
+      "权限",
+      "Ontology角色",
+      "概述",
+      "使用Ontology角色创建新资源",
+      "使用Ontology角色的特定类型编辑权限",
+      "编辑对象类型及其属性的权限",
+      "共享属性的权限",
+      "编辑链接类型的权限",
+      "编辑操作类型的权限",
+      "只读视图",
+      "数据源衍生权限（传统）",
+      "查看权限",
+      "特定类型编辑权限",
+      "编辑对象类型及其属性的权限",
+      "共享属性的权限",
+      "编辑链接类型的权限",
+      "编辑操作类型的权限",
+      "只读视图",
+      "删除支持数据集"
+    ],
+    "characters": 3724
+  },
+  {
+    "path": "/docs/zh/foundry/ontologies/query-compute-usage/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontologies/query-compute-usage",
+    "status": "read",
+    "title": "使用Ontology查询计算使用情况",
+    "headings": [
+      "使用Ontology查询计算使用情况",
+      "核心概念：Object类型和对象集",
+      "核心概念：查询类型",
+      "使用Ontology对象查询测量Foundry计算",
+      "使用Object Storage v1测量计算",
+      "使用Object Storage v2测量计算",
+      "理解Ontology查询的Foundry计算使用驱动因素",
+      "调查Ontology查询的Foundry计算使用情况"
+    ],
+    "characters": 2923
+  },
+  {
+    "path": "/docs/zh/foundry/ontologies/shared-ontologies/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontologies/shared-ontologies",
+    "status": "read",
+    "title": "共享Ontology",
+    "headings": [
+      "共享Ontology"
+    ],
+    "characters": 281
+  },
+  {
+    "path": "/docs/zh/foundry/ontologies/volume-usage/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontologies/volume-usage",
+    "status": "read",
+    "title": "Ontology 占用量",
+    "headings": [
+      "Ontology 占用量",
+      "测量 Ontology 占用量",
+      "调查 Ontology 占用量使用情况",
+      "影响 Ontology 占用量的因素",
+      "管理 Ontology 占用量"
+    ],
+    "characters": 1400
+  },
+  {
+    "path": "/docs/zh/foundry/ontology-manager/cleanup/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology-manager/cleanup",
+    "status": "read",
+    "title": "Ontology 清理",
+    "headings": [
+      "Ontology 清理",
+      "访问 Ontology 清理工具",
+      "清理您的 Ontology",
+      "配置 Ontology 清理",
+      "Ontology 清理标记"
+    ],
+    "characters": 1755
+  },
+  {
+    "path": "/docs/zh/foundry/ontology-manager/export-import/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology-manager/export-import",
+    "status": "read",
+    "title": "导出、编辑和导入Ontology",
+    "headings": [
+      "导出、编辑和导入Ontology",
+      "导出",
+      "导入",
+      "疑难解答",
+      "出错: OntologyMetadata:UnreferencedRuleSets"
+    ],
+    "characters": 863
+  },
+  {
+    "path": "/docs/zh/foundry/ontology-manager/navigation/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology-manager/navigation",
+    "status": "read",
+    "title": "导航",
+    "headings": [
+      "导航",
+      "头部搜索栏",
+      "主页筛选",
+      "从选择中导航返回"
+    ],
+    "characters": 562
+  },
+  {
+    "path": "/docs/zh/foundry/ontology-manager/ontology-roles-migration/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology-manager/ontology-roles-migration",
+    "status": "read",
+    "title": "Ontology 角色迁移",
+    "headings": [
+      "Ontology 角色迁移",
+      "什么是 Ontology 角色？",
+      "定义",
+      "示例",
+      "迁移到 Ontology 角色",
+      "前提条件",
+      "迁移通知",
+      "使用 Ontology Manager 应用程序进行迁移",
+      "批量迁移 Ontology 资源",
+      "为所有 Ontology 资源逐一迁移",
+      "如果某些 ontology 资源不再需要怎么办？",
+      "迁移函数支持的操作类型",
+      "迁移常见问题",
+      "对象感知应用会有任何变化吗？",
+      "如何解决迁移后失败的函数支持的操作？"
+    ],
+    "characters": 4480
+  },
+  {
+    "path": "/docs/zh/foundry/ontology-manager/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology-manager/overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "访问应用程序",
+      "用户界面",
+      "Ontology Manager导航",
+      "发现",
+      "Object类型视图",
+      "属性编辑器视图",
+      "链接类型视图",
+      "操作类型视图",
+      "函数类型视图",
+      "函数的使用历史",
+      "查看函数的以前版本",
+      "导航到函数代码库"
+    ],
+    "characters": 1613
+  },
+  {
+    "path": "/docs/zh/foundry/ontology-manager/restore-changes/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology-manager/restore-changes",
+    "status": "read",
+    "title": "审查和恢复更改",
+    "headings": [
+      "审查和恢复更改",
+      "审查对全局Ontology的更改",
+      "筛选对全局Ontology的更改",
+      "审查对单个Ontology资源的更改",
+      "恢复对单个object类型的更改"
+    ],
+    "characters": 861
+  },
+  {
+    "path": "/docs/zh/foundry/ontology-manager/save-changes/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology-manager/save-changes",
+    "status": "read",
+    "title": "保存对Ontology的更改",
+    "headings": [
+      "保存对Ontology的更改",
+      "保存您的更改",
+      "处理错误和警告",
+      "处理更新和合并冲突",
+      "放弃您的更改",
+      "响应警告信息",
+      "保存失败时的故障排除"
+    ],
+    "characters": 1314
+  },
+  {
+    "path": "/docs/zh/foundry/ontology-manager/view-usage/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology-manager/view-usage",
+    "status": "read",
+    "title": "Ontology指标",
+    "headings": [
+      "Ontology指标",
+      "关键术语",
+      "查看使用情况",
+      "启用Ontology使用情况",
+      "共享Ontology使用情况"
+    ],
+    "characters": 1199
+  },
+  {
+    "path": "/docs/zh/foundry/ontology/applications/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology/applications",
+    "status": "read",
+    "title": "基于Ontology的应用程序",
+    "headings": [
+      "基于Ontology的应用程序",
+      "应用程序参考",
+      "Object Views",
+      "Object Explorer",
+      "Quiver",
+      "Workshop",
+      "Slate",
+      "Carbon",
+      "Map",
+      "应用程序比较",
+      "应用案例",
+      "工作流风格",
+      "配置模型"
+    ],
+    "characters": 3345
+  },
+  {
+    "path": "/docs/zh/foundry/ontology/core-concepts/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology/core-concepts",
+    "status": "read",
+    "title": "核心概念",
+    "headings": [
+      "核心概念",
+      "Ontology",
+      "Object类型",
+      "属性",
+      "共享属性",
+      "链接类型",
+      "操作类型",
+      "角色",
+      "函数",
+      "接口",
+      "Object视图"
+    ],
+    "characters": 1737
+  },
+  {
+    "path": "/docs/zh/foundry/ontology/models/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology/models",
+    "status": "read",
+    "title": "Ontology中的模型",
+    "headings": [
+      "Ontology中的模型",
+      "端到端工作流程",
+      "优势"
+    ],
+    "characters": 892
+  },
+  {
+    "path": "/docs/zh/foundry/ontology/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology/overview",
+    "status": "read",
+    "title": "Ontology搭建",
+    "headings": [
+      "Ontology搭建",
+      "Object和链接类型",
+      "操作类型和函数",
+      "接口",
+      "支持决策制定"
+    ],
+    "characters": 891
+  },
+  {
+    "path": "/docs/zh/foundry/ontology/why-ontology/",
+    "url": "https://www.palantir.com/docs/zh/foundry/ontology/why-ontology",
+    "status": "read",
+    "title": "为什么创建Ontology？",
+    "headings": [
+      "为什么创建Ontology？",
+      "规模化连接",
+      "可解释性",
+      "规模经济",
+      "决策捕获",
+      "支持运营AI/ML"
+    ],
+    "characters": 1932
+  },
+  {
+    "path": "/docs/zh/foundry/platform-overview/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/platform-overview/overview",
+    "status": "read",
+    "title": "平台概览",
+    "headings": [
+      "平台概览",
+      "Ontology",
+      "决策组件",
+      "数据",
+      "数据连接",
+      "逻辑",
+      "模型",
+      "业务逻辑",
+      "模板化分析和报告",
+      "操作",
+      "接下来是什么？",
+      "平台能力",
+      "数据连接和集成",
+      "模型连接与开发",
+      "Ontology 构建",
+      "应用案例开发",
+      "分析",
+      "产品交付",
+      "安全与治理",
+      "管理与支持"
+    ],
+    "characters": 5871
+  },
+  {
+    "path": "/docs/zh/foundry/process-mining/core-concepts/",
+    "url": "https://www.palantir.com/docs/zh/foundry/process-mining/core-concepts",
+    "status": "read",
+    "title": "核心概念",
+    "headings": [
+      "核心概念",
+      "过程",
+      "状态",
+      "转换",
+      "操作",
+      "过程日志",
+      "交互模式"
+    ],
+    "characters": 1658
+  },
+  {
+    "path": "/docs/zh/foundry/process-mining/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/process-mining/overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述",
+      "应用案例"
+    ],
+    "characters": 737
+  },
+  {
+    "path": "/docs/zh/foundry/process-mining/process-mining-operationalize/",
+    "url": "https://www.palantir.com/docs/zh/foundry/process-mining/process-mining-operationalize",
+    "status": "read",
+    "title": "将流程挖掘操作化",
+    "headings": [
+      "将流程挖掘操作化",
+      "机械流程概览微件",
+      "输入数据",
+      "节点指标",
+      "节点和边样式",
+      "图形输出",
+      "实时挖掘"
+    ],
+    "characters": 1226
+  },
+  {
+    "path": "/docs/zh/foundry/process-mining/process-mining-setup/",
+    "url": "https://www.palantir.com/docs/zh/foundry/process-mining/process-mining-setup",
+    "status": "read",
+    "title": "创建机械流程",
+    "headings": [
+      "创建机械流程",
+      "要求",
+      "流程对象类型",
+      "变更日志数据集",
+      "流程日志对象类型",
+      "生成流程图",
+      "绘制",
+      "挖掘",
+      "值类型",
+      "预期转换"
+    ],
+    "characters": 1801
+  },
+  {
+    "path": "/docs/zh/foundry/security/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/security/overview",
+    "status": "read",
+    "title": "安全和治理",
+    "headings": [
+      "安全和治理",
+      "平台安全",
+      "企业安全",
+      "基础设施安全",
+      "额外安全资源",
+      "结论"
+    ],
+    "characters": 1893
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/chained-models/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/chained-models",
+    "status": "read",
+    "title": "配置链式模型",
+    "headings": [
+      "配置链式模型"
+    ],
+    "characters": 360
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/configure-events/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/configure-events",
+    "status": "read",
+    "title": "配置事件",
+    "headings": [
+      "配置事件",
+      "事件配置"
+    ],
+    "characters": 380
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/configure-thresholds/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/configure-thresholds",
+    "status": "read",
+    "title": "配置阈值",
+    "headings": [
+      "配置阈值"
+    ],
+    "characters": 101
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/derive-property-functions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/derive-property-functions",
+    "status": "read",
+    "title": "使用函数派生属性",
+    "headings": [
+      "使用函数派生属性"
+    ],
+    "characters": 1658
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/embed-graph-workshop/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/embed-graph-workshop",
+    "status": "read",
+    "title": "在Workshop模块中嵌入图形",
+    "headings": [
+      "在Workshop模块中嵌入图形",
+      "在Workshop中添加Vertex图形微件",
+      "选择资源",
+      "配置微件"
+    ],
+    "characters": 1774
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/events-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/events-overview",
+    "status": "read",
+    "title": "概述",
+    "headings": [
+      "概述"
+    ],
+    "characters": 310
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/example-use-cases/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/example-use-cases",
+    "status": "read",
+    "title": "示例应用案例",
+    "headings": [
+      "示例应用案例",
+      "点选式流程图绘制",
+      "仿真、动态分析和决策优化"
+    ],
+    "characters": 590
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/explore-object-relationships/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/explore-object-relationships",
+    "status": "read",
+    "title": "探索Object关系",
+    "headings": [
+      "探索Object关系",
+      "开始新的探索",
+      "Object选择面板",
+      "探索相关Objects",
+      "搜索周边",
+      "搭建多步搜索周边",
+      "查找相关Objects",
+      "添加参数",
+      "保存和加载",
+      "直方图筛选"
+    ],
+    "characters": 1959
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/explore-related-events/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/explore-related-events",
+    "status": "read",
+    "title": "探索相关事件",
+    "headings": [
+      "探索相关事件",
+      "查看事件",
+      "事件徽章",
+      "事件Object",
+      "系列面板中的事件"
+    ],
+    "characters": 513
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/explore-time-series/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/explore-time-series",
+    "status": "read",
+    "title": "探索相关时间序列",
+    "headings": [
+      "探索相关时间序列"
+    ],
+    "characters": 562
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/generate-graph-apps/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/generate-graph-apps",
+    "status": "read",
+    "title": "从其他应用生成图表",
+    "headings": [
+      "从其他应用生成图表",
+      "使用URL参数生成图表",
+      "从其他应用生成Vertex图表"
+    ],
+    "characters": 979
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/generate-graph-functions/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/generate-graph-functions",
+    "status": "read",
+    "title": "使用函数生成图表",
+    "headings": [
+      "使用函数生成图表",
+      "搜索周边函数",
+      "提示与故障排除",
+      "参考示例："
+    ],
+    "characters": 6929
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/graphs-display-options/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/graphs-display-options",
+    "status": "read",
+    "title": "Object和边显示选项",
+    "headings": [
+      "Object和边显示选项",
+      "图设计",
+      "自动设计选项",
+      "层次结构（从左到右/从上到下）",
+      "网格",
+      "水平行/垂直列",
+      "辐射状",
+      "聚类",
+      "笛卡尔",
+      "按Object类型分组节点",
+      "按Object类型的属性分组",
+      "将节点分组到边中",
+      "层样式选项",
+      "Object样式",
+      "按颜色",
+      "副标题",
+      "扩展标签",
+      "徽章",
+      "节点样式",
+      "边样式",
+      "线条颜色",
+      "线条类型",
+      "标签",
+      "线宽",
+      "徽章",
+      "Ontology级别边方向配置",
+      "保存的样式",
+      "保存的选择"
+    ],
+    "characters": 3595
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/graphs-explore/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/graphs-explore",
+    "status": "read",
+    "title": "探索现有图表",
+    "headings": [
+      "探索现有图表",
+      "Object探索",
+      "关联事件",
+      "了解当前状态和随时间变化",
+      "筛选和探索Object属性",
+      "探索Object关系",
+      "探索关系",
+      "Object和边节点样式"
+    ],
+    "characters": 1062
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/graphs-template/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/graphs-template",
+    "status": "read",
+    "title": "创建图模板",
+    "headings": [
+      "创建图模板",
+      "使用图模板"
+    ],
+    "characters": 1384
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/link-merging/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/link-merging",
+    "status": "read",
+    "title": "配置链接合并",
+    "headings": [
+      "配置链接合并"
+    ],
+    "characters": 171
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/marketplace-vertex/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/marketplace-vertex",
+    "status": "read",
+    "title": "将 Vertex 图模板添加到 Marketplace 产品 [Beta]",
+    "headings": [
+      "将 Vertex 图模板添加到 Marketplace 产品 [Beta]",
+      "支持的功能",
+      "将 Vertex 图模板添加到产品中"
+    ],
+    "characters": 292
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/overview",
+    "status": "read",
+    "title": "概览",
+    "headings": [
+      "概览"
+    ],
+    "characters": 378
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/read-only-mode/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/read-only-mode",
+    "status": "read",
+    "title": "只读模式",
+    "headings": [
+      "只读模式",
+      "何时以只读模式打开 Vertex 图形？"
+    ],
+    "characters": 274
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/save-share/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/save-share",
+    "status": "read",
+    "title": "保存、共享和协作",
+    "headings": [
+      "保存、共享和协作",
+      "保存草稿",
+      "复制现有图表",
+      "版本控制"
+    ],
+    "characters": 619
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/scenarios-getting-started/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/scenarios-getting-started",
+    "status": "read",
+    "title": "入门指南",
+    "headings": [
+      "入门指南",
+      "添加操作",
+      "选择操作",
+      "选择模型",
+      "新模型选择",
+      "默认模型选择",
+      "选择输入/输出参数",
+      "运行一个场景",
+      "搭建您的“如果...会怎样”案例研究",
+      "链接模型"
+    ],
+    "characters": 1382
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/scenarios-options/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/scenarios-options",
+    "status": "read",
+    "title": "场景选项",
+    "headings": [
+      "场景选项",
+      "时间窗口选择",
+      "高级选项",
+      "范围",
+      "运行基线场景",
+      "选择输入/输出参数"
+    ],
+    "characters": 528
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/scenarios-overview/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/scenarios-overview",
+    "status": "read",
+    "title": "概览",
+    "headings": [
+      "概览",
+      "Foundry中的业务逻辑和模型",
+      "场景的时间序列"
+    ],
+    "characters": 848
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/timeline/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/timeline",
+    "status": "read",
+    "title": "查看和筛选时间轴上的事件",
+    "headings": [
+      "查看和筛选时间轴上的事件",
+      "查看时间事件",
+      "筛选时间事件",
+      "更改光标位置",
+      "展开时间轴",
+      "样式化时间轴",
+      "时间轴播放"
+    ],
+    "characters": 1123
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/use-time-selection/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/use-time-selection",
+    "status": "read",
+    "title": "使用时间选择",
+    "headings": [
+      "使用时间选择"
+    ],
+    "characters": 269
+  },
+  {
+    "path": "/docs/zh/foundry/vertex/vertex-settings-control-panel/",
+    "url": "https://www.palantir.com/docs/zh/foundry/vertex/vertex-settings-control-panel",
+    "status": "read",
+    "title": "在控制面板中配置Vertex设置",
+    "headings": [
+      "在控制面板中配置Vertex设置",
+      "图形默认设置",
+      "数据加载",
+      "模型配置"
+    ],
+    "characters": 785
+  }
+]

@@ -1,0 +1,335 @@
+﻿文档标题,能力族,建议阶段,知识服务用途,覆盖方式,官方来源
+API参考索引,文档/接口入口,参考,目录入口，未逐个验证API端点,索引入口,https://www.palantir.com/docs/foundry/api-reference/
+Foundry文档首页,文档/接口入口,参考,目录入口，未逐个验证API端点,索引入口,https://www.palantir.com/docs/zh/foundry/
+操作日志,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/action-log/
+操作指标 [测试版],受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/action-metrics/
+撤销或取消操作,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/action-reverts/
+配置部分,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/configure-sections/
+对象下拉菜单安全注意事项,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/dropdown-security/
+入门,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/function-actions-getting-started/
+概述,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/function-actions-overview/
+入门,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/getting-started/
+行内编辑,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/inline-edits/
+将操作类型添加到Marketplace产品 [Beta],受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/marketplace-action-types/
+通知,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/notifications/
+概述,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/overview/
+概述,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/parameter-overview/
+设置参数默认值,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/parameters-default-value/
+筛选参数下拉菜单的结果,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/parameters-filter/
+覆盖,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/parameters-override/
+权限,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/permissions/
+规则,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/rules/
+规模和属性限制,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/scale-property-limits/
+设置通知,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/set-up-notification/
+设置 Webhook,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/set-up-webhook/
+概述,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/side-effects-overview/
+提交标准,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/submission-criteria/
+上传附件,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/upload-attachments/
+在平台中使用操作,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/use-actions/
+Webhooks,受控业务操作,P0/P1,审核发布、替代、撤回和反馈处理,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/action-types/webhooks/
+管理和使能,平台管理,P0/P1,角色、配置、资源和审计,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/administration/overview/
+分析,探索分析,P1/P2,知识使用、审核质量和覆盖率分析,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/analytics/overview/
+应用案例开发,业务应用构建,P0/P1,中文知识服务工作区与可复用应用配置,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/app-building/overview/
+数据连接与集成,资料接入与加工,P0/P2,受控上传和解析；外部连接按接口需求扩展,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/data-integration/overview/
+产品交付,应用交付与升级,P0/P1,镜像、备份、配置包及可回退发布,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/devops/overview/
+日程安排日历微件,任务资源日历与调度,按需,首期复核截止日期；专家/培训排程按实际需求,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-calendar-overview/
+微件配置,任务资源日历与调度,按需,首期复核截止日期；专家/培训排程按实际需求,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-calendar-widget/
+核心概念,任务资源日历与调度,按需,首期复核截止日期；专家/培训排程按实际需求,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-concepts/
+调度甘特图微件,任务资源日历与调度,按需,首期复核截止日期；专家/培训排程按实际需求,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-gantt-chart-widget/
+起始,任务资源日历与调度,按需,首期复核截止日期；专家/培训排程按实际需求,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-getting-started/
+Ontology 原语和数据模型配置,任务资源日历与调度,按需,首期复核截止日期；专家/培训排程按实际需求,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-ontology-primitives/
+概述,任务资源日历与调度,按需,首期复核截止日期；专家/培训排程按实际需求,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-overview/
+搜索函数,任务资源日历与调度,按需,首期复核截止日期；专家/培训排程按实际需求,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-search-functions/
+建议函数,任务资源日历与调度,按需,首期复核截止日期；专家/培训排程按实际需求,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-suggestion-functions/
+验证规则,任务资源日历与调度,按需,首期复核截止日期；专家/培训排程按实际需求,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/dynamic-scheduling/scheduling-validation-rules/
+添加自定义属性,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/add-a-custom-property/
+编写并运行规则,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/author-and-run-a-rule/
+故障排除参考,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/common-issues/
+配置规则操作,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/configure-rule-actions/
+配置时间序列,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/configure-timeseries-foundry-rules/
+配置变换管道,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/configure-transforms-pipeline/
+配置工作流,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/configure-workflow/
+配置 Workshop 应用程序,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/configure-workshop-app/
+概述,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/core-concepts/
+定制 Foundry Rules,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/customization/
+自定义您的 Foundry Rules 流水线,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/customize-foundry-rules-pipeline/
+部署 Foundry Rules,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/deploy-foundry-rules/
+部署时间序列 Foundry 规则,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/deploy-timeseries-foundry-rules/
+部署工作流,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/deploy-workflow/
+启用非必填功能,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/enable-optional-features/
+Foundry Rules 工作流配置,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/foundry-rules-workflow-configuration/
+旧版 Foundry 规则设置 (Taurus),规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/legacy-foundry-rules-setup-taurus/
+将 Foundry Rules 添加到 Marketplace 产品 [Beta],规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/marketplace/
+迁移到 Foundry Rules,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/migrate-to-foundry-rules/
+Object模型,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/object-model/
+Foundry Rules,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/overview/
+允许和默认输出值,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/permitted-and-default-output-values/
+规则逻辑,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/rule-logic/
+编辑规则的权限,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/rule-permissions/
+时间序列规则,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/timeseries-concepts/
+升级以使用规则操作,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/upgrade-to-use-rule-actions/
+Workshop 应用,规则与审核工作流,P1/P2,适用期、资料完备性与发布条件；历史Taurus仅参考,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/foundry-rules/workshop-application/
+添加 npm 依赖项,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/add-dependencies/
+API: 附件,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/api-attachments/
+API：媒体,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/api-media/
+API：对象集,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/api-object-sets/
+API: Object和链接,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/api-objects-links/
+API: Ontology编辑,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/api-ontology-edits/
+分块,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/chunking/
+配置通知,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/configure-notifications/
+创建自定义聚合,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/create-custom-aggregation/
+调试函数,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/debug/
+装饰器,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/decorators/
+为新Objects生成唯一ID,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/edits-generate-id/
+概述,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/edits-overview/
+强制限制,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/enforced-limits/
+函数中的外部来源,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/external-sources/
+入门,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/foo-getting-started/
+模型上的函数,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/functions-on-models/
+概述,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/functions-on-objects/
+入门,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/getting-started/
+输入和输出类型,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/input-output-types/
+函数中的语言模型,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/language-models/
+将函数添加到 Marketplace 产品 [Beta],类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/marketplace-functions/
+创建模型函数,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/model-functions/
+Object标识符,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/object-identifiers/
+导入Object和链接类型,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/ontology-imports/
+优化性能,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/optimize-performance/
+概述,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/overview-semantic-search/
+概述,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/overview/
+PDF处理,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/pdf-handling/
+权限,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/permissions/
+类型参考,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/python-function-types/
+高级用法,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/python-functions-advanced-usage/
+从Python函数进行API调用,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/python-functions-api-calls/
+在Pipeline Builder中使用Python函数,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/python-functions-builder/
+对象上的函数,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/python-functions-on-objects/
+在Workshop中使用Python函数,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/python-functions-workshop/
+起始步骤,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/python-getting-started/
+Ontology 更改,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/python-ontology-edits/
+查询,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/query-functions/
+将资源导入代码库,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/resource-imports-sidebar/
+处理未定义值,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/undefined-values/
+模拟日期、时间戳和UUID,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/unit-test-dates-timestamps/
+调试,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/unit-test-debugging/
+入门指南,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/unit-test-getting-started/
+存根对象搜索和聚合,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/unit-test-object-searches/
+验证Ontology编辑,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/unit-test-ontology-edits/
+创建存根对象,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/unit-test-stub-objects/
+模拟用户和组,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/unit-test-users-groups/
+在平台中使用函数,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/use-functions/
+抛出用户界面错误,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/user-facing-error/
+使用自定义模型创建语义搜索工作流,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/using-custom-models-to-create-a-semantic-search-workflow/
+使用Palantir提供的模型创建语义搜索工作流,类型化能力与检索,P0/P1,可授权、可评估的查询、加工和写入提案,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/functions/using-palantir-provided-models-to-create-a-semantic-search-workflow/
+开始使用Palantir,岗位化引导,P0,普通使用者、知识编辑者、审核者和本体构建者,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/getting-started/overview/
+创建界面,共享契约与接口,P1,统一可引用、可审核、可检索知识契约,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/interfaces/create-interface/
+编辑接口定义,共享契约与接口,P1,统一可引用、可审核、可检索知识契约,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/interfaces/edit-interface-definition/
+编辑接口实现,共享契约与接口,P1,统一可引用、可审核、可检索知识契约,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/interfaces/edit-interface-implementation/
+扩展接口,共享契约与接口,P1,统一可引用、可审核、可检索知识契约,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/interfaces/extend-interface/
+实现接口,共享契约与接口,P1,统一可引用、可审核、可检索知识契约,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/interfaces/implement-interface/
+接口链接类型,共享契约与接口,P1,统一可引用、可审核、可检索知识契约,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/interfaces/interface-link-types-overview/
+元数据参考,共享契约与接口,P1,统一可引用、可审核、可检索知识契约,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/interfaces/interface-metadata/
+概述,共享契约与接口,P1,统一可引用、可审核、可检索知识契约,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/interfaces/interface-overview/
+AIP Logic与自动化的集成,AI编排与评估,P0/P1,有出处问答、固定用例评测与模型版本记录,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/logic/aip-logic-integration-automate/
+使用 AIP Logic 计算资源消耗,AI编排与评估,P0/P1,有出处问答、固定用例评测与模型版本记录,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/logic/compute-usage/
+核心概念,AI编排与评估,P0/P1,有出处问答、固定用例评测与模型版本记录,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/logic/concepts/
+创建评估套件,AI编排与评估,P0/P1,有出处问答、固定用例评测与模型版本记录,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/logic/evaluations-create-suite/
+入门,AI编排与评估,P0/P1,有出处问答、固定用例评测与模型版本记录,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/logic/evaluations-getting-started/
+评估指标仪表盘,AI编排与评估,P0/P1,有出处问答、固定用例评测与模型版本记录,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/logic/evaluations-metrics-dashboard/
+评估,AI编排与评估,P0/P1,有出处问答、固定用例评测与模型版本记录,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/logic/evaluations-overview/
+AIP Logic 常见问题解答,AI编排与评估,P0/P1,有出处问答、固定用例评测与模型版本记录,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/logic/faq/
+入门指南,AI编排与评估,P0/P1,有出处问答、固定用例评测与模型版本记录,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/logic/getting-started/
+概述,AI编排与评估,P0/P1,有出处问答、固定用例评测与模型版本记录,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/logic/overview/
+操作,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/actions/
+将数据添加到地图,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/add-to-map/
+注释,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/annotations/
+控制面板,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/control-panel/
+核心概念,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/core-concepts/
+创建、保存和导出地图,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/create-save-maps/
+事件,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/events/
+入门指南,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/getting-started/
+直方图,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/histogram/
+Ontology 操作,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/integrate-actions/
+Ontology Object,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/integrate-objects/
+地图搜索周围函数,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/integrate-searcharound-functions/
+地图图层编辑器,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/layer-editor/
+图层管理,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/layer-management/
+地图界面概述,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/map-overview/
+将地图模板添加到Marketplace产品 [Beta],地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/marketplace-map-templates/
+导航,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/navigation/
+显示高规模对象数据 [Beta],地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/objects-high-scale/
+概览,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/overview/
+选择,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/selection/
+设置,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/settings/
+形状,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/shapes/
+地图模板,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/templates/
+地图中的时间和时间数据,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/time-overview/
+时间选择,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/time-selection/
+时间序列,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/time-series/
+时间轴,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/timeline/
+概述,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/visualize-objects/
+点几何图形,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/visualize-points/
+多边形和线几何图形,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/visualize-polygons-lines/
+轨迹几何,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/visualize-tracks/
+在 Workshop 模块中嵌入地图模板,地理信息与时间展示,按需,知识首期使用区域标签，明确地图需求后再引入,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/map/widget/
+模型连接和开发,模型接入与治理,P1/P2,现有模型网关、模型/提示版本与评测,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/model-integration/overview/
+聚合注意事项,对象存储与聚合,P0/P2,保留现有权威记录存储，规模演进以实测为准,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-backend/aggregation-considerations/
+Object Storage v1与Object Storage v2之间的重大变更,对象存储与聚合,P0/P2,保留现有权威记录存储，规模演进以实测为准,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-backend/object-storage-v2-breaking-changes/
+从对象存储 V1 (Phonograph) 迁移到对象存储 V2,对象存储与聚合,P0/P2,保留现有权威记录存储，规模演进以实测为准,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-backend/osv1-osv2-migration/
+概述,对象存储与聚合,P0/P2,保留现有权威记录存储，规模演进以实测为准,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-backend/overview/
+[遗留] Object Storage v1 (Phonograph),历史对象数据库,历史参考,保留迁移对照，不复制退役存储实现,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-databases/object-storage-v1/
+用户编辑的应用方式,编辑、物化与历史,P0/P1,防止重导入覆盖人工结论，派生结果继承来源,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-edits/how-edits-applied/
+物化,编辑、物化与历史,P0/P1,防止重导入覆盖人工结论，派生结果继承来源,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-edits/materializations/
+Object编辑和物化,编辑、物化与历史,P0/P1,防止重导入覆盖人工结论，派生结果继承来源,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-edits/overview/
+应用操作时的权限检查,编辑、物化与历史,P0/P1,防止重导入覆盖人工结论，派生结果继承来源,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-edits/permission-checks/
+管理模式更改,编辑、物化与历史,P0/P1,防止重导入覆盖人工结论，派生结果继承来源,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-edits/schema-migrations/
+启用用户编辑历史,编辑、物化与历史,P0/P1,防止重导入覆盖人工结论，派生结果继承来源,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-edits/user-edit-history/
+应用操作,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/apply-actions/
+比较对象集,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/compare-object-sets/
+配置Object Explorer,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/configure/
+使用图表进行探索,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/explore-charts/
+筛选结果,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/filter-results/
+生成 Object Explorer 链接,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/generate-urls/
+入门,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/getting-started/
+概述,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/overview/
+通过旋转探索关联对象,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/pivot-linked/
+保存探索,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/save-explorations/
+保存列表,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/save-lists/
+搜索Objects,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/search-objects/
+搜索语法,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/search-syntax/
+查看结果,对象搜索与集合探索,P0/P1,按术语、文号、适用期筛选并比较知识集合,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-explorer/view-results/
+常见问题解答,批量/流式索引,P0/P2,文档索引版本与可重建派生索引，流式按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-indexing/faq/
+Funnel批处理管道,批量/流式索引,P0/P2,文档索引版本与可重建派生索引，流式按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-indexing/funnel-batch-pipelines/
+Funnel流式管道,批量/流式索引,P0/P2,文档索引版本与可重建派生索引，流式按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-indexing/funnel-streaming-pipelines/
+概述,批量/流式索引,P0/P2,文档索引版本与可重建派生索引，流式按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-indexing/overview/
+允许用户编辑Objects和链接,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/allow-editing/
+添加条件格式化,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/conditional-formatting/
+创建链接类型,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/create-link-type/
+创建 Object 类型,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/create-object-type/
+创建共享属性,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/create-shared-property/
+创建结构属性类型,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/create-struct-type/
+创建值类型,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/create-value-type/
+编辑链接类型,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/edit-link-types/
+编辑Object类型,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/edit-object-type/
+仅编辑属性,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/edit-only-properties/
+编辑Object类型属性,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/edit-properties/
+编辑共享属性,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/edit-shared-property/
+编辑结构属性类型,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/edit-struct-type/
+通过类型映射启用 Gotham 集成,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/enable-gotham-integration/
+元数据参考,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/link-type-metadata/
+概述,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/link-types-overview/
+将Object和链接类型添加到Marketplace产品 [Beta],对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/marketplace-ontology-types/
+渲染提示,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/metadata-render-hints/
+状态,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/metadata-statuses/
+类型类,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/metadata-typeclasses/
+元数据参考,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/object-type-metadata/
+概览,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/object-types-overview/
+概览,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/properties-overview/
+元数据参考,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/property-metadata/
+必填属性,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/required-properties/
+元数据参考,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/shared-property-metadata/
+概述,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/shared-property-overview/
+自动映射结构属性,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/struct-automapping/
+结构属性和共享属性类型,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/struct-shared-properties/
+概述,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/structs-overview/
+Object 类型组,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/type-groups/
+类型参考,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/type-reference/
+在对象类型上使用共享属性,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/use-shared-property/
+使用值类型,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/use-value-type/
+支持的值格式化,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/value-formatting/
+值类型约束,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/value-type-constraints/
+概述,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/value-types-overview/
+值类型权限,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/value-types-permissions/
+值类型版本,对象、属性和值类型,P0/P1,资料、条款、术语、知识条目及其约束,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-link-types/value-types-versions/
+操作,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/actions/
+活动,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/activity/
+条件,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/condition/
+创建一个新Object监视器,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/create_new_object_monitor/
+错误参考,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/errors/
+评估,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/evaluation/
+输入,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/input/
+限制,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/limits/
+监控,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/monitor/
+通知,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/notifications/
+Object Monitors,监视与更新触发,P1/历史参考,参考更新订阅和站内复核；原工具已由Automate接替,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-monitors/overview/
+配置受限视图支持的对象类型,对象与来源权限,P0/P1,答案、原文、对象、关系、计数和导出统一授权,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-permissioning/configuring-rv-access-controls/
+管理Object类型和Object实例安全性,对象与来源权限,P0/P1,答案、原文、对象、关系、计数和导出统一授权,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-permissioning/managing-object-security/
+多数据源Object类型（MDOs）,对象与来源权限,P0/P1,答案、原文、对象、关系、计数和导出统一授权,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-permissioning/multi-datasource-objects/
+概述,对象与来源权限,P0/P1,答案、原文、对象、关系、计数和导出统一授权,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-permissioning/overview/
+对Object发表评论,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/comment-on-objects/
+配置应用程序侧边栏,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/config-app-sidebar/
+概述,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/config-overview/
+配置配置文件,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/config-profiles/
+配置标签页,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/config-tabs/
+配置微件（旧版）,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/config-widgets/
+配置 Workshop 标签页,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/config-workshop-tabs/
+生成Object视图URL,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/generate-urls/
+管理Object视图版本,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/manage-versions/
+添加Object视图到Marketplace产品 [Beta],对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/marketplace-object-views/
+概览,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/overview/
+在平台中使用Object View,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/use-object-views-in-platform/
+应用程序和文件,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/widgets-apps-files/
+筛选,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/widgets-filtering/
+设计,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/widgets-layout/
+属性和链接,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/widgets-properties-links/
+可视化,对象知识视图,P0/P1,资料/知识条目的属性、关系、事实、证据与历史,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/object-views/widgets-visualization/
+计算使用：Ontology 索引,本体治理与使用量,P0/P1,版本发布、授权范围和使用审计,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontologies/compute-usage/
+概述,本体治理与使用量,P0/P1,版本发布、授权范围和使用审计,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontologies/ontologies-overview/
+Ontology 提案,本体治理与使用量,P0/P1,版本发布、授权范围和使用审计,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontologies/ontologies-proposals/
+在Ontologies之间迁移本体资源,本体治理与使用量,P0/P1,版本发布、授权范围和使用审计,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontologies/ontology-migration/
+权限,本体治理与使用量,P0/P1,版本发布、授权范围和使用审计,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontologies/ontology-permissions/
+使用Ontology查询计算使用情况,本体治理与使用量,P0/P1,版本发布、授权范围和使用审计,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontologies/query-compute-usage/
+共享Ontology,本体治理与使用量,P0/P1,版本发布、授权范围和使用审计,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontologies/shared-ontologies/
+Ontology 占用量,本体治理与使用量,P0/P1,版本发布、授权范围和使用审计,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontologies/volume-usage/
+Ontology 清理,本体管理与变更,P0/P1,模型变更预览、审核、导入导出与恢复,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology-manager/cleanup/
+导出、编辑和导入Ontology,本体管理与变更,P0/P1,模型变更预览、审核、导入导出与恢复,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology-manager/export-import/
+导航,本体管理与变更,P0/P1,模型变更预览、审核、导入导出与恢复,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology-manager/navigation/
+Ontology 角色迁移,本体管理与变更,P0/P1,模型变更预览、审核、导入导出与恢复,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology-manager/ontology-roles-migration/
+概述,本体管理与变更,P0/P1,模型变更预览、审核、导入导出与恢复,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology-manager/overview/
+审查和恢复更改,本体管理与变更,P0/P1,模型变更预览、审核、导入导出与恢复,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology-manager/restore-changes/
+保存对Ontology的更改,本体管理与变更,P0/P1,模型变更预览、审核、导入导出与恢复,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology-manager/save-changes/
+Ontology指标,本体管理与变更,P0/P1,模型变更预览、审核、导入导出与恢复,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology-manager/view-usage/
+基于Ontology的应用程序,本体与工作方式,P0,统一知识语义、构建者和使用者分工,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology/applications/
+核心概念,本体与工作方式,P0,统一知识语义、构建者和使用者分工,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology/core-concepts/
+Ontology中的模型,本体与工作方式,P0,统一知识语义、构建者和使用者分工,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology/models/
+Ontology搭建,本体与工作方式,P0,统一知识语义、构建者和使用者分工,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology/overview/
+为什么创建Ontology？,本体与工作方式,P0,统一知识语义、构建者和使用者分工,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/ontology/why-ontology/
+平台概览,平台结构,参考,知识服务应用、数据与本体基座的边界,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/platform-overview/overview/
+核心概念,审核流程分析,P2,在有足够审核事件后分析积压与耗时,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/process-mining/core-concepts/
+概述,审核流程分析,P2,在有足够审核事件后分析积压与耗时,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/process-mining/overview/
+将流程挖掘操作化,审核流程分析,P2,在有足够审核事件后分析积压与耗时,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/process-mining/process-mining-operationalize/
+创建机械流程,审核流程分析,P2,在有足够审核事件后分析积压与耗时,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/process-mining/process-mining-setup/
+安全和治理,平台授权与治理,P0/P1,按岗位及资料范围进行统一授权,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/security/overview/
+配置链式模型,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/chained-models/
+配置事件,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/configure-events/
+配置阈值,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/configure-thresholds/
+使用函数派生属性,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/derive-property-functions/
+在Workshop模块中嵌入图形,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/embed-graph-workshop/
+概述,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/events-overview/
+示例应用案例,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/example-use-cases/
+探索Object关系,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/explore-object-relationships/
+探索相关事件,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/explore-related-events/
+探索相关时间序列,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/explore-time-series/
+从其他应用生成图表,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/generate-graph-apps/
+使用函数生成图表,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/generate-graph-functions/
+Object和边显示选项,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/graphs-display-options/
+探索现有图表,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/graphs-explore/
+创建图模板,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/graphs-template/
+配置链接合并,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/link-merging/
+将 Vertex 图模板添加到 Marketplace 产品 [Beta],关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/marketplace-vertex/
+概览,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/overview/
+只读模式,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/read-only-mode/
+保存、共享和协作,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/save-share/
+入门指南,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/scenarios-getting-started/
+场景选项,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/scenarios-options/
+概览,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/scenarios-overview/
+查看和筛选时间轴上的事件,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/timeline/
+使用时间选择,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/use-time-selection/
+在控制面板中配置Vertex设置,关系图与事件分析,P1/P2,引用、替代、适用关系和修订事件；模型仿真按需,目录、小节与导语核对；详见能力分析,https://www.palantir.com/docs/zh/foundry/vertex/vertex-settings-control-panel/
+Action types,英文核心术语核对,参考,核对中文机译中的语义,核心概念对照,https://www.palantir.com/docs/foundry/action-types/overview
+Functions,英文核心术语核对,参考,核对中文机译中的语义,核心概念对照,https://www.palantir.com/docs/foundry/functions/overview
+Interfaces,英文核心术语核对,参考,核对中文机译中的语义,核心概念对照,https://www.palantir.com/docs/foundry/interfaces/interface-overview
+Object types,英文核心术语核对,参考,核对中文机译中的语义,核心概念对照,https://www.palantir.com/docs/foundry/object-link-types/object-types-overview
+Ontology-aware applications,英文核心术语核对,参考,核对中文机译中的语义,核心概念对照,https://www.palantir.com/docs/foundry/ontology/applications
+Core concepts,英文核心术语核对,参考,核对中文机译中的语义,核心概念对照,https://www.palantir.com/docs/foundry/ontology/core-concepts
+Ontology building,英文核心术语核对,参考,核对中文机译中的语义,核心概念对照,https://www.palantir.com/docs/foundry/ontology/overview

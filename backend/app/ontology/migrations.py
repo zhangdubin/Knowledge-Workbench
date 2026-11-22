@@ -10,4 +10,7 @@ async def install(db):
     await db.execute(
         text("INSERT OR IGNORE INTO ontology_installation(version) VALUES (1)")
     )
+    from .capabilities import sync_definitions
+
+    await sync_definitions(db)
     await db.commit()

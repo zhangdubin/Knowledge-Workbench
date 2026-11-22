@@ -264,6 +264,19 @@ async def add_object(space_id: str, payload: dict, db: DB, p: User):
     return await objects.detail(db, p, record.id)
 
 
+@router.get("/capabilities")
+async def available_capabilities(db: DB, p: User):
+    from .models import CapabilityDefinition
+
+    if not p.has_page("types"):
+        return []
+    return list(
+        await db.scalars(
+            select(CapabilityDefinition.definition).order_by(CapabilityDefinition.name)
+        )
+    )
+
+
 @router.get("/{space_id}")
 async def space_detail(
     space_id: str,
@@ -326,3 +339,115 @@ async def plan(
         await registry.revision(db, space, revision_id),
         payload.get("migration", {}),
     )
+
+
+@router.post("/{space_id}/claims")
+async def create_claim(space_id: str, payload: dict, db: DB, p: User):
+    from . import knowledge
+
+    await lock_writer(db)
+    row = await knowledge.candidate(db, p, await space_row(db, space_id), payload)
+    result = await knowledge.render(db, p, row)
+    await db.commit()
+    return result
+
+
+@router.get("/{space_id}/claims")
+async def claims_list(
+    space_id: str,
+    db: DB,
+    p: User,
+    status: str | None = None,
+    object_id: int | None = None,
+    limit: int = Query(50, ge=1, le=50),
+):
+    from .query import search
+
+    params = dict(status=status, object_id=object_id, limit=limit)
+    return (await search(db, p, await space_row(db, space_id), params, listing=True))[
+        "facts"
+    ]
+
+
+@router.post("/claims/{claim_id}/review")
+async def review_claim(claim_id: str, payload: dict, db: DB, p: User):
+    from . import knowledge
+
+    await lock_writer(db)
+    result = await knowledge.review(db, p, claim_id, payload)
+    await db.commit()
+    return result
+
+
+@router.get("/evidence/{evidence_id}")
+async def evidence_detail(evidence_id: str, db: DB, p: User):
+    from .evidence import read_evidence
+    from .knowledge import render
+    from .models import Claim, Evidence
+
+    row = await db.get(Evidence, evidence_id)
+    claim = await db.get(Claim, row.claim_id) if row and row.claim_id else None
+    if not claim:
+        raise HTTPException(404, "证据不可用")
+    await render(db, p, claim)
+    return await read_evidence(db, p, evidence_id)
+
+
+@router.post("/{space_id}/query")
+async def query_space(space_id: str, payload: dict, db: DB, p: User):
+    from .query import search
+
+    return await search(db, p, await space_row(db, space_id), payload)
+
+
+@router.post("/{space_id}/ingestions")
+async def start_ingestion(space_id: str, payload: dict, db: DB, p: User):
+    from . import ingestion
+
+    return ingestion.serialize(
+        await ingestion.run(db, p, await space_row(db, space_id), payload)
+    )
+
+
+@router.get("/ingestions/{job_id}")
+async def get_ingestion(job_id: str, db: DB, p: User):
+    from . import ingestion
+    from .models import IngestionJob
+
+    job = await db.get(IngestionJob, job_id)
+    await ingestion.authorized(db, p, job)
+    return ingestion.serialize(job)
+
+
+@router.get("/{space_id}/ingestions")
+async def list_ingestions(
+    space_id: str, db: DB, p: User, limit: int = Query(50, ge=1, le=50)
+):
+    from . import ingestion
+    from .models import IngestionJob
+
+    out = []
+    for job in await db.scalars(
+        select(IngestionJob)
+        .where(IngestionJob.ontology_id == space_id)
+        .order_by(IngestionJob.created_at.desc(), IngestionJob.id)
+    ):
+        try:
+            await ingestion.authorized(db, p, job)
+        except HTTPException as error:
+            if error.status_code in (403, 404):
+                continue
+            raise
+        out.append(ingestion.serialize(job))
+        if len(out) >= limit:
+            break
+    return out
+
+
+@router.post("/ingestions/{job_id}/plan")
+async def plan_ingestion(job_id: str, db: DB, p: User):
+    from . import ingestion
+    from .models import IngestionJob
+
+    await lock_writer(db)
+    return await ingestion.plan(db, p, await db.get(IngestionJob, job_id))

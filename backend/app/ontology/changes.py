@@ -38,6 +38,11 @@ async def preview(db, principal, change_id):
     change = await db.get(OntologyChangeSet, change_id, populate_existing=True)
     if not change or change.actor != actor(principal):
         raise HTTPException(404, "变更计划不存在")
+    if change.kind == "ingestion":
+        from .ingestion import authorize_change
+
+        await authorize_change(db, principal, change)
+        return change
     require_schema(principal, change.payload["schema"], write=True)
     space = await db.get(Ontology, change.ontology_id)
     require_schema(principal, await baseline(db, space), write=True)
@@ -51,6 +56,12 @@ async def confirm_change(db, principal, change_id):
         return change.result
     if change.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
         raise HTTPException(409, "计划已过期")
+    if digest(change.payload) != change.payload_digest:
+        raise HTTPException(409, "计划内容已变化")
+    if change.kind == "ingestion":
+        from .ingestion import confirm
+
+        return await confirm(db, principal, change)
     space = await db.get(Ontology, change.ontology_id)
     rev = await revision(db, space, change.payload["revision_id"])
     if (

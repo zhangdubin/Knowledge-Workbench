@@ -7,8 +7,7 @@
    确认后才真正落库。模型永远拿不到「直接改数据」的能力。
 2. **不生成 SQL**：LLM 只负责「选工具 + 填参数」，聚合/过滤全部由
    本地代码执行。模型幻觉最多导致查不到东西，不会导致数据泄露或损坏。
-3. **确认时重新校验**：待确认的参数会回传给后端，但执行前一律重新做
-   权限 + 字段校验，不信任客户端回传的内容。
+3. **确认时重新校验**：服务端保存提议参数和数据版本，确认时按计划 ID 重验权限与前置条件。
 4. **权限随会话**：工具执行时用当前登录主体的模型级权限过滤，
    只读角色问「所有报销记录」也只会看到他被授权的部分；写工具额外要求
    write 权限。
@@ -400,11 +399,18 @@ async def tool_stats_records(
     }
 
 
-async def tool_search_documents(db: AsyncSession, keyword: str, limit: int = 8) -> dict:
+async def tool_search_documents(db: AsyncSession, principal, keyword: str, limit: int = 8) -> dict:
     from . import document as doc_svc
     limit = max(1, min(int(limit or 8), MAX_TOOL_ITEMS))
     try:
         res = await doc_svc.search_documents(db, keyword, limit=limit, mode="hybrid")
+        from ..models import Document
+        from .access import can_read_doc
+        visible = []
+        for hit in res.get("items", []):
+            doc = await db.get(Document, hit["id"])
+            if doc and not doc.deleted_at and await can_read_doc(db, principal, doc.id):
+                visible.append(hit)
         items = [
             {
                 "document_id": it.get("id"),
@@ -412,7 +418,7 @@ async def tool_search_documents(db: AsyncSession, keyword: str, limit: int = 8) 
                 "kind": it.get("kind") or "",
                 "summary": (it.get("summary") or "")[:100],
             }
-            for it in res.get("items", [])
+            for it in visible
         ]
         return {"items": items, "count": len(items)}
     except Exception as e:
@@ -522,7 +528,7 @@ async def _load_target(db: AsyncSession, principal, model_key: str):
     if not t:
         return None, f"模型「{key}」不存在或已在回收站"
     if not principal.can_model(t.key, "write"):
-        return None, f"当前账号对模型「{t.name}」没有写权限，不能执行这个操作"
+        return None, "缺少模型写权限"
     return t, None
 
 
@@ -634,89 +640,12 @@ async def prepare_write(db: AsyncSession, principal, name: str, args: dict) -> d
     return {"pending": pending}
 
 
-async def exec_write(db: AsyncSession, principal, name: str, args: dict) -> dict:
-    """真正执行写操作。**执行前一定重新校验** —— 参数可能来自前端回传。"""
-    from . import record as rec_svc
-    from . import audit as audit_svc
-
-    prep = await prepare_write(db, principal, name, args)
-    if prep.get("error"):
-        return {"ok": False, "error": prep["error"]}
-    p = prep["pending"]
-    clean = p["args"]
-
-    who = str(principal.id if principal.id is not None else principal.username)
-    if not _dedup_allow(who, name, {k: v for k, v in clean.items()}):
-        return {"ok": False, "error": "这个操作刚刚已经执行过了（重复提交已拦截），"
-                                      "请不要重复提交；如果确实要再记一笔一样的，"
-                                      f"请等待 {int(DEDUP_WINDOW)} 秒后再试。"}
-
-    t = await _type_by_key(db, clean["model_key"])
-    if not t:
-        return {"ok": False, "error": f"模型「{clean['model_key']}」不存在"}
-
-    if name == "create_record":
-        try:
-            rec = await rec_svc.create_record(db, t.id, clean["data"])
-        except ValueError as e:
-            # 记录里的 group_id 指向不存在的分组：给 AI 一句人话，
-            # 而不是让一个 ValueError 变成 500
-            return {"ok": False, "error": str(e)}
-        if not rec:
-            return {"ok": False, "error": "写入失败：模型不存在或已在回收站"}
-        result = {"ok": True, "action": "created", "model": t.key,
-                  "model_name": t.name, "record_id": rec.id}
-    elif name == "update_record":
-        rec = await db.get(EntityRecord, clean["record_id"])
-        if not rec or rec.deleted_at:
-            return {"ok": False, "error": f"记录 #{clean['record_id']} 不存在"}
-        merged = {**(rec.data or {}), **clean["data"]}      # 只覆盖要改的字段
-        try:
-            rec = await rec_svc.update_record(db, clean["record_id"], merged)
-        except ValueError as e:
-            return {"ok": False, "error": str(e)}
-        if not rec:
-            return {"ok": False, "error": "写入失败：记录不存在"}
-        result = {"ok": True, "action": "updated", "model": t.key,
-                  "model_name": t.name, "record_id": rec.id,
-                  "changed": {k: _display(v) for k, v in clean["data"].items()}}
-    else:
-        ok = await rec_svc.delete_record(db, clean["record_id"])
-        if not ok:
-            return {"ok": False, "error": f"记录 #{clean['record_id']} 不存在或已在回收站"}
-        result = {"ok": True, "action": "deleted", "model": t.key,
-                  "model_name": t.name, "record_id": clean["record_id"],
-                  "note": "已移入回收站，可在「回收站」页恢复"}
-
-    # 审计：AI 代执行必须留痕（谁、经哪个工具、动了哪条记录、改了哪些字段）
-    try:
-        await audit_svc.log_event(
-            principal.username, f"ai_agent_{result['action']}",
-            user_id=principal.id,
-            detail={
-                "ai": True, "tool": name, "model": t.key,
-                "record_id": result.get("record_id"),
-                # 保留原始类型（数字就是数字），审计里才看得出到底写进去了什么
-                "data": {
-                    k: (v if isinstance(v, (int, float, bool)) or v is None else str(v)[:200])
-                    for k, v in (clean.get("data") or {}).items()
-                },
-            },
-            resource="ai_agent", method="POST", path="/api/ai/agent/confirm",
-        )
-    except Exception as e:      # 审计失败不能影响业务
-        log.warning("AI 写操作审计失败：%s", e)
-
-    result["label"] = p.get("record_label") or _record_label(clean.get("data") or {})
-    return result
-
-
 # ============ 执行循环 ============
 
 TOOL_IMPLS = {}     # name -> impl(db, principal, **args)
 
 
-async def tool_search_genes(db: AsyncSession, query: str, kind: str = "",
+async def tool_search_genes(db: AsyncSession, principal, query: str, kind: str = "",
                             limit: int = 6) -> dict:
     """检索养料库基因
 
@@ -724,6 +653,7 @@ async def tool_search_genes(db: AsyncSession, query: str, kind: str = "",
     也能用上养料库 —— 否则养料库只在两个页面里活着。
     """
     from . import dna_library as dna_lib
+    from ..ontology.capabilities import readable_gene
     limit = max(1, min(int(limit or 6), MAX_TOOL_ITEMS))
     kinds = [kind] if kind in ("fact", "method", "experience",
                                "interface", "policy") else None
@@ -735,7 +665,7 @@ async def tool_search_genes(db: AsyncSession, query: str, kind: str = "",
     items = []
     for h in hits:
         g = h.get("gene")
-        if g is None:
+        if g is None or not await readable_gene(db, principal, g):
             continue
         items.append({
             "gene_id": g.id,
@@ -762,6 +692,15 @@ _register(tool_search_records)
 _register(tool_stats_records)
 _register(tool_search_documents)
 _register(tool_search_genes)
+
+from ..ontology import capabilities as ontology_caps
+
+for capability in ontology_caps.CAPABILITIES:
+    name = capability["name"]
+    TOOL_IMPLS[name] = getattr(ontology_caps, name)
+    TOOL_SPECS.append({"type": "function", "function": {
+        key: capability[key] for key in ("name", "description", "parameters")
+    }})
 
 
 SYSTEM_PROMPT = """你是知识工作台里的 AI 助理，可以调用一组工具查询系统数据、并按用户要求改写数据。
@@ -977,50 +916,6 @@ def _call_key(name: str, args: dict) -> str:
         return f"{name}:{args}"
 
 
-# 重复提交闸门：确认按钮被双击、或前端重试时，同一个人对同一份参数的
-# 写操作在窗口期内只允许落库一次。否则「记一笔」会变成记两笔，
-# 而且第二笔和第一笔长得一模一样，事后很难发现。
-_RECENT_WRITES: dict[str, float] = {}
-DEDUP_WINDOW = 15.0      # 秒
-
-
-def _dedup_allow(who: str, name: str, args: dict) -> bool:
-    import time
-    now = time.monotonic()
-    for k, ts in list(_RECENT_WRITES.items()):      # 顺手清过期项，防无限增长
-        if now - ts > DEDUP_WINDOW:
-            _RECENT_WRITES.pop(k, None)
-    key = f"{who}|{_call_key(name, args)}"
-    if key in _RECENT_WRITES:
-        return False
-    _RECENT_WRITES[key] = now
-    return True
-
-
-def _read_digest(trace: list[dict], limit: int = 4000) -> list[str]:
-    """把只读工具的查询结果压成清单，供「用户确认后」把这轮上下文带回给模型。
-
-    写操作确认是新一轮请求，服务端不保存会话状态，所以本轮查到的数据
-    必须随待确认操作一起带走，否则模型确认后就成了睁眼瞎。
-    """
-    out = []
-    total = 0
-    for t in trace:
-        if t.get("name") in WRITE_TOOLS:
-            continue
-        try:
-            body = json.dumps(t.get("result"), ensure_ascii=False, default=str)
-        except Exception:
-            body = str(t.get("result"))
-        line = f"{t['name']}({json.dumps(t.get('args') or {}, ensure_ascii=False)}) → {body[:600]}"
-        total += len(line)
-        if total > limit:
-            out.append("（更多查询结果已省略）")
-            break
-        out.append(line)
-    return out
-
-
 async def run_agent(
     db: AsyncSession, question: str, principal,
     history: list[dict] | None = None,
@@ -1071,18 +966,13 @@ async def run_agent(
 
     # ---------- 用户已确认：先执行，再让模型收尾 ----------
     if confirmed:
-        name = (confirmed.get("tool") or "").strip()
-        args = confirmed.get("args") or {}
-        if name not in WRITE_TOOLS:
-            return {"status": "done", "answer": f"不认识的写操作「{name}」",
-                    "tool_calls": [], "rounds": 0, "error": "bad_tool"}
-        result = await exec_write(db, principal, name, args)
+        from ..ontology.capabilities import confirm_record
+        stored, result = await confirm_record(db, principal, confirmed.get("change_id"))
+        name, args = stored["tool"], stored["args"]
         trace.append({"name": name, "args": args, "result": result,
                       "write": True, "confirmed": True})
         done_keys.add(_call_key(name, args))
 
-        facts = [f"[你之前查到的数据]\n" + "\n".join(confirmed.get("digest") or [])] \
-            if confirmed.get("digest") else []
         outcome = (
             f"已成功执行" if result.get("ok")
             else f"执行失败：{result.get('error')}"
@@ -1097,7 +987,6 @@ async def run_agent(
                 "【系统通知】用户已在界面上确认执行你提议的操作。\n"
                 f"工具：{name}\n参数：{json.dumps(args, ensure_ascii=False, default=str)}\n"
                 f"结果：{outcome} {extra}\n"
-                + ("\n".join(facts) + "\n" if facts else "")
                 + "请用一两句话向用户说明结果（成功了告诉他记录在哪能看，失败了说明原因），"
                   "不要重复调用同一个操作，也不要再提议别的写操作。"
             ),
@@ -1120,7 +1009,7 @@ async def run_agent(
                     "status": "done",
                     "answer": "还没有配置 AI 服务。请到「AI 设置」页填入接口地址与 Key，"
                               "之后我就能直接查询系统数据、按你的要求记账改数据了。",
-                    "tool_calls": [], "rounds": 0, "error": "not_configured",
+                    "tool_calls": trace, "rounds": 0, "error": "not_configured",
                     "truncated": False,
                 }
             return {
@@ -1176,7 +1065,8 @@ async def run_agent(
                     trace.append({"name": c["name"], "args": c["args"],
                                   "result": {"error": "重复操作已拦截"}, "write": True})
                     continue
-                prep = await prepare_write(db, principal, c["name"], c["args"])
+                from ..ontology.capabilities import propose_record
+                prep = await propose_record(db, principal, c["name"], c["args"])
                 if prep.get("error"):
                     # 参数/权限不对：当作工具结果回灌，让模型自我修正
                     messages.append(_tool_msg(c["id"], {"error": prep["error"]}))
@@ -1186,7 +1076,6 @@ async def run_agent(
                 if pending_call is None:
                     p = prep["pending"]
                     p["tool_call_id"] = c["id"]
-                    p["digest"] = _read_digest(trace)
                     pending_call = p
                     trace.append({"name": c["name"], "args": c["args"],
                                   "result": {"status": "等待用户确认"}, "write": True,
@@ -1213,11 +1102,7 @@ async def run_agent(
                         result = dict(cached)
                         result["note"] = "同样的查询刚做过，这是同一个结果，请直接用它作答"
                     else:
-                        if c["name"] in ("search_documents", "search_genes"):
-                            # 检索类不涉及模型级权限（可见性由各自接口控制）
-                            result = await impl(db, **c["args"])
-                        else:
-                            result = await impl(db, principal, **c["args"])
+                        result = await impl(db, principal, **c["args"])
                         read_cache[ckey] = result
             except Exception as e:
                 log.warning("agent 工具 %s 执行失败：%s", c["name"], e)

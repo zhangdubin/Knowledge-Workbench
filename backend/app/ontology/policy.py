@@ -3,9 +3,13 @@ from sqlalchemy import select
 from .models import Projection
 
 
-def require_schema(principal, schema, *, write=False):
+def require_workspace(principal):
     if not principal.has_page("types"):
         raise HTTPException(403, "缺少数据模型页面权限")
+
+
+def require_schema(principal, schema, *, write=False):
+    require_workspace(principal)
     if write and schema["relations"] and not principal.has_feature("relation_manage"):
         raise HTTPException(403, "缺少关联管理权限")
     if write and not principal.has_feature("model_manage"):

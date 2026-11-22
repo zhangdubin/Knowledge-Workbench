@@ -56,7 +56,7 @@ def build_search_text(fields: list[FieldDefinition], data: dict[str, Any]) -> st
 
 
 async def create_record(
-    db: AsyncSession, type_id: int, data: dict
+    db: AsyncSession, type_id: int, data: dict, *, commit: bool = True
 ) -> EntityRecord | None:
     await lock_writer(db)
     et = await db.get(EntityType, type_id, populate_existing=True)
@@ -84,13 +84,16 @@ async def create_record(
     db.add(rec)
     await db.flush()
     await track(db, rec)
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     await db.refresh(rec)
     return rec
 
 
 async def update_record(
-    db: AsyncSession, record_id: int, data: dict, *, expected_version: int | None = None
+    db: AsyncSession, record_id: int, data: dict, *, expected_version: int | None = None, commit: bool = True
 ) -> EntityRecord | None:
     await lock_writer(db)
     rec = await db.get(EntityRecord, record_id, populate_existing=True)
@@ -122,12 +125,15 @@ async def update_record(
     rec.data = new_data
     rec.search_text = build_search_text(fields, new_data)
     await track(db, rec)
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     await db.refresh(rec)
     return rec
 
 
-async def delete_record(db: AsyncSession, record_id: int, *, expected_version: int | None = None) -> bool:
+async def delete_record(db: AsyncSession, record_id: int, *, expected_version: int | None = None, commit: bool = True) -> bool:
     """软删除：进回收站，可恢复"""
     await lock_writer(db)
     rec = await db.get(EntityRecord, record_id,populate_existing=True)
@@ -136,7 +142,10 @@ async def delete_record(db: AsyncSession, record_id: int, *, expected_version: i
     await check_version(db, rec, expected_version)
     rec.deleted_at = datetime.now(timezone.utc)
     await track(db, rec)
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     return True
 
 

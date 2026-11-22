@@ -203,7 +203,7 @@ def _side_ids(payload: dict, side: str, kind: str) -> int:
     return int(did)
 
 
-async def create_relation_record(db: AsyncSession, payload: dict) -> RelationRecord:
+async def create_relation_record(db: AsyncSession, payload: dict, *, commit: bool = True) -> RelationRecord:
     await lock_writer(db)
     rd = await db.get(RelationDef, payload.get("relation_def_id") or 0)
     if not rd:
@@ -268,7 +268,10 @@ async def create_relation_record(db: AsyncSession, payload: dict) -> RelationRec
         data=payload.get("data") or {},
     )
     db.add(rr)
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     await db.refresh(rr)
     return rr
 

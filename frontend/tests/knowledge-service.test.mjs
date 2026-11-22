@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { register } from 'node:module'
 import { test } from 'node:test'
+import { createRenderer, nextTick, reactive } from 'vue'
 import {
   createKnowledgeState, createRetryKeys, generationLabel, knowledgeCapabilities,
   queryPayload, quoteParts, sourceIsSelected, statusLabel, validQuote,
@@ -9,6 +10,10 @@ import {
 const apiStub = 'data:text/javascript,' + encodeURIComponent('export const Api = {}')
 register('data:text/javascript,' + encodeURIComponent(`
   export async function resolve(specifier, context, nextResolve) {
+    if (specifier === 'element-plus' && context.parentURL?.endsWith('/api/index.js')) {
+      const ui = 'data:text/javascript,' + encodeURIComponent('export const ElMessage = { warning() {}, error() {} }')
+      return { url: ui, shortCircuit: true, format: 'module' }
+    }
     if (specifier === '../api') return { url: '${apiStub}', shortCircuit: true, format: 'module' }
     return nextResolve(specifier, context)
   }
@@ -136,4 +141,319 @@ test('permission-hidden custom links stay hidden while the main navigation stays
   assert.deepEqual(searchWorkspaceCommands(hidden.groups, '知识服务'), [])
   const allowed = getWorkspaceNavigation({ canPage: () => true, canFeature: () => true })
   assert.deepEqual(allowed.primary.map(item => item.path), ['/', '/library', '/notes', '/knowledge/graph', '/apps'])
+})
+
+const { default: http } = await import('../src/api/index.js')
+const { useKnowledgeWorkspace } = await import('../src/views/knowledge-service/useKnowledgeWorkspace.js')
+const renderer = createRenderer({
+  createComment: () => ({}), insert() {}, remove() {},
+})
+const manager = () => reactive({ user: { id: 1 }, canPage: () => true, can: () => true })
+const catalogResponse = {
+  spaces: [{ id: 'space', name: '知识空间', types: [], scopes: ['保障'], topics: [], can_manage_sources: true }],
+  can_manage: true, can_review: true, source_candidates: [{ id: 2, title: '维护规程', filename: '维护规程.txt' }],
+}
+const originalItem = { id: 8, version: 1, title: '维护条目' }
+const originalRun = {
+  run_id: 'original', status: 'supported', generation: 'generated', answer: '已有结论',
+  as_of: '2026-02-01', request: { question: '维护规程', as_of: '2026-02-01' },
+  items: [originalItem], facts: [{ id: 'fact' }],
+  citations: [{ id: 'cite', revision_id: 'edition', quote: '旧引文' }],
+  terms: [], sources: [], conflicts: [],
+}
+const edition = { id: 'edition', ontology_id: 'space', text: '授权文字', group_revisions: [] }
+const currentItem = { ...originalItem, version: 2, citations: [], facts: [], relations: [], history: [] }
+
+function deferred() {
+  let resolve, reject
+  const wait = new Promise((done, failed) => { resolve = done; reject = failed })
+  return { wait, resolve, reject }
+}
+const rejectHttp = status => ({ response: { status, data: { detail: '当前授权已变更' } } })
+const settle = () => new Promise(resolve => setImmediate(resolve))
+
+function mountController(t, useController, respond) {
+  const adapter = http.defaults.adapter
+  http.defaults.adapter = async config => {
+    const path = config.url.replace('/api/knowledge-service', '')
+    try {
+      const data = await respond(path, config)
+      return { data, config }
+    } catch (error) {
+      error.config = config
+      throw error
+    }
+  }
+  let controller
+  const app = renderer.createApp({
+    setup() {
+      controller = useController()
+      return () => null
+    },
+  })
+  app.mount({})
+  t.after(() => {
+    app.unmount()
+    http.defaults.adapter = adapter
+  })
+  return controller
+}
+
+function workspace(t, respond) {
+  return mountController(t, () => useKnowledgeWorkspace(manager()), (path, config) =>
+    path === '/catalog' ? catalogResponse : respond(path, config))
+}
+
+test('leaving search invalidates late query successes and term errors', async t => {
+  const query = deferred()
+  const terms = deferred()
+  const ws = workspace(t, path => ({
+    '/query': query.wait, '/terms': terms.wait, '/sources': { items: [edition] }, '/sources/edition': edition,
+  })[path])
+  await settle()
+  ws.filters.question = '维护规程'
+  const search = ws.search()
+  const lookup = ws.lookupTerms()
+  await ws.switchTab('sources')
+  await ws.openSource('edition')
+  query.resolve(originalRun)
+  terms.reject(rejectHttp(403))
+  await Promise.all([search, lookup])
+  assert.deepEqual(ws.state.source.data, edition)
+  assert.equal(ws.notice.value, '')
+  await ws.switchTab('search')
+  assert.equal(ws.state.result, null)
+  assert.equal(ws.state.terms.error, '')
+  assert.equal(ws.state.sources.data, null)
+})
+
+test('leaving source and feedback tabs invalidates both delayed page requests', async t => {
+  const sources = deferred()
+  const feedback = deferred()
+  const ws = workspace(t, path => ({
+    '/sources': sources.wait, '/feedback': feedback.wait, '/query': originalRun,
+  })[path])
+  await settle()
+  const browse = ws.switchTab('sources')
+  const review = ws.switchTab('feedback')
+  await ws.switchTab('search')
+  sources.reject(rejectHttp(403))
+  feedback.resolve({ items: [{ id: 'obsolete' }] })
+  await Promise.all([browse, review])
+  assert.equal(ws.state.sources.error, '')
+  assert.equal(ws.state.feedbackList.data, null)
+  assert.equal(ws.notice.value, '')
+})
+
+test('a stale knowledge 401 does not redirect, and a current 401 uses the login flow', async t => {
+  const old = deferred()
+  let calls = 0
+  const ws = workspace(t, path => {
+    if (path === '/query' && ++calls === 1) return old.wait
+    if (path === '/query') throw rejectHttp(401)
+    if (path === '/sources') return { items: [] }
+  })
+  const originalWindow = globalThis.window
+  const originalStorage = globalThis.sessionStorage
+  const redirected = new Map()
+  globalThis.window = { location: { hash: '#/knowledge-service' } }
+  globalThis.sessionStorage = { setItem: (key, value) => redirected.set(key, value) }
+  t.after(() => {
+    if (originalWindow === undefined) delete globalThis.window
+    else globalThis.window = originalWindow
+    if (originalStorage === undefined) delete globalThis.sessionStorage
+    else globalThis.sessionStorage = originalStorage
+  })
+  await settle()
+  ws.filters.question = '维护规程'
+  const pending = ws.search()
+  await settle()
+  await ws.switchTab('sources')
+  old.reject(rejectHttp(401))
+  await pending
+  assert.equal(globalThis.window.location.hash, '#/knowledge-service')
+  await ws.switchTab('search')
+  await ws.search()
+  assert.equal(globalThis.window.location.hash, '#/login')
+  assert.equal(redirected.get('kb_return_to'), '#/knowledge-service')
+})
+
+test('an independently readable item cannot leave a withdrawn run answer and quote on screen', async t => {
+  const detail = deferred()
+  const recheck = deferred()
+  const calls = []
+  const ws = workspace(t, (path, config) => {
+    calls.push(path)
+    return { '/query': originalRun, '/items/8': detail.wait, '/runs/original': recheck.wait }[path]
+  })
+  await settle()
+  ws.filters.question = '维护规程'
+  await ws.search()
+  assert.equal(ws.state.result.citations[0].quote, '旧引文')
+  const opening = ws.openItem(8)
+  assert.equal(ws.state.result, null)
+  await settle()
+  assert.deepEqual(calls, ['/query', '/items/8'])
+  detail.resolve(currentItem)
+  await settle()
+  assert.deepEqual(calls, ['/query', '/items/8', '/runs/original'])
+  recheck.reject(rejectHttp(403))
+  await opening
+  assert.equal(ws.state.item.data.version, 2)
+  assert.deepEqual(ws.state.item.data.citations, [])
+  assert.equal(ws.state.result, null)
+})
+
+test('authorized replay preserves the original selection for historical item feedback', async t => {
+  const sent = []
+  const replay = { ...originalRun, answer: null, citations: [], facts: [] }
+  const ws = workspace(t, (path, config) => {
+    if (path === '/feedback') {
+      sent.push(JSON.parse(config.data))
+      return { id: 'feedback-receipt' }
+    }
+    return { '/query': originalRun, '/runs/original': replay }[path]
+  })
+  await settle()
+  ws.filters.question = '维护规程'
+  await ws.search()
+  await ws.openRun('original')
+  assert.equal(ws.state.result.answer, null)
+  assert.deepEqual(ws.state.result.citations, [])
+  assert.equal(ws.state.result.as_of, '2026-02-01')
+  await ws.startRunItemFeedback(ws.state.run.data, originalItem)
+  ws.feedbackForm.message = '请核对原结论'
+  await ws.submitFeedback()
+  assert.equal(sent.length, 1)
+  assert.deepEqual(
+    { run_id: sent[0].run_id, record_id: sent[0].record_id, record_version: sent[0].record_version },
+    { run_id: 'original', record_id: 8, record_version: 1 },
+  )
+  assert.equal(ws.state.submission.data.id, 'feedback-receipt')
+})
+
+test('selecting an authorized term applies its scope even outside the catalog scopes', async t => {
+  const term = { id: 7, preferred: '处置', aliases: [], scope: '培训' }
+  let request
+  const ws = workspace(t, (path, config) => {
+    if (path === '/terms') return { items: [term], ambiguous: true }
+    if (path === '/query') {
+      request = JSON.parse(config.data)
+      return { ...originalRun, items: [], citations: [] }
+    }
+  })
+  await settle()
+  ws.filters.question = '处置'
+  await ws.lookupTerms()
+  await ws.pickTerm(ws.state.terms.data.items[0])
+  assert.equal(request.scope, '培训')
+  assert.deepEqual(ws.scopeOptions.value, ['保障', '培训'])
+})
+
+test('a repeated successful template preview keeps the same confirmable change', async t => {
+  const { useKnowledgeManagement } = await import('../src/views/knowledge-service/useKnowledgeManagement.js')
+  const writes = []
+  const management = mountController(t, () => useKnowledgeManagement(
+    reactive({ kind: 'template', revisions: [] }), () => {},
+  ), (path, config) => {
+    if (config.method === 'post') writes.push([path, JSON.parse(config.data)])
+    if (path === '/template' && config.method === 'post') {
+      return { change_id: 'change-' + writes.length, preview: { schema: {} } }
+    }
+    if (path.startsWith('/template/change-')) return { space_id: 'installed' }
+    return { schema: {} }
+  })
+  management.name.value = '业务知识'
+  await management.previewTemplate()
+  await management.previewTemplate()
+  assert.equal(writes.length, 1)
+  assert.equal(management.preview.data.change_id, 'change-1')
+  await management.confirmTemplate()
+  assert.equal(writes[1][0], '/template/change-1/confirm')
+  management.name.value = '安全知识'
+  await management.previewTemplate()
+  assert.notEqual(writes[0][1].key, writes[2][1].key)
+})
+
+test('writing a source locks the selected replacement, and mismatched draft completion is ignored', async t => {
+  const { useKnowledgeManagement } = await import('../src/views/knowledge-service/useKnowledgeManagement.js')
+  const result = deferred()
+  const events = []
+  const props = reactive({ kind: 'sources', spaceId: 'space', revisions: [], selectedRevision: null })
+  const management = mountController(t, () => useKnowledgeManagement(props, (...event) => events.push(event)),
+    path => path === '/sources' ? result.wait : null)
+  Object.assign(management.form, { document_id: 2, label: '第一版', group_key: '手册' })
+  const saving = management.registerSource()
+  assert.equal(management.saving.busy, true)
+  props.selectedRevision = { id: 'other', group_key: '其他', scope: '保障', topic: '维护' }
+  await nextTick()
+  assert.equal(management.form.supersedes_id, '')
+  management.form.label = '另一稿'
+  result.resolve({ id: 'registered' })
+  await saving
+  assert.equal(events.some(([type]) => type === 'registered'), false)
+})
+
+test('source registration 404 from a revoked file reloads the workspace and catalog', async t => {
+  const { useKnowledgeManagement } = await import('../src/views/knowledge-service/useKnowledgeManagement.js')
+  const result = deferred()
+  const refresh = deferred()
+  let calls = 0
+  let ws
+  const management = mountController(t, () => {
+    ws = useKnowledgeWorkspace(manager())
+    return useKnowledgeManagement(
+      reactive({ kind: 'sources', spaceId: 'space', revisions: [] }), (type, message) => {
+        if (type === 'permission') void ws.refreshAuthorization(message)
+      },
+    )
+  }, (path, config) => {
+    if (path === '/catalog') return ++calls === 1 ? catalogResponse : refresh.wait
+    if (path === '/sources/edition') return edition
+    if (path === '/sources') return config.method === 'post' ? result.wait : { items: [edition] }
+  })
+  await settle()
+  await ws.switchTab('sources')
+  await ws.openSource('edition')
+  Object.assign(management.form, { document_id: 2, label: '修订', group_key: '手册' })
+  const saving = management.registerSource()
+  result.reject(rejectHttp(404))
+  await saving
+  assert.equal(ws.state.source.data, null)
+  assert.equal(ws.state.sources.data, null)
+  assert.equal(ws.catalog.data, null)
+  refresh.resolve({ ...catalogResponse, source_candidates: [] })
+  await settle()
+  assert.deepEqual(ws.catalog.data.source_candidates, [])
+})
+
+test('citation authorization settles before a comparison can replace its recheck', async t => {
+  const recheck = deferred()
+  const second = { id: 'edition-2', group_revisions: [] }
+  const first = { ...edition, group_revisions: [edition, second] }
+  const cited = originalRun.citations[0]
+  const replay = { ...originalRun, answer: null }
+  let compares = 0
+  const ws = workspace(t, path => {
+    if (path === '/sources/edition-2') {
+      compares++
+      return second
+    }
+    return { '/query': originalRun, '/runs/original': recheck.wait, '/sources/edition': first }[path]
+  })
+  await settle()
+  ws.filters.question = '维护规程'
+  await ws.search()
+  const opening = ws.openSource('edition', cited)
+  await settle()
+  assert.equal(ws.state.source.target.citation, null)
+  const earlyCompare = ws.compareSource('edition-2')
+  await settle()
+  const prematureRequests = compares
+  recheck.resolve(replay)
+  await Promise.all([opening, earlyCompare])
+  assert.equal(prematureRequests, 0)
+  assert.deepEqual(ws.state.source.target.citation, cited)
+  await ws.compareSource('edition-2')
+  assert.equal(ws.state.comparison.data.id, 'edition-2')
 })

@@ -3,7 +3,7 @@
     <div v-if="source.group_revisions?.some(item => item.id !== source.id)" class="ks-form">
       <label>
         <span>对照版本</span>
-        <select :value="comparison.target || ''" @change="$emit('compare', $event.target.value)">
+        <select :disabled="checking" :value="comparison.target || ''" @change="$emit('compare', $event.target.value)">
           <option value="">选择同组资料版本</option>
           <option v-for="item in source.group_revisions.filter(row => row.id !== source.id)" :key="item.id" :value="item.id">
             {{ item.label }} · {{ effectivePeriod(item) }}
@@ -67,6 +67,7 @@ const props = defineProps({
   source: { type: Object, required: true },
   comparison: { type: Object, required: true },
   citation: { type: Object, default: null },
+  checking: Boolean,
 })
 defineEmits(['compare'])
 const quoteMark = ref([])

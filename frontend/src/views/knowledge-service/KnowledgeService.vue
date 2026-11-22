@@ -1,7 +1,7 @@
 <template>
   <div class="page ks-page">
     <PageTitle title="知识服务" description="查阅制度和手册，核对适用版本，定位出处。" icon-key="Document">
-      <button v-if="capabilities.template" class="ks-button" type="button" @click="openManagement('template')">安装知识模板</button>
+      <button v-if="capabilities.template" class="ks-button" type="button" :disabled="managementBusy" @click="openManagement('template')">安装知识模板</button>
     </PageTitle>
 
     <p v-if="notice" class="ks-notice" role="status">{{ notice }}</p>
@@ -22,14 +22,14 @@
       :revisions="state.sources.data?.items"
       :selected-revision="selectedRevision"
       @close="management = ''; selectedRevision = null"
-      @installed="installed" @registered="registered" @permission="permissionChanged"
+      @installed="installed" @registered="registered" @permission="permissionChanged" @saving="managementBusy = $event"
     />
 
     <template v-if="space">
       <nav class="ks-switcher ks-actions" aria-label="知识服务功能">
-        <button type="button" class="ks-button" :aria-pressed="tab === 'search'" @click="selectTab('search')">知识检索</button>
-        <button type="button" class="ks-button" :aria-pressed="tab === 'sources'" @click="selectTab('sources')">资料版本</button>
-        <button type="button" class="ks-button" :aria-pressed="tab === 'feedback'" @click="selectTab('feedback')">
+        <button type="button" class="ks-button" :disabled="managementBusy" :aria-pressed="tab === 'search'" @click="selectTab('search')">知识检索</button>
+        <button type="button" class="ks-button" :disabled="managementBusy" :aria-pressed="tab === 'sources'" @click="selectTab('sources')">资料版本</button>
+        <button type="button" class="ks-button" :disabled="managementBusy" :aria-pressed="tab === 'feedback'" @click="selectTab('feedback')">
           {{ capabilities.review ? '反馈审核' : '我的反馈' }}
         </button>
       </nav>
@@ -62,7 +62,7 @@
               <div class="ks-form-grid ks-filters">
                 <label>
                   <span>知识空间</span>
-                  <select :value="filters.ontology_id" @change="chooseSpace($event.target.value)">
+                  <select :value="filters.ontology_id" :disabled="managementBusy" @change="chooseSpace($event.target.value)">
                     <option v-for="item in catalog.data.spaces" :key="item.id" :value="item.id">{{ item.name }}</option>
                   </select>
                 </label>
@@ -70,7 +70,7 @@
                   <span>适用范围</span>
                   <select v-model="filters.scope">
                     <option value="">全部范围</option>
-                    <option v-for="scope in space.scopes" :key="scope" :value="scope">{{ scope }}</option>
+                    <option v-for="scope in scopeOptions" :key="scope" :value="scope">{{ scope }}</option>
                   </select>
                 </label>
                 <label>
@@ -106,18 +106,18 @@
                 <h3>资料版本</h3>
                 <button
                   v-if="capabilities.sources" class="ks-button"
-                  type="button" @click="openManagement('sources')"
+                  type="button" :disabled="managementBusy" @click="openManagement('sources')"
                 >登记资料修订</button>
               </div>
               <label class="ks-form">
                 <span>知识空间</span>
-                <select :value="filters.ontology_id" @change="chooseSpace($event.target.value)">
+                <select :value="filters.ontology_id" :disabled="managementBusy" @change="chooseSpace($event.target.value)">
                   <option v-for="item in catalog.data.spaces" :key="item.id" :value="item.id">{{ item.name }}</option>
                 </select>
               </label>
               <p v-if="state.sources.busy" role="status">正在加载资料版本…</p>
               <p v-if="state.sources.error" class="ks-error" role="alert">{{ state.sources.error }}</p>
-              <button v-if="state.sources.error" class="ks-button" type="button" @click="loadSources(state.sources.target)">重新加载资料</button>
+              <button v-if="state.sources.error" class="ks-button" type="button" :disabled="managementBusy" @click="loadSources(state.sources.target)">重新加载资料</button>
               <template v-if="state.sources.data">
                 <ul v-if="state.sources.data.items.length" class="ks-rows">
                   <li v-for="source in state.sources.data.items" :key="source.id" class="ks-row ks-between">
@@ -130,7 +130,7 @@
                     </div>
                     <div class="ks-actions">
                       <button class="ks-button ks-text" type="button" @click="showDetail(openSource, source.id)">查看快照与版本</button>
-                      <button v-if="management === 'sources' && capabilities.sources" class="ks-button ks-text" type="button" @click="selectPredecessor(source)">
+                      <button v-if="management === 'sources' && capabilities.sources" class="ks-button ks-text" type="button" :disabled="managementBusy" @click="selectPredecessor(source)">
                         选择为替代对象
                       </button>
                     </div>
@@ -139,8 +139,8 @@
                 <p v-else>本页暂无资料版本。</p>
                 <p v-if="state.sources.data.incomplete && state.sources.data.next_offset == null" class="ks-muted">已显示扫描限额内的资料。</p>
                 <div class="ks-actions">
-                  <button v-if="state.sources.target > 0" class="ks-button" type="button" @click="loadSources(state.sources.target - 50)">上一页</button>
-                  <button v-if="state.sources.data.next_offset != null" class="ks-button" type="button" @click="loadSources(state.sources.data.next_offset)">下一页</button>
+                  <button v-if="state.sources.target > 0" class="ks-button" type="button" :disabled="managementBusy" @click="loadSources(state.sources.target - 50)">上一页</button>
+                  <button v-if="state.sources.data.next_offset != null" class="ks-button" type="button" :disabled="managementBusy" @click="loadSources(state.sources.data.next_offset)">下一页</button>
                 </div>
               </template>
             </template>
@@ -166,7 +166,7 @@
             </section>
 
             <section v-if="state.query.busy || state.query.error || state.result" class="ks-panel ks-stack" aria-label="检索结果">
-              <p v-if="state.query.busy" role="status">正在按选定范围检索…</p>
+              <p v-if="state.query.busy" role="status">{{ state.query.target ? '正在核对原查询的访问权限…' : '正在按选定范围检索…' }}</p>
               <p v-if="state.query.error" class="ks-error" role="alert">{{ state.query.error }}</p>
               <template v-if="state.result">
                 <div class="ks-between">
@@ -176,7 +176,8 @@
                     <button class="ks-button" type="button" @click="runFeedback">反馈本次查询</button>
                   </div>
                 </div>
-                <KnowledgeResult :result="state.result" allow-feedback @item="showItem" @source="showSource" @feedback="queryItemFeedback" />
+                <KnowledgeResult :result="state.result" :type-names="typeNames" allow-feedback
+                  @item="showItem" @source="showSource" @feedback="item => showDetail(startRunItemFeedback, state.result, item)" />
               </template>
             </section>
           </template>
@@ -221,6 +222,7 @@
           <KnowledgeSource
             v-if="details === 'source' && state.source.data"
             :source="state.source.data" :comparison="state.comparison" :citation="state.source.target?.citation"
+            :checking="state.source.target?.checking"
             @compare="compareSource"
           />
 
@@ -229,10 +231,11 @@
             <p v-if="state.item.data.summary">{{ state.item.data.summary }}</p>
             <div class="ks-meta">
               <span>当前版本 {{ state.item.data.version }}</span>
+              <span v-if="typeNames.get(state.item.data.type_id)">{{ typeNames.get(state.item.data.type_id) }}</span>
               <span v-if="state.item.data.scope">{{ state.item.data.scope }}</span>
               <span v-if="state.item.data.topic">{{ state.item.data.topic }}</span>
             </div>
-            <button class="ks-button" type="button" @click="itemFeedback(state.item.data)">反馈当前条目版本</button>
+            <button class="ks-button" type="button" @click="showDetail(startItemFeedback, state.item.data)">反馈当前条目版本</button>
             <KnowledgeEvidence :facts="state.item.data.facts" :citations="state.item.data.citations" :items="[state.item.data]" @source="showSource" />
             <section v-if="state.item.data.relations.length" class="ks-stack">
               <h4>关联条目</h4>
@@ -247,11 +250,19 @@
               <p v-if="!state.item.data.history.length" class="ks-muted">暂无可显示的版本记录。</p>
               <details v-for="version in state.item.data.history" :key="version.version" class="ks-row">
                 <summary>版本 {{ version.version }} · {{ dateTime(version.created_at) }}</summary>
-                <dl class="ks-history">
-                  <template v-for="(field, index) in historyFields(version.data)" :key="index">
+                <dl v-if="historyFields(version).length" class="ks-history">
+                  <template v-for="field in historyFields(version)" :key="field.label">
                     <dt>{{ field.label }}</dt><dd>{{ displayValue(field.value) }}</dd>
                   </template>
                 </dl>
+                <details v-if="technicalHistoryFields(version.data).length">
+                  <summary>高级 · 原始字段</summary>
+                  <dl class="ks-history">
+                    <template v-for="[key, value] in technicalHistoryFields(version.data)" :key="key">
+                      <dt>{{ key }}</dt><dd>{{ displayValue(value) }}</dd>
+                    </template>
+                  </dl>
+                </details>
                 <button class="ks-button ks-text" type="button" @click="itemFeedback({ ...state.item.data, version: version.version })">反馈此历史版本</button>
               </details>
             </section>
@@ -268,7 +279,8 @@
             </div>
             <p class="ks-muted">原查询于 {{ dateTime(state.run.data.created_at) }} 执行，耗时 {{ state.run.data.elapsed_ms }} 毫秒。引文已按当前权限校验。</p>
             <p v-if="state.run.data.incomplete" class="ks-muted">原查询选中的内容受检索上限限制。</p>
-            <KnowledgeResult :result="state.run.data" replay @item="showItem" @source="showSource" />
+            <KnowledgeResult :result="state.run.data" :type-names="typeNames" replay allow-feedback
+              @item="showItem" @source="showSource" @feedback="item => showDetail(startRunItemFeedback, state.run.data, item)" />
             <details class="ks-row">
               <summary>检索预算</summary>
               <p class="ks-meta">
@@ -352,9 +364,9 @@ import KnowledgeSource from './KnowledgeSource.vue'
 
 const route = useRoute()
 const {
-  state, catalog, filters, space, capabilities, tab, details, notice, queryForm, feedbackTarget,
-  feedbackForm, resolution, loadCatalog, changeSpace, switchTab, search, lookupTerms, pickTerm, loadSources,
-  openItem, openSource, compareSource, openRun, closeDetails, startFeedback, submitFeedback,
+  state, catalog, filters, space, scopeOptions, capabilities, tab, details, notice, queryForm, feedbackTarget,
+  feedbackForm, resolution, loadCatalog, refreshAuthorization, changeSpace, switchTab, search, lookupTerms, pickTerm, loadSources,
+  openItem, openSource, compareSource, openRun, closeDetails, startRunFeedback, startRunItemFeedback, startItemFeedback, submitFeedback,
   loadFeedback, openFeedback, resolveFeedback,
 } = useKnowledgeWorkspace(useAuthStore(), route.query.scope)
 
@@ -372,6 +384,8 @@ const detailPanel = ref(null)
 const questionInput = ref(null)
 const managementPanel = ref(null)
 const management = ref('')
+const managementBusy = ref(false)
+const typeNames = computed(() => new Map((space.value?.types || []).map(type => [type.id, type.name])))
 const selectedRevision = ref(null)
 const terms = computed(() => state.terms.data?.items || (state.result?.terms?.length || state.result?.status === 'ambiguous' ? state.result.terms || [] : null))
 const ambiguous = computed(() => state.terms.data ? state.terms.data.ambiguous : state.result?.status === 'ambiguous')
@@ -395,12 +409,13 @@ async function chooseTask(task) {
 }
 
 async function selectTab(next) {
-  if (next === tab.value) return
+  if (next === tab.value || managementBusy.value) return
   if (management.value === 'sources') management.value = ''
   await switchTab(next)
 }
 
 function chooseSpace(id) {
+  if (managementBusy.value) return
   management.value = ''
   selectedRevision.value = null
   changeSpace(id)
@@ -420,29 +435,34 @@ const showSource = (id, citation) => showDetail(openSource, id, citation)
 function dismissDetail() {
   closeDetails()
   if (returnFocus?.isConnected) returnFocus.focus()
+  else questionInput.value?.focus()
   returnFocus = null
 }
 
 function runFeedback() {
-  if (state.result) void showDetail(startFeedback, { run_id: state.result.run_id }, '本次查询')
+  void showDetail(startRunFeedback)
 }
 
-function itemFeedback(item) {
-  void showDetail(startFeedback, { record_id: item.id, record_version: item.version }, `${item.title} · 版本 ${item.version}`)
+const historyLabels = { title: '标题', summary: '摘要', scope: '适用范围', topic: '主题',
+  preferred: '首选词', aliases: '别名', definition: '释义' }
+function historyFields(version) {
+  const current = state.item.data
+  const data = { ...version.data }
+  if (current.version === version.version) {
+    for (const key of ['title', 'summary', 'scope', 'topic']) {
+      if (current[key]) data[key] = current[key]
+    }
+  }
+  return Object.entries(data)
+    .filter(([key]) => Object.hasOwn(historyLabels, key))
+    .map(([key, value]) => ({ label: historyLabels[key], value }))
 }
-
-function queryItemFeedback(item) {
-  void showDetail(startFeedback, { run_id: state.result.run_id, record_id: item.id, record_version: item.version },
-    `${item.title} · 版本 ${item.version}`)
-}
-
-function historyFields(data) {
-  const labels = { title: '标题', summary: '摘要', scope: '适用范围', topic: '主题',
-    preferred: '首选词', aliases: '别名', definition: '释义' }
-  return Object.entries(data || {}).map(([key, value], index) => ({ label: labels[key] || `字段 ${index + 1}`, value }))
+function technicalHistoryFields(data) {
+  return Object.entries(data || {}).filter(([key]) => !Object.hasOwn(historyLabels, key))
 }
 
 async function openManagement(kind) {
+  if (managementBusy.value) return
   management.value = kind
   selectedRevision.value = null
   await nextTick()
@@ -451,6 +471,7 @@ async function openManagement(kind) {
   firstControl?.focus()
 }
 async function selectPredecessor(source) {
+  if (managementBusy.value) return
   selectedRevision.value = source
   await nextTick()
   managementPanel.value?.$el?.querySelector('select')?.focus()
@@ -472,8 +493,8 @@ async function registered() {
 
 async function permissionChanged(message) {
   management.value = ''
-  notice.value = message
-  await loadCatalog()
+  selectedRevision.value = null
+  await refreshAuthorization(message)
 }
 
 watch(canManagePanel, allowed => {

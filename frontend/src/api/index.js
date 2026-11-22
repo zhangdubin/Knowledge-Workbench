@@ -27,6 +27,7 @@ function toLogin(msg) {
 api.interceptors.response.use(
   (resp) => resp.data,
   (err) => {
+    if (err.config?.isCurrent?.() === false) return Promise.reject(err)
     const status = err.response?.status
     // nginx 在大文件超 client_max_body_size 时直接返回 HTML 413 页面，
     // 后端没参与；data 不是 JSON，.detail 会取到 undefined；这里给个具体提示

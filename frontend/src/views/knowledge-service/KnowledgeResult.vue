@@ -8,7 +8,10 @@
       </ul>
       <p v-if="result.incomplete && result.status !== 'incomplete'" class="ks-muted">本次结果受检索上限或可用范围限制。</p>
       <p v-if="result.answer" class="ks-answer">{{ result.answer }}</p>
-      <p v-if="generationLabel(result.generation)" class="ks-muted">{{ generationLabel(result.generation) }}</p>
+      <p v-if="result.revalidated" class="ks-muted">已按当前权限核对原查询的证据。</p>
+      <p v-if="!result.revalidated || result.generation === 'disabled' || result.generation === 'error'" class="ks-muted">
+        {{ generationLabel(result.generation) }}
+      </p>
     </section>
 
     <section v-if="result.items?.length" class="ks-stack">
@@ -18,6 +21,7 @@
           <strong>{{ item.title }}</strong>
           <p v-if="item.summary">{{ item.summary }}</p>
           <div class="ks-meta">
+            <span v-if="typeNames.get(item.type_id)">{{ typeNames.get(item.type_id) }}</span>
             <span>版本 {{ item.version }}</span><span v-if="item.scope">{{ item.scope }}</span><span v-if="item.topic">{{ item.topic }}</span>
           </div>
           <div class="ks-actions">
@@ -85,6 +89,7 @@ import { effectivePeriod, generationLabel, statusLabel } from '../../utils/knowl
 
 const props = defineProps({
   result: { type: Object, required: true },
+  typeNames: { type: Map, default: () => new Map() },
   replay: Boolean,
   allowFeedback: Boolean,
 })

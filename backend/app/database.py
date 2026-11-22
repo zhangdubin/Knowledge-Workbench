@@ -392,6 +392,7 @@ async def get_db() -> AsyncSession:
 async def init_db():
     """初始化：建表 → 启动补全 → 种子 → 索引（FTS5 / vec0）→ 存量迁移"""
     from . import models  # noqa: F401  让 Base.metadata 知道所有模型
+    from .knowledge_service import models as knowledge_models  # noqa: F401
 
     async with engine.begin() as conn:
         # WAL 是持久化设置，写进库文件头部，只需设置一次

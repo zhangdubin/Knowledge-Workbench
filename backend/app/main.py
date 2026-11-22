@@ -16,6 +16,7 @@ from .routers import (    entity_types, records, relations, attachments, apps, s
     dna_library, dev,
 )
 from .ontology.router import router as ontology_router
+from .knowledge_service.router import router as knowledge_service_router
 from .ontology.migrations import install as install_ontology
 from .services.audit import AuditMiddleware
 from .services.auth import current_principal
@@ -308,6 +309,7 @@ async def health_deep(response: Response):
 # ---- 公开路由（无需登录）----
 from .ontology.provenance import scope_record_reads
 app.include_router(ontology_router, dependencies=[Depends(scope_record_reads)])
+app.include_router(knowledge_service_router, dependencies=[Depends(scope_record_reads)])
 app.include_router(auth.router)
 
 # ---- 需登录的路由 ----

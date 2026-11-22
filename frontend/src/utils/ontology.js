@@ -43,13 +43,14 @@ export function newField(key = '', name = '') {
   return { key, name, type: 'text', required: false, options: {} }
 }
 export function sampleSchema() {
-  const a = newType('project', '项目')
-  const b = newType('team', '团队')
+  const suffix = crypto.randomUUID().replaceAll('-', '')
+  const a = newType('project_' + suffix, '项目')
+  const b = newType('team_' + suffix, '团队')
   for (const type of [a, b]) type.fields.push(newField('name', '名称'))
   return {
     types: [a, b],
     relations: [
-      { key: 'owned_by', name: '负责团队', source: a.id, target: b.id, cardinality: 'many-to-one' },
+      { key: 'owned_by_' + suffix, name: '负责团队', source: a.id, target: b.id, cardinality: 'many-to-one' },
     ],
   }
 }

@@ -96,3 +96,18 @@ test('supersede uses an accepted same-subject/predicate replacement and the revi
   assert.deepEqual(eligibleReplacements(fact,rows),[good])
   assert.deepEqual(reviewBody('supersede',fact,good.id),{action:'supersede',expected_version:4,superseded_by:'b'})
 })
+
+test('independent examples have disjoint global keys and stable relation endpoints', () => {
+  const occupied = new Set(['project', 'team', 'owned_by'])
+  for (const schema of [sampleSchema(), sampleSchema()]) {
+    validateSchema(schema)
+    for (const { key } of [...schema.types, ...schema.relations]) {
+      assert.ok(!occupied.has(key), 'occupied key: ' + key)
+      occupied.add(key)
+    }
+    const [project, team] = schema.types
+    project.key = 'renamed'
+    assert.equal(schema.relations[0].source, project.id)
+    assert.equal(schema.relations[0].target, team.id)
+  }
+})

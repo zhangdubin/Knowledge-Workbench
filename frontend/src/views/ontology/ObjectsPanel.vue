@@ -8,7 +8,7 @@
       <div class="row">
         <label
           >选择对象<select
-            :value="object?.record_id || ''"
+            :value="selectedId"
             @change="run(() => select($event.target.value))"
           >
             <option value="">新建对象</option>
@@ -20,7 +20,7 @@
       </div>
       <div class="row">
         <label
-          >业务类型<select v-model="typeId" :disabled="!!object" @change="data = {}">
+          >业务类型<select v-model="typeId" :disabled="!!selectedId" @change="data = {}">
             <option v-for="t in types" :key="t.id" :value="t.id">{{ t.name }}</option>
           </select></label
         >
@@ -43,9 +43,9 @@
         />
       </label>
       <div class="row">
-        <button class="primary" :disabled="!type" @click="run(save)">
-          {{ object ? '保存对象修改' : '创建对象' }}</button
-        ><button v-if="object" @click="run(() => select(object.record_id))">重新加载对象</button>
+        <button class="primary" :disabled="!canSave" @click="run(save)">
+          {{ selectedId ? '保存对象修改' : '创建对象' }}</button
+        ><button v-if="selectedId" @click="run(() => select(selectedId))">重新加载对象</button>
       </div>
       <template v-if="object"
         >
@@ -79,22 +79,24 @@ import EvidenceCard from './EvidenceCard.vue'
 import RecordFieldInput from '../../components/record/RecordFieldInput.vue'
 import { Api } from '../../api'
 import { studio } from '../../api/ontology'
-import { clone, pretty, versionedData, label, loadObjectContext } from '../../utils/ontology'
+import { pretty, versionedData, label, loadObjectContext } from '../../utils/ontology'
 import { coerceRecordData, validateRecordData } from '../../utils/recordFields'
 import { useStudioAction } from './useStudioAction'
+import { useObjectSelection } from './useObjectSelection'
 const props = defineProps({ space: Object })
-const types = props.space.schema.types,
-  typeId = ref(types[0]?.id)
+const types = props.space.schema.types
+const { selectedId, object, typeId, data, history, moreHistory, context, canSave, select } =
+  useObjectSelection(types[0]?.id, async (id) => {
+    const row = await studio.list('objects/' + id)
+    const [history, context] = await Promise.all([
+      studio.list('objects/' + id + '/history', { offset: 0, limit: 50 }),
+      loadObjectContext(props.space.id, row.record_id, Api.relationsForRecord, studio.list),
+    ])
+    return { row, history, context }
+  })
 const type = computed(() => types.find((t) => t.id === typeId.value))
 const typeName = (id) => types.find((t) => t.id === id)?.name
-const objects = ref([]),
-  object = ref(null),
-  data = ref({}),
-  models = ref([]),
-  history = ref([]),
-  more = ref(false),
-  moreHistory = ref(false)
-const context = ref({ relations: [], facts: [] })
+const objects = ref([]), models = ref([]), more = ref(false)
 const predicateName = (id) => [...(type.value?.fields || []), ...props.space.schema.relations]
   .find(p => p.id === id)?.name || id
 const legacyId = computed(() => models.value.find((m) => m.key === type.value?.key)?.id)
@@ -115,21 +117,8 @@ async function loadHistory(append = false) {
   history.value = append ? [...history.value, ...rows] : rows
   moreHistory.value = rows.length === 50
 }
-async function select(id) {
-  object.value = null
-  context.value = { relations: [], facts: [] }
-  history.value = []
-  moreHistory.value = false
-  object.value = id ? await studio.list('objects/' + id) : null
-  data.value = clone(object.value?.data || {})
-  typeId.value = object.value?.type_id || types[0]?.id
-  if (id) {
-    await loadHistory()
-    context.value = await loadObjectContext(props.space.id, object.value.record_id,
-      Api.relationsForRecord, studio.list)
-  }
-}
 async function save() {
+  if (!canSave.value) return
   const check = validateRecordData(type.value.fields, data.value)
   if (!check.ok) throw Error(check.messages[0])
   const payload = coerceRecordData(type.value.fields, data.value)

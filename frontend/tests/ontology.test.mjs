@@ -121,3 +121,37 @@ test('object context follows selected subject and can be empty', async () => {
   })
   assert.deepEqual(await loadObjectContext('space', 2, links, claims), { relations: [], facts: [] })
 })
+
+test('failed object switch and denied reload clear the form and block writes until recovery', async () => {
+  const { useObjectSelection } = await import('../src/views/ontology/useObjectSelection.js')
+  for (const deniedId of [1, 2]) {
+    let deny = false
+    const state = useObjectSelection('type', async id => {
+      if (deny) throw Error('403')
+      return {
+        row: { record_id: id, version: 7, type_id: 'type', data: { title: '源文' } },
+        history: [{ version: 7 }], context: { relations: [1], facts: [2] },
+      }
+    })
+    await state.select(1)
+    assert.equal(state.data.value.title, '源文')
+    deny = true
+    const pending = state.select(deniedId)
+    assert.deepEqual(state.data.value, {})
+    await assert.rejects(pending, /403/)
+    assert.equal(state.selectedId.value, deniedId)
+    assert.equal(state.object.value, null)
+    assert.equal(state.typeId.value, null)
+    assert.deepEqual(state.history.value, [])
+    assert.deepEqual(state.context.value, { relations: [], facts: [] })
+    assert.equal(state.canSave.value, false)
+    await state.select('')
+    assert.equal(state.canSave.value, true)
+    assert.equal(state.typeId.value, 'type')
+    assert.deepEqual(state.data.value, {})
+    deny = false
+    await state.select(2)
+    assert.equal(state.object.value.record_id, 2)
+    assert.equal(state.canSave.value, true)
+  }
+})

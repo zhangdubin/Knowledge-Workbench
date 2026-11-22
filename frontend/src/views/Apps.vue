@@ -13,6 +13,12 @@
       </el-button>
     </PageTitle>
 
+    <RouterLink v-if="auth.canPage('knowledge_service')" to="/knowledge-service" class="knowledge-entry">
+      <strong>知识服务</strong>
+      <span>查找制度和手册、核对资料版本、追溯原文</span>
+      <span class="knowledge-entry-arrow" aria-hidden="true">→</span>
+    </RouterLink>
+
     <!-- ============ 工具条 ============ -->
     <div class="toolbar apps-toolbar">
       <el-input
@@ -1174,6 +1180,22 @@ watch(() => route.query.app, async (key) => {
 </script>
 
 <style scoped>
+.knowledge-entry {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+}
+.knowledge-entry:hover { border-color: var(--primary); }
+.knowledge-entry span { color: var(--text-secondary); }
+.knowledge-entry .knowledge-entry-arrow { margin-left: auto; color: var(--primary); }
 /* ============ 工具条 ============ */
 .apps-toolbar {
   display: flex;

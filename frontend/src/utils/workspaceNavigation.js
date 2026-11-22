@@ -14,6 +14,7 @@ const catalog = [
   ] },
   { title: '应用', items: [
     { path: '/apps', label: '业务应用', icon: 'Grid', perm: 'apps', description: '应用中心 · 管理业务应用及其记录' },
+    { path: '/knowledge-service', label: '知识服务', icon: 'Document', perm: 'knowledge_service', description: '查找制度和手册，核对版本、原文和反馈' },
     { path: '/dashboards', label: '可视化驾驶舱', icon: 'PieChart', perm: 'dashboards', description: '查看业务看板和报表' },
     { path: '/ontology', label: '本体工作室', icon: 'Connection', perm: 'types', description: '修订业务概念、加工资料与核验事实证据' },
     { path: '/types', label: '数据模型', icon: 'Files', perm: 'types', description: '管理实体类型和字段' },

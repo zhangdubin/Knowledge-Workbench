@@ -21,7 +21,7 @@ test('the catalog keeps every legacy destination and up to five primary destinat
   assert.deepEqual(navigation.primary.map(item => item.path), ['/', '/library', '/notes', '/knowledge/graph', '/apps'])
   assert.deepEqual(allPaths(navigation).sort(), [
     '/', '/ai-settings', '/apps', '/dashboards', '/dev', '/dna', '/dna-library', '/graph', '/guide',
-    '/knowledge/graph', '/library', '/notes', '/relations', '/search', '/system/audit',
+    '/knowledge/graph', '/knowledge-service', '/library', '/notes', '/relations', '/search', '/system/audit',
     '/system/nav', '/system/recycle', '/system/roles', '/system/settings', '/system/storage',
     '/system/users', '/types', '/ontology',
   ].sort())

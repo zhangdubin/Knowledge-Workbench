@@ -9,6 +9,7 @@ const PATH_PERM = {
   '/library': 'library',
   '/dev': 'dev',
   '/apps': 'apps',
+  '/knowledge-service': 'knowledge_service',
   '/types': 'types',
   '/ontology': 'types',
   '/records': 'records',

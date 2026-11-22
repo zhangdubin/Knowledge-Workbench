@@ -48,3 +48,9 @@
 部署使用经过副本验收的版本镜像，保留原生产数据库、文件、配置和绝对挂载；先做两块磁盘的一致性备份并验证 SHA256，再切换镜像。正式服务只进行健康和授权只读核验，不创建测试账户、不运行清理测试。
 
 出现新写入后不能把“切回旧镜像”当作数据回滚。恢复前停止写入并保存现状，明确逆迁移或补偿导出；不得直接丢弃新表、新知识、反馈或用验收副本覆盖正式数据。原 main 分支保持原状态，实施在 `codex/dynamic-ontology` 隔离工作区，尚未推送或合并。
+
+## 最初会话协议报错的定位边界
+
+`function_call_output requires call_id on HTTP requests; continuation via previous_response_id is only supported on Responses WebSocket v2` 表明当时接入的服务或适配器拒绝了工具结果关联和续接方式。应按该服务实际支持的协议，将工具结果关联到原始 `call_id`，并使用它支持的 HTTP 完整上下文或 WebSocket 续接方式；这条服务端限制不能泛化成所有 Responses API 的行为。
+
+本项目当前模型服务按完整 endpoint 发送 Chat Completions 消息，工具结果使用 `role: tool` 与 `tool_call_id`；项目代码未发送 `function_call_output` 或 `previous_response_id`。本次本机接口及受控模型测试未复现原 session 报错，也未据此改动无证据关联的传输层。真实提供商和原会话适配器仍需分别实测，不能把本体或知识服务升级视为已经修复该外部协议问题。

@@ -11,7 +11,7 @@
         size="large"
         clearable
         @keyup.enter="search"
-        @clear="recordResults = []; docResults = []; notice = ''; elapsedMs = 0"
+        @clear="clearSearch"
         class="hero-search"
       >
         <template #prefix><el-icon><Search /></el-icon></template>
@@ -65,6 +65,8 @@
         </el-skeleton>
       </div>
     </div>
+
+    <p v-else-if="searchError" class="result-notice" role="status">{{ searchError }}</p>
 
     <!-- 无结果 -->
     <EmptyState
@@ -193,7 +195,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 // 直接用 axios 实例（而不是 Api.search 包装）：
 // 只有拿到实例才能挂 AbortController，
@@ -215,6 +217,7 @@ const loading = ref(false)
 // 本次检索用时（毫秒）与提示文案（降级 / 截断）
 const elapsedMs = ref(0)
 const notice = ref('')
+const searchError = ref('')
 
 const totalCount = computed(() => recordResults.value.length + docResults.value.length)
 
@@ -317,20 +320,31 @@ function highlight(text) {
  */
 const request = createSearchRequest()
 
+function resetResults() {
+  recordResults.value = []
+  docResults.value = []
+  notice.value = ''
+  searchError.value = ''
+  elapsedMs.value = 0
+}
+
+function clearSearch() {
+  request.cancel()
+  loading.value = false
+  resetResults()
+}
+
 async function search() {
   const key = kw.value.trim()
   if (!key) {
-    recordResults.value = []
-    docResults.value = []
-    notice.value = ''
-    elapsedMs.value = 0
+    clearSearch()
     return
   }
   // 同一个词已经在飞 → 不重复发；换了词 → 取消上一个（都在工具里）
   const { seq: mySeq, controller, duplicated } = request.begin(key)
   if (duplicated) return
+  resetResults()
   loading.value = true
-  notice.value = ''
   const t0 = performance.now()
   try {
     // silent：取消是正常流程，不是错误，别弹「请求失败」
@@ -357,7 +371,7 @@ async function search() {
     // 被取消不算错：新的请求已经在路上了
     if (e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError') return
     if (!request.isCurrent(mySeq)) return
-    notice.value = '搜索失败，请稍后重试'
+    searchError.value = '搜索失败，请稍后重试'
   } finally {
     if (request.isCurrent(mySeq)) {
       request.end(mySeq)
@@ -379,12 +393,13 @@ function openDoc(d) {
   router.push({ path: '/library', query: { doc: String(d.id) } })
 }
 
-onMounted(() => {
-  if (route.query.kw) {
-    kw.value = route.query.kw
-    search()
-  }
-})
+watch(() => route.query.kw, value => {
+  if (route.name !== 'search') return
+  kw.value = typeof value === 'string' ? value.trim() : ''
+  search()
+}, { immediate: true })
+
+onBeforeUnmount(() => request.cancel())
 </script>
 
 <style scoped>

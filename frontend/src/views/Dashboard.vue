@@ -34,16 +34,16 @@
       </div>
     </section>
 
-    <div v-if="canSeeContent || canSeeFiles" class="daily-recent">
+    <div v-if="contentScope || canSeeFiles" class="daily-recent">
       <WorkspaceRecentList
-        v-if="canSeeContent"
+        v-if="contentScope"
         title="最近内容"
         icon="Clock"
         :items="recentContent"
         :state="contentState"
-        :more="auth.canPage('notes') ? '/notes' : ''"
+        :more="canReadNotes ? '/notes' : ''"
         more-label="查看笔记"
-        empty="暂无可查看的最近内容"
+        :empty="contentScope === 'notes' ? '暂无最近笔记' : '已加载的最近更新中，暂无可打开的记录'"
         error="最近内容加载失败"
         @retry="loadContent"
       />
@@ -71,6 +71,7 @@ import WorkspaceRecentList from '../components/workspace/WorkspaceRecentList.vue
 import { useWorkspaceActions } from '../composables/useWorkspaceActions'
 import { useAuthStore } from '../stores/auth'
 import { formatSize, formatTime } from '../utils/format'
+import { loadWorkspaceRecents } from '../utils/workspaceRecents'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -79,7 +80,13 @@ const question = ref('')
 const canUseAI = computed(() => auth.can('ai'))
 const canSearch = computed(() => auth.canPage('search'))
 const canSeeFiles = computed(() => auth.canPage('library'))
-const canSeeContent = computed(() => auth.canPage('notes') || auth.canPage('records'))
+const canReadNotes = computed(() => auth.canPage('notes') && auth.canModel('note'))
+const canReadRecords = computed(() => auth.canPage('records'))
+const contentScope = computed(() => {
+  if (canReadRecords.value) return 'records'
+  if (canReadNotes.value) return 'notes'
+  return ''
+})
 const canImport = computed(() => canSeeFiles.value && auth.can('file_write'))
 const canWriteNote = computed(() => auth.canPage('notes') && auth.canModel('note', 'write'))
 
@@ -115,7 +122,7 @@ const recentContent = computed(() => {
     const { record_id: id, entity_type_id: typeId, entity_type_key: type, entity_type_name: name } = record
     if (!id) continue
     const note = type === 'note'
-    if (note ? !auth.canPage('notes') : !typeId || !auth.canPage('records')) continue
+    if (note ? !canReadNotes.value : !typeId || !canReadRecords.value) continue
     const { title, name: recordName, code } = record.data || {}
     items.push({
       key: id,
@@ -136,15 +143,21 @@ const recentFiles = computed(() => documents.value.filter(file => file.id).map(f
   to: { name: 'library', query: { doc: file.id } },
 })))
 
+let contentRequest = 0
+
 async function loadContent() {
-  if (!canSeeContent.value) return
+  const request = ++contentRequest
+  const scope = contentScope.value
+  recentRecords.value = []
+  if (!scope) return
   contentState.value = 'loading'
   try {
-    const data = await Api.getStats()
-    recentRecords.value = data.recent || []
+    const records = await loadWorkspaceRecents(Api, scope)
+    if (request !== contentRequest) return
+    recentRecords.value = records
     contentState.value = 'ready'
   } catch {
-    contentState.value = 'error'
+    if (request === contentRequest) contentState.value = 'error'
   }
 }
 
@@ -160,7 +173,7 @@ async function loadFiles() {
   }
 }
 
-watch(canSeeContent, allowed => { if (allowed) loadContent() }, { immediate: true })
+watch(contentScope, loadContent, { immediate: true })
 watch(canSeeFiles, allowed => { if (allowed) loadFiles() }, { immediate: true })
 </script>
 

@@ -24,7 +24,8 @@
  *
  * @returns {{ begin: (key: string) => {seq:number, controller:AbortController, duplicated:boolean},
  *             isCurrent: (seq:number) => boolean,
- *             end: (seq:number) => void }}
+ *             end: (seq:number) => void,
+ *             cancel: () => void }}
  */
 export function createSearchRequest() {
   let seq = 0
@@ -58,6 +59,15 @@ export function createSearchRequest() {
     /** 请求结束（成功 / 失败 / 取消）时收尾 */
     end(mySeq) {
       if (inflight && inflight.seq === mySeq) inflight = null
+    },
+
+    /** 清空关键词或离开页面时，即使取消没赶上也作废旧结果 */
+    cancel() {
+      seq++
+      if (!inflight) return
+      const { controller } = inflight
+      inflight = null
+      controller.abort()
     },
   }
 }

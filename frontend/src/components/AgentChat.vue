@@ -6,18 +6,17 @@
     direction="rtl"
     :append-to-body="true"
     class="agent-drawer"
-    @open="onOpen"
   >
     <div class="agent-wrap">
       <el-alert v-if="configState === 'unavailable'" type="warning" :closable="false" class="cfg-alert"
         title="AI 服务未启用或配置不完整">
-        <el-link v-if="auth.canPage('ai')" type="primary" @click="goSettings">前往 AI 设置</el-link>
-        <el-button text type="primary" @click="onOpen">重新检查</el-button>
+        <el-button v-if="auth.canPage('ai')" text type="primary" @click="goSettings">前往 AI 设置</el-button>
+        <el-button text type="primary" @click="checkConfig">重新检查</el-button>
       </el-alert>
 
       <el-alert v-else-if="configState === 'error'" type="warning" :closable="false"
         title="无法读取 AI 服务配置">
-        <el-button text type="primary" @click="onOpen">重试</el-button>
+        <el-button text type="primary" @click="checkConfig">重试</el-button>
       </el-alert>
 
       <div ref="listEl" class="agent-list">
@@ -295,16 +294,22 @@ function goSettings() {
   router.push('/ai-settings')
 }
 
-async function onOpen() {
-  if (configState.value === 'ready' || configState.value === 'loading') return
+let configCheck = 0
+
+async function checkConfig() {
+  const check = ++configCheck
   configState.value = 'loading'
   try {
     const config = await Api.getAIConfig()
+    if (check !== configCheck) return
     configState.value = config.enabled && config.api_key && config.base_url ? 'ready' : 'unavailable'
   } catch {
-    configState.value = 'error'
+    if (check === configCheck) configState.value = 'error'
   }
 }
+
+// 每次打开都先标记为检查中，再允许等待中的问题发送。
+watch(visible, open => { if (open) checkConfig() }, { flush: 'sync', immediate: true })
 
 watch(() => props.initialQuestion, question => {
   if (!question?.text) return
@@ -372,6 +377,7 @@ function send() {
 }
 
 async function sendQuestion(q) {
+  const configAtSend = configCheck
   const hist = historyOf()
   messages.value.push({ role: 'user', content: q })
   thinking.value = true
@@ -380,7 +386,9 @@ async function sendQuestion(q) {
 
   try {
     const r = await Api.aiAgent(q, hist)
-    if (r.error === 'not_configured') configState.value = 'unavailable'
+    if (r.error === 'not_configured' && configAtSend === configCheck) {
+      configState.value = 'unavailable'
+    }
     pushAssistant(r, q, hist)
   } catch (e) {
     const detail = e?.response?.data?.detail || e?.message || '调用失败'

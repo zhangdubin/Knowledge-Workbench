@@ -55,6 +55,17 @@ function assert(name, cond, detail = '') {
   assert('end 之后的旧序号不是当前', req.isCurrent(a.seq) === false)
 }
 
+// ---------- 清空关键词：取消未完成的搜索并作废其结果 ----------
+{
+  const req = createSearchRequest()
+  const pending = req.begin('笔记')
+  req.cancel()
+  assert('清空时取消正在运行的请求', pending.controller.signal.aborted === true)
+  assert('清空后迟到的结果不能恢复列表', req.isCurrent(pending.seq) === false)
+  const again = req.begin('笔记')
+  assert('清空后还能搜索同一个词', again.duplicated === false && req.isCurrent(again.seq))
+}
+
 // ---------- buildSearchNotice ----------
 {
   assert('没有返回体 → 空提示', buildSearchNotice(null) === '')

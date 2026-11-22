@@ -379,6 +379,26 @@ async def review_claim(claim_id: str, payload: dict, db: DB, p: User):
     return result
 
 
+@router.get("/claims/{claim_id}/history")
+async def claim_history(claim_id: str, db: DB, p: User, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
+    from ..models import AuditLog
+    from .knowledge import render
+    from .models import Claim
+
+    row = await db.get(Claim, claim_id)
+    if not row:
+        raise HTTPException(404, "声明不存在")
+    await render(db, p, row)
+    reviews = await db.scalars(
+        select(AuditLog).where(
+            AuditLog.action == "ontology_review", AuditLog.resource == "claim",
+            AuditLog.resource_id == claim_id,
+        ).order_by(AuditLog.id.desc()).offset(offset).limit(limit)
+    )
+    return [dict(version=r.detail["version"], status=r.detail["status"],
+                 actor=r.username, recorded_at=r.created_at) for r in reviews]
+
+
 @router.get("/evidence/{evidence_id}")
 async def evidence_detail(evidence_id: str, db: DB, p: User):
     from .evidence import read_evidence

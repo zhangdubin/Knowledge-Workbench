@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { versionedData, confirmBody } from '../utils/ontology.js'
 import { ElMessage } from 'element-plus'
 
 const api = axios.create({
@@ -288,13 +289,13 @@ export const Api = {
   listRecycle: () => api.get('/api/recycle'),
   restoreRecycleType: (id) => api.post(`/api/recycle/types/${id}/restore`),
   purgeRecycleType: (id, key) => api.delete(`/api/recycle/types/${id}`, { data: { key } }),
-  restoreRecycleRecord: (id) => api.post(`/api/recycle/records/${id}/restore`),
+  restoreRecycleRecord: (id, version) => api.post(`/api/recycle/records/${id}/restore`, null, {params:{expected_version:version}}),
   purgeRecycleRecord: (id) => api.delete(`/api/recycle/records/${id}`),
   getRecord: (id) => api.get(`/api/records/${id}`),
   createRecord: (typeId, data) =>
     api.post(`/api/records/type/${typeId}`, { data }),
-  updateRecord: (id, data) => api.put(`/api/records/${id}`, { data }),
-  deleteRecord: (id) => api.delete(`/api/records/${id}`),
+  updateRecord: (id, data, version) => api.put(`/api/records/${id}`, versionedData(data, version)),
+  deleteRecord: (id, version) => api.delete(`/api/records/${id}`, {params:{expected_version:version}}),
 
   // 关系
   listRelationDefs: () => api.get('/api/relations/defs'),
@@ -437,15 +438,8 @@ export const Api = {
     }, { timeout: 180000 }),
 
   // 用户点「确认执行」后真正落库；参数由后端重新校验一遍
-  aiAgentConfirm: ({ question, history, pending, continuation }) =>
-    api.post('/api/ai/agent/confirm', {
-      question,
-      history,
-      tool: pending.tool,
-      args: pending.args,
-      digest: pending.digest || [],
-      continuation: continuation || '',
-    }, { timeout: 180000 }),
+  aiAgentConfirm: ({ pending }) =>
+    api.post('/api/ai/agent/confirm', confirmBody(pending), { timeout: 180000 }),
 
   // ---- 养料 DNA ----
   // 喂给模型的资料的体检报告与基因图谱（全部只读）

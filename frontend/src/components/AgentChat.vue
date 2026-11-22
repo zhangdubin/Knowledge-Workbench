@@ -40,13 +40,21 @@
             <!-- 工具调用轨迹：AI 为这个回答实际做了什么 -->
             <div v-if="m.tools?.length" class="tools">
               <div v-for="(t, j) in m.tools" :key="j" class="tool-card" :class="{ 'is-write': t.write }">
-                <div class="tool-head" @click="t._open = !t._open">
+                <button type="button" class="tool-head" :aria-expanded="t._open" @click="t._open = !t._open">
                   <span class="tool-icon">{{ t.write ? '✍️' : '🔧' }}</span>
                   <b>{{ toolLabel(t.name) }}</b>
                   <span class="tool-args">{{ briefArgs(t.name, t.args) }}</span>
                   <el-tag v-if="t.pending" size="small" type="warning" effect="plain">待确认</el-tag>
                   <el-tag v-else-if="t.confirmed" size="small" type="success" effect="plain">已执行</el-tag>
                   <el-icon class="tool-caret" :class="{ open: t._open }"><ArrowDown /></el-icon>
+                </button>
+                <EvidenceCard v-for="e in citations(t)" :key="e.id" :evidence="e"/>
+                <div v-if="t.name==='propose_ingestion' && t.result?.change_id" class="pending">
+                  <p>资料加工计划 {{t.result.change_id}}</p>
+                  <el-button v-if="!t.plan" :disabled="busy" @click="previewIngestion(t)">预览加工计划</el-button>
+                  <template v-else><pre class="tool-body is-full">{{pretty(t.plan.payload.candidates)}}</pre>
+                    <el-button :disabled="busy||t.done" @click="confirmIngestion(t)">{{t.done?'已写入候选':'确认写入候选'}}</el-button>
+                  </template>
                 </div>
                 <div v-if="t._open" class="tool-body-wrap">
                   <pre class="tool-body" :class="{ 'is-full': t._full }">{{ t._full ? toolResultText(t.result) : t._preview.text }}</pre>
@@ -177,6 +185,9 @@
 </template>
 
 <script setup>
+import EvidenceCard from '../views/ontology/EvidenceCard.vue'
+import { studio } from '../api/ontology'
+import { pretty, errorText } from '../utils/ontology'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -224,6 +235,10 @@ const suggestions = [
 ]
 
 const TOOL_LABELS = {
+  list_ontologies: '发现本体',
+  query_ontology: '查询事实与证据',
+  get_ontology_evidence: '定位原文证据',
+  propose_ingestion: '提议资料加工',
   list_models: '列出数据模型',
   get_model_schema: '查看模型字段',
   search_records: '搜索业务记录',
@@ -236,6 +251,21 @@ const TOOL_LABELS = {
 
 const RISK_LABELS = { create: '新建', update: '修改', delete: '删除' }
 
+function citations(tool) {
+  if (tool.name==='get_ontology_evidence' && tool.result?.snapshot_id) return [tool.result]
+  return tool.name==='query_ontology' ? tool.result?.evidence || [] : []
+}
+async function previewIngestion(tool) {
+  try { tool.plan = await studio.list('changes/'+tool.result.change_id) }
+  catch (e) { ElMessage.error(errorText(e)) }
+}
+async function confirmIngestion(tool) {
+  if (busy.value || tool.done) return
+  thinking.value=true
+  try { await studio.confirm(tool.plan.id); tool.done=true; ElMessage.success('候选已写入，可在本体工作室核验') }
+  catch (e) { ElMessage.error(errorText(e)) }
+  finally { thinking.value=false }
+}
 function toolLabel(name) { return TOOL_LABELS[name] || name }
 function riskLabel(risk) { return RISK_LABELS[risk] || risk }
 
@@ -443,7 +473,7 @@ async function confirmPending(m) {
   thinkingText.value = '正在执行操作…'
   scrollBottom()
   try {
-    const r = await Api.aiAgentConfirm({ question: m.q, history: m.hist, pending: m.pending })
+    const r = await Api.aiAgentConfirm({ pending: m.pending })
     const first = (r.tool_calls || [])[0]
     const ok = first?.result?.ok !== false
     m.state = ok ? 'done' : 'failed'

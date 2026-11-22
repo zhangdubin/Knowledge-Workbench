@@ -10,6 +10,7 @@ const PATH_PERM = {
   '/dev': 'dev',
   '/apps': 'apps',
   '/types': 'types',
+  '/ontology': 'types',
   '/records': 'records',
   '/relations': 'relations',
   '/graph': 'graph',

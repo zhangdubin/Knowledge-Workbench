@@ -23,7 +23,7 @@ test('the catalog keeps every legacy destination and up to five primary destinat
     '/', '/ai-settings', '/apps', '/dashboards', '/dev', '/dna', '/dna-library', '/graph', '/guide',
     '/knowledge/graph', '/library', '/notes', '/relations', '/search', '/system/audit',
     '/system/nav', '/system/recycle', '/system/roles', '/system/settings', '/system/storage',
-    '/system/users', '/types',
+    '/system/users', '/types', '/ontology',
   ].sort())
 })
 
@@ -49,7 +49,7 @@ test('page and feature permissions apply to both built-in and custom destination
 
 test('path permissions cover routed descendants and ignore similarly named paths', () => {
   for (const [path, permission] of [
-    ['/dna', 'dna'], ['/dna-library', 'dna'], ['/dna-library/details', 'dna'],
+    ['/ontology','types'], ['/dna', 'dna'], ['/dna-library', 'dna'], ['/dna-library/details', 'dna'],
     ['/knowledge/graph/', 'knowledge_graph'], ['/dashboards/2', 'dashboards'],
     ['/dev/settings', 'dev'], ['/system/nav', 'system'], ['/records/12?id=7', 'records'],
     ['/notes-fake', ''], ['/appshelf', ''], ['/library-files', ''], ['/system-help', ''],

@@ -290,10 +290,15 @@ class Kernel(unittest.IsolatedAsyncioTestCase):
             json={"type_id": rev["schema"]["types"][0]["id"], "data": {}},
         ).json()
         rid = obj["id"]
+        legacy = client.get(f"/api/records/{rid}").json()
+        listing = client.get(f"/api/records/type/{legacy['entity_type_id']}").json()
+        self.assertEqual(next(r for r in listing["items"] if r["id"] == rid)["version"], 1)
         self.assertEqual(
             client.delete(f"/api/records/{rid}?expected_version=1").status_code, 200
         )
         recycle = f"/api/recycle/records/{rid}"
+        listed = client.get("/api/recycle").json()["records"]
+        self.assertEqual(next(r for r in listed if r["id"] == rid)["version"], 2)
         from app.services.auth import Principal, current_principal
         restricted = Principal(None, {"features":{"model_manage":True},"models":{key:"none"}})
         app.dependency_overrides[current_principal] = lambda: restricted

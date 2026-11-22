@@ -151,6 +151,13 @@ async def delete_record(db: AsyncSession, record_id: int, *, expected_version: i
 
 # ============ 回收站 ============
 
+async def _managed_versions(db, records):
+    ids = [record.id for record in records]
+    return dict((await db.execute(
+        select(ObjectBinding.record_id, ObjectBinding.version).where(ObjectBinding.record_id.in_(ids))
+    )).all())
+
+
 async def list_deleted_records(
     db: AsyncSession, principal: Principal, type_id: int | None = None, limit: int = 200
 ) -> list[dict]:
@@ -172,10 +179,12 @@ async def list_deleted_records(
             )
         ).scalars().all()
     }
+    versions = await _managed_versions(db, records)
     out = []
     for r in records:
         et = ets.get(r.entity_type_id)
         out.append({
+            **({"version": versions[r.id]} if r.id in versions else {}),
             "id": r.id,
             "entity_type_id": r.entity_type_id,
             "entity_type_key": et.key if et else "",
@@ -477,9 +486,11 @@ async def list_records(
     records = result.scalars().all()
 
     et = await db.get(EntityType, type_id)
+    versions = await _managed_versions(db, records)
     items = []
     for r in records:
         items.append({
+            **({"version": versions[r.id]} if r.id in versions else {}),
             "id": r.id,
             "entity_type_id": r.entity_type_id,
             "entity_type_key": et.key if et else "",

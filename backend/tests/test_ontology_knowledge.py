@@ -114,11 +114,16 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
             decision = dict(action="accept", expected_version=1)
             self.assertEqual(client.post(review, json=decision).status_code, 200)
             self.assertEqual(client.post(review, json=decision).status_code, 409)
+            history_url = f"{root}/claims/{claim['id']}/history"
+            history = client.get(history_url)
+            self.assertEqual(history.status_code, 200)
+            self.assertEqual(history.json()[0]["status"], "accepted")
         from app.services.auth import current_principal
 
         denied = Principal(None, {"models": {key: "read"}, "pages": ["library"]})
         app.dependency_overrides[current_principal] = lambda: denied
         try:
+            self.assertEqual(client.get(history_url).status_code, 403)
             blocked = client.post(url + "/query", json={})
             self.assertEqual(blocked.status_code, 403)
             self.assertNotIn("预算", blocked.text)

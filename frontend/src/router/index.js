@@ -21,6 +21,7 @@ const routes = [
       { path: 'apps', name: 'apps', component: () => import('../views/Apps.vue'), meta: { title: '应用中心', perm: 'apps' } },
       // 应用独立页：点应用进这里，可以基于数据模型直接增删改查记录
       { path: 'apps/:appKey', name: 'app-workspace', component: () => import('../views/AppWorkspace.vue'), meta: { title: '应用', perm: 'apps' } },
+      { path: 'ontology', component: () => import('../views/ontology/OntologyWorkspace.vue'), meta: { title: '本体工作室', perm: 'types' } },
       { path: 'types', name: 'entity-types', component: () => import('../views/EntityTypes.vue'), meta: { title: '数据模型', perm: 'types' } },
       { path: 'types/:id/edit', name: 'type-edit', component: () => import('../views/TypeEditor.vue'), meta: { title: '编辑模型', perm: 'types' } },
       { path: 'types/new', name: 'type-new', component: () => import('../views/TypeEditor.vue'), meta: { title: '新建模型', perm: 'types' } },

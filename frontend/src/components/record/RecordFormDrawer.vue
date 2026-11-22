@@ -94,6 +94,7 @@ const data = reactive({})
 const errors = ref({})
 const errorText = ref('')
 const internalSaving = ref(false)
+const loadedVersion = ref(null)
 
 const fields = computed(() => props.entityType?.fields || [])
 const size = computed(() => 'min(520px, 96vw)')
@@ -113,6 +114,7 @@ function defaults() {
 }
 
 function onOpen() {
+  loadedVersion.value = props.record?.version
   const fresh = props.record ? { ...(props.record.data || {}) } : defaults()
   for (const k of Object.keys(data)) delete data[k]
   Object.assign(data, fresh)
@@ -140,7 +142,7 @@ async function save() {
   internalSaving.value = true
   try {
     if (props.record) {
-      await Api.updateRecord(props.record.id, payload)
+      await Api.updateRecord(props.record.id, payload, loadedVersion.value)
       ElMessage.success('已保存')
     } else {
       await Api.createRecord(props.entityType.id, payload)
@@ -152,7 +154,7 @@ async function save() {
     close()
   } catch (e) {
     const detail = e?.response?.data?.detail
-    errorText.value = detail ? `保存失败：${detail}` : '保存失败，请稍后再试'
+    errorText.value = detail ? `保存失败：${detail.message || detail}` : '保存失败，请稍后再试'
     ElMessage.error(errorText.value)
   } finally {
     internalSaving.value = false

@@ -304,7 +304,7 @@ async function del(row) {
     await ElMessageBox.confirm(
       `确定删除 "${recordDisplayName(row)}"？删除后进入回收站，可恢复。`,
       '确认', { type: 'warning' })
-    await Api.deleteRecord(row.id)
+    await Api.deleteRecord(row.id, row.version)
     ElMessage.success('已移入回收站')
     load()
   } catch (e) {
@@ -344,7 +344,7 @@ async function batchRemove() {
   let failed = 0
   for (const row of rows) {
     try {
-      await Api.deleteRecord(row.id)
+      await Api.deleteRecord(row.id, row.version)
       ok++
     } catch {
       failed++

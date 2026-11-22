@@ -553,7 +553,7 @@ async function batchRemove() {
   let failed = 0
   for (const row of rows) {
     try {
-      await Api.deleteRecord(row.id)
+      await Api.deleteRecord(row.id, row.version)
       ok++
     } catch {
       failed++
@@ -591,7 +591,7 @@ async function removeRecord(rec) {
     return
   }
   try {
-    await Api.deleteRecord(rec.id)
+    await Api.deleteRecord(rec.id, rec.version)
     ElMessage.success('已删除')
     detailOpen.value = false
     await refreshModels()

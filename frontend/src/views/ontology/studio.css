@@ -1,0 +1,151 @@
+.studio {
+  max-width: 1280px;
+  margin: auto;
+  color: var(--el-text-color-primary);
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+.studio .sheet,
+.studio article {
+  padding: clamp(14px, 2vw, 24px);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color);
+  border-radius: 12px;
+  min-width: 0;
+}
+.studio article {
+  margin: 12px 0;
+  background: var(--el-fill-color-lighter);
+}
+.studio :is(h2, h3, h4) {
+  margin: 0 0 0.45em;
+}
+.studio h2 {
+  font-size: 1.2rem;
+}
+.studio h3 {
+  font-size: 1.04rem;
+}
+.studio :is(.bar, form, .row, .studio-tabs) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.studio .bar {
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.studio form,
+.studio .row {
+  margin: 10px 0;
+  align-items: end;
+}
+.studio fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.studio label {
+  display: inline-grid;
+  gap: 4px;
+  max-width: 100%;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+.studio :is(input, select, textarea, button) {
+  font: inherit;
+  color: var(--el-text-color-primary);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  padding: 7px 10px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.studio label input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+}
+.studio textarea {
+  width: 100%;
+  min-height: 68px;
+}
+.studio input:not([type='checkbox']) {
+  width: 13em;
+}
+.studio button {
+  cursor: pointer;
+}
+.studio button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.studio .primary,
+.studio button[aria-current='page'] {
+  background: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+  color: white;
+}
+.studio :focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+.studio details {
+  margin: 10px 0;
+}
+.studio summary {
+  cursor: pointer;
+}
+.studio pre,
+.studio blockquote {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+  padding: 10px;
+  background: var(--el-fill-color);
+  border-radius: 6px;
+}
+.studio p,
+.studio small {
+  overflow-wrap: anywhere;
+}
+.studio [role='alert'] {
+  color: var(--el-color-danger);
+  white-space: pre-wrap;
+}
+.studio a {
+  color: var(--el-color-primary);
+}
+.studio .wide {
+  display: grid;
+  width: 100%;
+  margin: 8px 0;
+}
+.studio .muted {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.studio button + button {
+  margin-inline-start: 3px;
+}
+@media (max-width: 600px) {
+  .studio .row > label,
+  .studio form > label {
+    width: 100%;
+  }
+  .studio label :is(input:not([type='checkbox']), select) {
+    width: 100%;
+  }
+  .studio .sheet {
+    padding: 12px;
+  }
+  .studio .studio-tabs {
+    gap: 4px;
+  }
+  .studio .studio-tabs button {
+    padding: 6px;
+  }
+}

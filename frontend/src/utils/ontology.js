@@ -89,7 +89,9 @@ export function quoteRange(text, quote, occurrence = 1) {
 export const versionedData = (data, version) =>
   version == null ? { data } : { data, expected_version: version }
 export const confirmBody = (pending) => ({ change_id: pending.change_id })
-export const reviewBody = (action, claim) => ({ action, expected_version: claim.version })
+export const reviewBody = (action, claim, replacement) => ({
+  action, expected_version: claim.version, ...(action === 'supersede' ? {superseded_by: replacement} : {}),
+})
 export function errorText(e) {
   const detail = e.response?.data?.detail || e.message
   return typeof detail === 'string' ? detail : pretty(detail)
@@ -97,4 +99,16 @@ export function errorText(e) {
 export const draftSchema = (revision) => clone(revision.schema)
 export function impactSummary({ counts }) {
   return `涉及 ${counts.types} 个类型、${counts.records} 条记录、${counts.relations} 条关联`
+}
+
+export function initialRevision(space) {
+  if (!space.current_revision_id) return space.revisions[0]
+  return space.revisions.find(r => r.id === space.current_revision_id) || {
+    id: space.current_revision_id, status: 'published', schema: space.schema,
+  }
+}
+
+export function eligibleReplacements(fact, rows) {
+  return rows.filter(other => other.id !== fact.id && other.status === 'accepted'
+    && other.object_id === fact.object_id && other.predicate_id === fact.predicate_id)
 }

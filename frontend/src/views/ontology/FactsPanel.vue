@@ -76,8 +76,21 @@
               {{ title }}
             </button></template
           >
+          <button v-if="f.status !== 'superseded'" @click="run(() => beginReplacement(f))">选择替代声明</button>
+          <button v-if="f.superseded_by" @click="run(() => showReplacement(f))">查看替代声明 {{f.superseded_by}}</button>
           <button @click="run(() => history(f))">查看审核历史</button>
         </div>
+        <div v-if="replacing === f.id" class="row">
+          <template v-if="options.length"><label>已接受的替代声明<select v-model="replacementId">
+            <option value="">请选择</option><option v-for="r in options" :key="r.id" :value="r.id">{{r.id}} · {{r.target_id ? '目标对象 #'+r.target_id : pretty(r.value)}}</option>
+          </select></label><button :disabled="!replacementId" @click="run(() => review(f,'supersede'))">确认替代</button></template>
+          <p v-else>没有可选的同主体、同谓词已接受声明。</p>
+          <button @click="replacing=null">取消替代</button>
+        </div>
+        <section v-if="replacementDetails[f.id]"><h4>替代声明 {{replacementDetails[f.id].id}}</h4>
+          <p>{{label(replacementDetails[f.id].status)}} · {{replacementDetails[f.id].target_id ? '目标对象 #'+replacementDetails[f.id].target_id : pretty(replacementDetails[f.id].value)}}</p>
+          <EvidenceCard v-for="e in replacementDetails[f.id].evidence" :key="e.id" :evidence="e"/>
+        </section>
         <template v-if="histories[f.id]"
           ><p>建立候选 · {{ f.recorded_at }}</p>
           <p v-for="h in histories[f.id]" :key="h.version">
@@ -95,7 +108,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { studio } from '../../api/ontology'
-import { label, pretty, reviewBody } from '../../utils/ontology'
+import { label, pretty, reviewBody, eligibleReplacements } from '../../utils/ontology'
 import { useStudioAction } from './useStudioAction'
 import EvidenceCard from './EvidenceCard.vue'
 const props = defineProps({ space: Object })
@@ -125,12 +138,18 @@ const result = ref(null),
   facts = ref([]),
   histories = ref({}),
   moreHistory = ref({})
+const replacing = ref(null)
+const replacementId = ref('')
+const options = ref([])
+const replacementDetails = ref({})
 const { busy, error, run } = useStudioAction()
 async function list() {
   const rows = await studio.list(props.space.id + '/claims')
   facts.value = rows
   result.value = null
   histories.value = {}
+  replacing.value = null
+  replacementDetails.value = {}
 }
 async function query() {
   const payload = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== ''))
@@ -138,6 +157,8 @@ async function query() {
   result.value = await studio.post(props.space.id + '/query', payload)
   facts.value = result.value.facts
   histories.value = {}
+  replacing.value = null
+  replacementDetails.value = {}
 }
 async function history(f, append = false) {
   const previous = append ? histories.value[f.id] : []
@@ -145,8 +166,21 @@ async function history(f, append = false) {
   histories.value[f.id] = [...previous, ...rows]
   moreHistory.value[f.id] = rows.length === 50
 }
+async function beginReplacement(f) {
+  replacing.value = null
+  replacementId.value = ''
+  const matches = await studio.post(props.space.id + '/query', {
+    object_id:f.object_id, predicate_id:f.predicate_id, status:'accepted', limit:50,
+  })
+  options.value = eligibleReplacements(f, matches.facts)
+  replacing.value = f.id
+}
+async function showReplacement(f) {
+  delete replacementDetails.value[f.id]
+  replacementDetails.value[f.id] = await studio.list('claims/' + f.superseded_by)
+}
 async function review(f, action) {
-  await studio.post('claims/' + f.id + '/review', reviewBody(action, f))
+  await studio.post('claims/' + f.id + '/review', reviewBody(action, f, replacementId.value))
   if (result.value) await query()
   else await list()
 }

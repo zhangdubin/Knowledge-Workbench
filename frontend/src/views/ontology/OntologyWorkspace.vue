@@ -23,6 +23,7 @@
           >
           <button>创建接管草稿</button>
         </form>
+        <p v-if="creating && adoptionError" role="alert">模型列表加载失败：{{adoptionError}}</p>
         <label v-if="spaces.length"
           >选择空间<select :value="space?.id" @change="run(() => open($event.target.value))">
             <option v-for="s in spaces" :key="s.id" :value="s.id">{{ s.name }} · {{ s.key }}</option>
@@ -60,6 +61,7 @@ import PageTitle from '../../components/PageTitle.vue'
 import { Api } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import { studio } from '../../api/ontology'
+import { errorText } from '../../utils/ontology'
 import { useStudioAction } from './useStudioAction'
 import SchemaPanel from './SchemaPanel.vue'
 import ObjectsPanel from './ObjectsPanel.vue'
@@ -73,6 +75,7 @@ const tab = ref(0),
   spaces = ref([]),
   space = ref(null),
   more = ref(false)
+const adoptionError=ref('')
 const creating = ref(false),
   name = ref(''),
   key = ref(''),
@@ -103,10 +106,13 @@ async function adopt() {
   await created(await studio.post('from-model/' + model.value))
 }
 watch(creating, async (value) => {
+  adoptionError.value=''
+  model.value=''
   if (value)
     try {
       models.value = (await Api.listEntityTypes()).filter((t) => t.key !== 'note')
-    } catch {
+    } catch (e) {
+      adoptionError.value=errorText(e)
       models.value = []
     }
 })

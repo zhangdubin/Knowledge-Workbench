@@ -80,7 +80,7 @@
           <label v-else>声明值<input v-model="value" placeholder="按属性类型填写" /></label>
         </div>
         <div class="row">
-          <label>原文引句<input v-model="quote" /></label
+          <label>原文引句<textarea v-model="quote" rows="3" /></label
           ><label>第几次出现<input v-model.number="occurrence" type="number" min="1" /></label>
         </div>
         <div class="row">
@@ -123,11 +123,12 @@
   </section>
 </template>
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { Api } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import { studio } from '../../api/ontology'
 import { label, pretty, quoteRange } from '../../utils/ontology'
+import { useIngestionSelection } from './useIngestionSelection'
 import { useStudioAction } from './useStudioAction'
 const auth = useAuthStore()
 const props = defineProps({ space: Object })
@@ -140,16 +141,17 @@ const type = computed(() => types.find((t) => t.id === typeId.value)),
   relations = computed(() => props.space.schema.relations.filter((r) => r.source === typeId.value))
 const predicates = computed(() => [...(type.value?.fields || []), ...relations.value]),
   relation = computed(() => relations.value.find((r) => r.id === predicate.value))
-const doc = ref(null),
-  documents = ref([]),
+const {doc, job, plan, chooseDoc, openJob} = useIngestionSelection(
+  id => Api.getDocument(id, true),
+  id => studio.list('ingestions/' + id),
+)
+const documents = ref([]),
   docPage = ref(0),
   moreDocs = ref(false),
   objects = ref([]),
   moreObjects = ref(false),
   ai = ref('unknown')
-const job = ref(null),
-  jobs = ref([]),
-  plan = ref(null),
+const jobs = ref([]),
   quote = ref(''),
   occurrence = ref(1),
   objectData = ref('{}'),
@@ -177,13 +179,10 @@ async function loadObjects() {
   objects.value.push(...rows)
   moreObjects.value = rows.length === 100
 }
-async function chooseDoc(id) {
-  doc.value = id ? await Api.getDocument(Number(id), true) : null
+watch(() => doc.value?.id, () => {
   quote.value = ''
   occurrence.value = 1
-  plan.value = null
-  job.value = null
-}
+}, {flush:'sync'})
 function candidates() {
   if (!predicate.value) throw Error('请选择声明属性或关系')
   const evidence = [
@@ -225,10 +224,6 @@ async function submit(mode) {
   plan.value = null
   job.value = await studio.post(props.space.id + '/ingestions', body)
   jobs.value = await studio.list(props.space.id + '/ingestions')
-}
-async function openJob(id) {
-  plan.value = null
-  job.value = id ? await studio.list('ingestions/' + id) : null
 }
 async function preview() {
   const row = await studio.post('ingestions/' + job.value.id + '/plan')

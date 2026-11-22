@@ -115,6 +115,7 @@ import { ref, computed, watch } from 'vue'
 import { studio } from '../../api/ontology'
 import { useAuthStore } from '../../stores/auth'
 import {
+  initialRevision,
   draftSchema,
   impactSummary,
   label,
@@ -151,7 +152,10 @@ function choose(id) {
   notice.value = ''
   error.value = ''
 }
-choose(revisions.value[0].id)
+const firstRevision = initialRevision(props.space)
+let historyOffset = revisions.value.length
+if (!revisions.value.some(r => r.id === firstRevision.id)) revisions.value.unshift(firstRevision)
+choose(firstRevision.id)
 watch(
   [schema, migration],
   () => {
@@ -166,12 +170,14 @@ function addRelation() {
   schema.value.relations.push({ key: '', name: '', source: id, target: id, cardinality: 'many-to-many' })
 }
 async function loadMore() {
-  const page = await studio.list(props.space.id, { offset: revisions.value.length })
-  revisions.value.push(...page.revisions)
+  const page = await studio.list(props.space.id, { offset: historyOffset })
+  historyOffset += page.revisions.length
+  revisions.value.push(...page.revisions.filter(r => !revisions.value.some(existing => existing.id === r.id)))
   more.value = page.revisions.length === 25
 }
 async function newDraft() {
   const r = await studio.post(props.space.id + '/revisions', { schema: props.space.schema })
+  historyOffset++
   revisions.value.unshift(r)
   choose(r.id)
 }

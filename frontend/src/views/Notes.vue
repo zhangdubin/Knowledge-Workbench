@@ -347,9 +347,11 @@ import NoteGroupSidebar from '../components/note/NoteGroupSidebar.vue'
 import NoteGroupSelect from '../components/note/NoteGroupSelect.vue'
 import NoteGroupBadge from '../components/note/NoteGroupBadge.vue'
 import { useNoteGroups } from '../components/note/useNoteGroups'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
 const route = useRoute()
+const auth = useAuthStore()
 const noteTypeId = ref(null)
 const data = ref({ items: [], total: 0 })
 const keyword = ref('')
@@ -875,6 +877,7 @@ onMounted(async () => {
   groupId.value = parseGroupParam(route.query.group)
   const et = await Api.getEntityTypeByKey('note')
   noteTypeId.value = et.id
+  if (route.query.action === 'create' && auth.canModel('note', 'write')) openCreate()
   // 分组接口可能还没上线：不可用时安静降级（隐藏侧栏），不弹错误。
   // force=true：每次进页面都重新拉一次 —— 计数会随「笔记挪进/挪出分组」变，
   // 缓存住旧数会让侧栏显示「组里 0 篇」而列表里明明有。

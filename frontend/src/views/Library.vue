@@ -33,6 +33,7 @@
     <!-- 上传区 -->
     <div class="upload-card">
       <div
+        ref="uploadZone"
         class="dropzone"
         :class="{ active: dragging }"
         role="button"
@@ -915,6 +916,7 @@ const route = useRoute()
 
 const dragging = ref(false)
 const fileInput = ref(null)
+const uploadZone = ref(null)
 const uploading = ref([])
 
 const files = ref([])
@@ -1568,6 +1570,7 @@ function removeUpload(u) {
 }
 
 onMounted(async () => {
+  if (route.query.action === 'upload' && auth.can('file_write')) uploadZone.value?.focus()
   await loadFiles()
   loadRecent()
 

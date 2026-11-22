@@ -29,7 +29,7 @@ async def get_note_type(db: AsyncSession) -> EntityType | None:
 
 
 async def get_or_create_link_def(
-    db: AsyncSession, source_type: EntityType, note_type: EntityType
+    db: AsyncSession, source_type: EntityType, note_type: EntityType, *, commit: bool = True
 ) -> RelationDef:
     """取得（必要时创建）"源模型 → 笔记" 的关联定义"""
     key = f"{LINK_KEY_PREFIX}_{source_type.id}"
@@ -47,7 +47,10 @@ async def get_or_create_link_def(
         description=f"{source_type.name} 记录挂接到知识库笔记",
     )
     db.add(rd)
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     await db.refresh(rd)
     return rd
 
@@ -242,10 +245,20 @@ def _render_record_markdown(
     return "\n".join(lines)
 
 
-async def note_from_record(db: AsyncSession, record_id: int) -> dict:
+async def note_from_record(db: AsyncSession, principal, record_id: int) -> dict:
     """把业务记录沉淀为一条笔记并自动关联"""
+    from ..ontology.migrations import lock_writer
+    from ..ontology.models import RecordSource
+    from ..ontology.provenance import ensure_record_source
+    from .access import record_type_key
+    from .auth import ensure_model
+
+    await lock_writer(db)
+    ensure_model(principal, NOTE_KEY, "write")
+    await ensure_record_source(db, principal, record_id)
+    ensure_model(principal, await record_type_key(db, record_id), "read")
     rec = await db.get(EntityRecord, record_id)
-    if not rec:
+    if not rec or rec.deleted_at:
         raise ValueError("记录不存在")
     source_type = await db.get(EntityType, rec.entity_type_id)
     note_type = await get_note_type(db)
@@ -272,7 +285,11 @@ async def note_from_record(db: AsyncSession, record_id: int) -> dict:
     db.add(note)
     await db.flush()
 
-    rd = await get_or_create_link_def(db, source_type, note_type)
+    document_ids = await db.scalars(
+        select(RecordSource.document_id).where(RecordSource.record_id == record_id)
+    )
+    db.add_all(RecordSource(record_id=note.id, document_id=did) for did in document_ids)
+    rd = await get_or_create_link_def(db, source_type, note_type, commit=False)
     db.add(RelationRecord(
         relation_def_id=rd.id,
         source_record_id=record_id,

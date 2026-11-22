@@ -22,4 +22,13 @@ async def install(db):
         WHERE job.status = 'published' AND item.type = 'integer'
     """)
     )
+    # Recover provenance for earlier notes with a retained materialization link.
+    await db.execute(text("""
+        INSERT OR IGNORE INTO ontology_record_source(record_id, document_id)
+        SELECT link.target_record_id, provenance.document_id
+        FROM relation_record AS link
+        JOIN ontology_record_source AS provenance ON provenance.record_id = link.source_record_id
+        WHERE link.target_record_id IS NOT NULL AND json_valid(link.data)
+              AND json_extract(link.data, '$.via') = 'materialize'
+    """))
     await db.commit()

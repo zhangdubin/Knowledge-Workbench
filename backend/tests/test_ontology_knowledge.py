@@ -390,3 +390,55 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             c.post(f"{root}/changes/{fresh_plan['id']}/confirm").status_code, 409
         )
+
+    async def test_derived_note_inherits_every_source(self):
+        from fastapi.testclient import TestClient
+        from sqlalchemy import select
+        from uuid import uuid4
+        from app.main import app
+        from app.models import EntityRecord, EntityType
+        from app.ontology.models import RecordSource
+        from app.services.auth import current_principal
+
+        async with engine.begin() as con:
+            await con.run_sync(Base.metadata.create_all)
+        key = "derived" + uuid4().hex
+        async with SessionLocal() as db:
+            note_type = await db.scalar(select(EntityType).where(EntityType.key == "note"))
+            if not note_type:
+                note_type = EntityType(key="note",name="Notes")
+                db.add(note_type)
+            kind = EntityType(key=key,name="Business")
+            docs = [Document(filename="One"),Document(filename="Two")]
+            db.add_all([kind, *docs])
+            await db.flush()
+            source = EntityRecord(entity_type_id=kind.id,data={"name":"Receipt"})
+            db.add(source)
+            await db.flush()
+            db.add_all([RecordSource(record_id=source.id,document_id=d.id) for d in docs])
+            await db.commit()
+            rid,nid = source.id,note_type.id
+            source_ids={d.id for d in docs}
+        c=TestClient(app)
+        reader=Principal(None,{"models":{key:"read","note":"write"}})
+        app.dependency_overrides[current_principal]=lambda:reader
+        try:
+            denied=c.post("/api/knowledge/note-from-record",json=dict(record_id=rid))
+            self.assertIn(denied.status_code,(403,404))
+            self.assertNotIn("Receipt",denied.text)
+            self.assertEqual(c.get(f"/api/records/type/{nid}",params={"keyword":"Receipt"}).json()["total"],0)
+            reader.perms["pages"]=["library"]
+            created=c.post("/api/knowledge/note-from-record",json=dict(record_id=rid))
+            self.assertEqual(created.status_code,200,created.text)
+            note_id=created.json()["note_id"]
+            self.assertEqual(c.get(f"/api/records/{note_id}").status_code,200)
+            async with SessionLocal() as db:
+                inherited=set(await db.scalars(select(RecordSource.document_id).where(RecordSource.record_id==note_id)))
+                self.assertEqual(inherited,source_ids)
+                doc=await db.get(Document,min(source_ids))
+                doc.deleted_at=datetime.now()
+                await db.commit()
+            self.assertEqual(c.get(f"/api/records/{note_id}").status_code,404)
+            self.assertEqual(c.get(f"/api/records/type/{nid}",params={"keyword":"Receipt"}).json()["total"],0)
+        finally:
+            del app.dependency_overrides[current_principal]

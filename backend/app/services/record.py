@@ -10,6 +10,7 @@ from ..ontology.migrations import lock_writer
 from ..ontology.objects import check_version, track
 from ..ontology.models import ObjectBinding
 from ..ontology.validation import validate_record
+from .auth import Principal, ensure_model
 from . import access
 
 
@@ -142,10 +143,13 @@ async def delete_record(db: AsyncSession, record_id: int, *, expected_version: i
 # ============ 回收站 ============
 
 async def list_deleted_records(
-    db: AsyncSession, type_id: int | None = None, limit: int = 200
+    db: AsyncSession, principal: Principal, type_id: int | None = None, limit: int = 200
 ) -> list[dict]:
     """回收站里的记录（跨模型；限制条数避免超大库拖垮列表）"""
-    q = select(EntityRecord).where(EntityRecord.deleted_at.is_not(None))
+    q = select(EntityRecord).join(EntityType).where(EntityRecord.deleted_at.is_not(None))
+    if not principal.is_super:
+        allowed = [key for key in await db.scalars(select(EntityType.key)) if principal.can_model(key, "read")]
+        q = q.where(EntityType.key.in_(allowed))
     if type_id:
         q = q.where(EntityRecord.entity_type_id == type_id)
     q = q.order_by(EntityRecord.deleted_at.desc()).limit(limit)
@@ -175,16 +179,17 @@ async def list_deleted_records(
     return out
 
 
-async def restore_record(db: AsyncSession, record_id: int, *, expected_version=None) -> dict | None:
+async def restore_record(db: AsyncSession, record_id: int, principal: Principal, *, expected_version=None) -> dict | None:
     """从回收站恢复记录；模型本身已入回收站时一并恢复模型"""
     await lock_writer(db)
     rec = await db.get(EntityRecord, record_id,populate_existing=True)
     if not rec or not rec.deleted_at:
         return None
+    et = await db.get(EntityType, rec.entity_type_id)
+    ensure_model(principal, et.key, "write")
     await check_version(db,rec,expected_version)
     rec.deleted_at = None
     await track(db,rec)
-    et = await db.get(EntityType, rec.entity_type_id)
     model_restored = False
     if et and et.deleted_at:
         et.deleted_at = None
@@ -195,12 +200,14 @@ async def restore_record(db: AsyncSession, record_id: int, *, expected_version=N
     return {"record_id": rec.id, "model_restored": model_restored}
 
 
-async def purge_record(db: AsyncSession, record_id: int) -> bool:
+async def purge_record(db: AsyncSession, record_id: int, principal: Principal) -> bool:
     """彻底删除单条记录（物理删除，不可恢复）"""
     await lock_writer(db)
     rec = await db.get(EntityRecord, record_id,populate_existing=True)
     if not rec or not rec.deleted_at:
         return False
+    et = await db.get(EntityType, rec.entity_type_id)
+    ensure_model(principal, et.key, "write")
     if await db.get(ObjectBinding,rec.id):
         from fastapi import HTTPException
         raise HTTPException(409,"本体对象保留删除历史，可从回收站恢复")

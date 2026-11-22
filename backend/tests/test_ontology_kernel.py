@@ -294,6 +294,20 @@ class Kernel(unittest.IsolatedAsyncioTestCase):
             client.delete(f"/api/records/{rid}?expected_version=1").status_code, 200
         )
         recycle = f"/api/recycle/records/{rid}"
+        from app.services.auth import Principal, current_principal
+        restricted = Principal(None, {"features":{"model_manage":True},"models":{key:"none"}})
+        app.dependency_overrides[current_principal] = lambda: restricted
+        try:
+            for version in (1,2):
+                denied = client.post(recycle + f"/restore?expected_version={version}")
+                self.assertEqual(denied.status_code,403)
+                self.assertIsInstance(denied.json()["detail"],str)
+                self.assertNotIn("current_version",denied.text)
+            self.assertEqual(client.delete(recycle).status_code,403)
+            self.assertNotIn(rid,[r["id"] for r in client.get("/api/recycle").json()["records"]])
+        finally:
+            del app.dependency_overrides[current_principal]
+        self.assertEqual(client.get(f"{root}/objects/{rid}").status_code,404)
         self.assertEqual(client.post(recycle + "/restore").status_code, 428)
         self.assertEqual(
             client.post(recycle + "/restore?expected_version=2").status_code, 200

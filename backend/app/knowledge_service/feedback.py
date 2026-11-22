@@ -1,6 +1,7 @@
 """Durable owner/reviewer feedback with transaction-scoped idempotency."""
 
 from datetime import datetime
+from hashlib import sha256
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
@@ -8,7 +9,7 @@ from ..models import AuditLog
 from ..ontology.changes import actor
 from ..ontology.migrations import lock_writer
 from ..ontology.registry import digest
-from ..ontology.models import Claim
+from ..ontology.models import Claim, SourceSnapshot
 from .models import Feedback, FeedbackResolution, QueryRun, SourceRevision
 from . import policy, schemas, retrieval, sources
 
@@ -55,7 +56,7 @@ def safe_budget(budget):
     return safe
 
 
-async def revalidate(db, p, ontology_id, refs, request):
+async def revalidate(db, p, ontology_id, refs, request, *, selection=None):
     _, _, schema, _ = await policy.space(db, p, ontology_id)
     if refs.get("version") != 2:
         raise HTTPException(409, "旧运行缺少完整授权追溯，请重新查询")
@@ -67,6 +68,18 @@ async def revalidate(db, p, ontology_id, refs, request):
         obj, _ = await retrieval.object_scope(db, p, rid, ontology_id)
         by_id[rid] = obj
         items.append(retrieval.public_object(obj))
+    selected_views = {}
+    if selection:
+        for descriptor in selection.get("items", []):
+            if descriptor["id"] not in by_id:
+                raise HTTPException(409, "原展示条目不在授权依赖集合中")
+            selected_views[descriptor["id"]] = await retrieval.historical_object(
+                db, p, ontology_id, descriptor, current=by_id[descriptor["id"]]
+            )
+        items = [
+            retrieval.public_object(selected_views.get(rid, obj))
+            for rid, obj in by_id.items()
+        ]
     facts = []
     for cid in refs.get("claim_ids", []):
         claim = await db.get(Claim, cid)
@@ -76,13 +89,20 @@ async def revalidate(db, p, ontology_id, refs, request):
         if not isinstance(pinned, dict) or set(pinned) != set(claim.evidence_ids):
             raise HTTPException(404, "原查询证据关联已不可用")
         f = await retrieval.fact(
-            db, p, claim, revisions, request["as_of"], request=request, pinned=pinned
+            db,
+            p,
+            claim,
+            revisions,
+            request["as_of"],
+            request=request,
+            pinned=pinned,
+            object_views=selected_views,
         )
         if not f:
             raise HTTPException(404, "原查询知识依据已不适用")
         if claim.target_id is not None:
             for rid in (claim.object_id, claim.target_id):
-                obj = by_id.get(rid)
+                obj = selected_views.get(rid, by_id.get(rid))
                 if not obj or (
                     request.get("type_id") and obj["type_id"] != request["type_id"]
                 ):
@@ -91,6 +111,137 @@ async def revalidate(db, p, ontology_id, refs, request):
                     raise HTTPException(404, "原查询关系已超出适用范围")
         facts.append(f)
     return items, facts, revisions
+
+
+async def public_run_selection(db, p, run, selection, items, facts, revisions):
+    if not isinstance(selection, dict) or selection.get("version") != 1:
+        raise HTTPException(409, "旧运行缺少原展示选择，请重新查询")
+    item_map = {obj["id"]: obj for obj in items}
+    fact_map = {fact["id"]: fact for fact in facts}
+    revision_map = {row.id: row for row in revisions}
+    selected_items = []
+    for descriptor in selection["items"]:
+        obj = item_map.get(descriptor["id"])
+        if (
+            not obj
+            or obj["version"] != descriptor["version"]
+            or obj["revision_id"] != descriptor["revision_id"]
+        ):
+            raise HTTPException(409, "原查询条目版本不可用")
+        selected_items.append(obj)
+    selected_facts = []
+    for descriptor in selection["facts"]:
+        fact = fact_map.get(descriptor["id"])
+        if not fact or fact["version"] != descriptor["version"]:
+            raise HTTPException(409, "原查询事实版本已变化，请重新查询")
+        selected_facts.append(fact)
+    citation_map = {
+        (e["id"], e["revision_id"]): e for fact in facts for e in fact["evidence"]
+    }
+    citations = []
+    for descriptor in selection["citations"]:
+        evidence = citation_map.get((descriptor["id"], descriptor["revision_id"]))
+        if (
+            not evidence
+            or (evidence["start"], evidence["end"])
+            != (descriptor["start"], descriptor["end"])
+            or sha256(evidence["quote"].encode()).hexdigest() != descriptor["quote_sha"]
+        ):
+            raise HTTPException(404, "原查询引文位置不可用")
+        citations.append(evidence)
+    source_results = []
+    for descriptor in selection["sources"]:
+        revision = revision_map.get(descriptor["id"])
+        if (
+            not revision
+            or revision.snapshot_id != descriptor["snapshot_id"]
+            or not sources.active(revision, run.request["as_of"], revisions)
+        ):
+            raise HTTPException(404, "原查询摘录修订已不适用")
+        snapshot = await db.get(SourceSnapshot, descriptor["snapshot_id"])
+        if (
+            not snapshot
+            or sha256(snapshot.text.encode()).hexdigest() != snapshot.text_sha
+        ):
+            raise HTTPException(404, "原查询摘录快照不可用")
+        start, end = descriptor["start"], descriptor["end"]
+        if not 0 <= start < end <= len(snapshot.text):
+            raise HTTPException(404, "原查询摘录区间不可用")
+        quote = snapshot.text[start:end]
+        if sha256(quote.encode()).hexdigest() != descriptor["quote_sha"]:
+            raise HTTPException(404, "原查询摘录内容已变化")
+        source_results.append(
+            dict(
+                **(await sources.public(db, p, revision)),
+                quote=quote,
+                start=start,
+                end=end,
+                verified=False,
+                kind="source_excerpt",
+            )
+        )
+    relations = []
+    for edge in selection["relations"]:
+        fact = fact_map.get(edge["claim_id"])
+        if not fact or (fact["object_id"], fact["target_id"]) != (
+            edge["source"],
+            edge["target"],
+        ):
+            raise HTTPException(404, "原查询关联已不可用")
+        relations.append(dict(edge))
+    terms = []
+    for descriptor in selection["terms"]:
+        original = await retrieval.historical_object(db, p, run.ontology_id, descriptor)
+        data = original["_semantic"]
+        aliases = data.get("aliases") or []
+        if isinstance(aliases, str):
+            import re
+
+            aliases = [
+                word.strip()
+                for word in re.split(r"[,，;；、\n|]", aliases)
+                if word.strip()
+            ]
+        terms.append(
+            dict(
+                id=original["id"],
+                preferred=data.get("preferred") or "",
+                aliases=aliases[:50] if isinstance(aliases, list) else [],
+                definition=data.get("definition") or "",
+                scope=data.get("scope") or "",
+            )
+        )
+    selected_ids = {fact["id"] for fact in selected_facts}
+    extra_ids = list(
+        dict.fromkeys(
+            cid
+            for pair in selection["conflicts"]
+            for cid in pair
+            if cid not in selected_ids
+        )
+    )
+    context = [fact_map[cid] for cid in extra_ids]
+    conflict_facts, conflict_citations, conflict_truncated = retrieval.bounded_facts(
+        context, 50
+    )
+    return dict(
+        items=selected_items,
+        facts=selected_facts,
+        citations=citations,
+        sources=source_results,
+        relations=relations,
+        terms=terms,
+        conflicts=selection["conflicts"],
+        conflict_facts=[
+            dict(fact, purpose="conflict_evidence") for fact in conflict_facts
+        ],
+        conflict_citations=[
+            dict(evidence, purpose="conflict_evidence")
+            for evidence in conflict_citations.values()
+        ],
+        incomplete=selection["incomplete"],
+        conflict_incomplete=conflict_truncated,
+    )
 
 
 async def read_run(db, p, run_id):
@@ -106,10 +257,13 @@ async def read_run(db, p, run_id):
         run = await db.get(QueryRun, run_id)
         if not run or (run.actor != actor(p) and not policy.reviewer(p)):
             raise HTTPException(404, "查询运行不存在")
+        selection = run.references.get("public_selection")
         items, facts, revisions = await revalidate(
-            db, p, run.ontology_id, run.references, run.request
+            db, p, run.ontology_id, run.references, run.request, selection=selection
         )
-        visible_facts, citations, truncated = retrieval.bounded_facts(facts, 50)
+        public = await public_run_selection(
+            db, p, run, selection, items, facts, revisions
+        )
         result = dict(
             run_id=run.id,
             id=run.id,
@@ -121,16 +275,14 @@ async def read_run(db, p, run_id):
             status=run.status,
             generation=run.generation,
             answer=None,
-            items=items[:50],
-            facts=visible_facts,
-            citations=list(citations.values()),
-            sources=[await sources.public(db, p, r) for r in revisions[:50]],
+            **public,
+            as_of=run.request["as_of"],
+            scope=run.request.get("scope"),
             prompt_version=run.prompt_version,
             model_version=run.model_version,
             elapsed_ms=run.elapsed_ms,
             budget=safe_budget(run.budget),
             created_at=run.created_at,
-            incomplete=truncated or len(items) > 50 or len(revisions) > 50,
         )
         cache[key] = result
         return result
@@ -158,13 +310,18 @@ async def target(db, p, payload):
         ):
             raise HTTPException(422, "请提供有效知识条目与读取时的版本")
         obj, oid = await retrieval.object_scope(db, p, payload["record_id"])
-        if run and (
-            oid != run["ontology_id"]
-            or payload["record_id"] not in [i["id"] for i in run["items"]]
-        ):
-            raise HTTPException(422, "条目不属于本次查询结果")
-        if obj["version"] != payload["record_version"]:
-            raise HTTPException(409, "知识条目版本已变化，请重新读取")
+        expected_version = obj["version"]
+        if run:
+            stored = await db.get(QueryRun, payload["run_id"])
+            selections = {
+                item["id"]: item
+                for item in stored.references["public_selection"]["items"]
+            }
+            if oid != run["ontology_id"] or payload["record_id"] not in selections:
+                raise HTTPException(422, "条目不属于本次查询入选结果")
+            expected_version = selections[payload["record_id"]]["version"]
+        if expected_version != payload["record_version"]:
+            raise HTTPException(409, "知识条目版本与原选择不符，请重新读取")
 
 
 async def read(db, p, feedback_id):
@@ -218,7 +375,7 @@ async def create(db, p, payload):
         return schemas.row(old)
     await target(db, p, payload)
     item_references = {}
-    if payload.get("record_id"):
+    if payload.get("record_id") and not payload.get("run_id"):
         obj, oid = await retrieval.object_scope(db, p, payload["record_id"])
         detail = await retrieval.detail(db, p, payload["record_id"])
         rendered = {f["id"]: f for f in detail["facts"]}

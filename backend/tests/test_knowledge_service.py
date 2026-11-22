@@ -823,7 +823,16 @@ class KnowledgeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.p = self.reader
         result = self.query(limit=1)
         run = self.c.get("/api/knowledge-service/runs/" + result["run_id"]).json()
-        self.assertEqual(len(run["facts"]), 2)
+        self.assertEqual(
+            [fact["id"] for fact in run["facts"]],
+            [fact["id"] for fact in result["facts"]],
+        )
+        self.assertEqual(len(run["facts"]) + len(run["conflict_facts"]), 2)
+        self.assertTrue(
+            all(
+                fact["purpose"] == "conflict_evidence" for fact in run["conflict_facts"]
+            )
+        )
         self.assertEqual(run["status"], "conflict")
 
     def test_S19_ordinary_chinese_question(self):
@@ -1821,3 +1830,185 @@ class KnowledgeServiceTest(unittest.IsolatedAsyncioTestCase):
             await answers.generate(self.reader, request, result)
         self.assertEqual(model.await_count, 0)
         self.assertEqual(result["generation"], "error")
+
+    async def test_T201_excerpt_anchor_outside_display_revokes_run_and_feedback(self):
+        from app.ontology.models import RecordSource
+        from app.knowledge_service.models import SourceRevision
+        from datetime import datetime
+
+        self.p = self.admin
+        anchor = self.obj(
+            dict(title="维护规程补充", summary="罕见锚点", scope="保障", topic="维护")
+        )
+        async with SessionLocal() as db:
+            doc = Document(
+                filename="锚点对象来源.txt",
+                extracted_text="受控对象来源",
+                extract_status="ok",
+            )
+            db.add(doc)
+            await db.flush()
+            db.add(DocumentLink(document_id=doc.id, record_id=anchor))
+            db.add(RecordSource(document_id=doc.id, record_id=anchor))
+            await db.commit()
+            anchor_doc = doc.id
+        _, excerpt_revision = await self._document_revision(
+            text="公开资料：罕见锚点及补充说明。", group="anchor-excerpt"
+        )
+        async with SessionLocal() as db:
+            row = await db.get(SourceRevision, excerpt_revision["id"])
+            row.recorded_at = datetime(2019, 1, 1)
+            await db.commit()
+        self.p = self.reader
+        result = self.query(limit=1)
+        self.assertEqual(result["sources"][0]["id"], excerpt_revision["id"])
+        self.assertNotIn(anchor, [item["id"] for item in result["items"]])
+        f = self.c.post(
+            "/api/knowledge-service/feedback",
+            json=dict(
+                run_id=result["run_id"],
+                category="回答不完整",
+                message="摘录来源需要核对",
+                idempotency_key=uuid4().hex,
+            ),
+        ).json()
+        async with SessionLocal() as db:
+            doc = await db.get(Document, anchor_doc)
+            doc.deleted_at = __import__("datetime").datetime.now()
+            await db.commit()
+        for path in ["/runs/" + result["run_id"], "/feedback/" + f["id"]]:
+            response = self.c.get("/api/knowledge-service" + path)
+            self.assertIn(response.status_code, (403, 404), response.text)
+            self.assertNotIn("摘录来源需要核对", response.text)
+
+    def _semantic_public_selection(self):
+        import json
+
+        self.p = self.admin
+        candidate = self.obj(dict(title="季度预算", scope="保障", topic="维护"))
+        self.add_claim("四百", rid=candidate)
+        self.p = self.reader
+        self.reader.perms["features"] = {"ai": True}
+
+        async def embed(texts, **kwargs):
+            return [[0.0, 1.0] if "季度预算" in text else [1.0, 0.0] for text in texts]
+
+        meta = dict(
+            content=json.dumps({"items": [{"id": self.rid, "score": 1.0}]}),
+            mock=False,
+            truncated=False,
+            finish_reason="stop",
+            model="controlled-public-selection",
+        )
+        cfg = dict(
+            embedding_enabled=True,
+            rerank_enabled=True,
+            embedding_model="controlled",
+            model="controlled-public-selection",
+        )
+        with patch(
+            "app.knowledge_service.ranking.configuration", return_value=cfg
+        ), patch(
+            "app.knowledge_service.ranking.embedding.embed_query",
+            AsyncMock(return_value=[1.0, 0.0]),
+        ), patch(
+            "app.knowledge_service.ranking.embedding.embed_texts", side_effect=embed
+        ), patch(
+            "app.knowledge_service.ranking.ai.chat_real_meta",
+            AsyncMock(return_value=meta),
+        ):
+            result = self.query(limit=1)
+        self.assertEqual([item["id"] for item in result["items"]], [self.rid])
+        self.assertEqual([fact["value"] for fact in result["facts"]], ["三天"])
+        return result, candidate
+
+    def test_T202_replay_preserves_selected_arrays_and_limit(self):
+        result, candidate = self._semantic_public_selection()
+        response = self.c.get("/api/knowledge-service/runs/" + result["run_id"])
+        self.assertEqual(response.status_code, 200, response.text)
+        replay = response.json()
+        for key in ("items", "facts", "citations", "sources"):
+            self.assertEqual(
+                [item["id"] for item in replay[key]],
+                [item["id"] for item in result[key]],
+                key,
+            )
+            self.assertLessEqual(len(replay[key]), result["budget"]["result_limit"])
+        self.assertEqual(replay["relations"], result["relations"])
+        self.assertEqual(replay["terms"], result["terms"])
+        for old, new in zip(result["sources"], replay["sources"]):
+            self.assertEqual(
+                (old["snapshot_id"], old["start"], old["end"], old["quote"]),
+                (new["snapshot_id"], new["start"], new["end"], new["quote"]),
+            )
+        self.assertNotIn(candidate, [item["id"] for item in replay["items"]])
+
+    async def test_T203_replay_preserves_semantic_ranking_order(self):
+        saved = {}
+        original = self.query
+
+        def track(**kwargs):
+            result = original(**kwargs)
+            saved["result"] = result
+            return result
+
+        self.query = track
+        try:
+            await self.test_R10_optional_vector_recall_rerank_authorized_candidates_only()
+        finally:
+            self.query = original
+        result = saved["result"]
+        replay = self.c.get("/api/knowledge-service/runs/" + result["run_id"]).json()
+        self.assertEqual(
+            [item["id"] for item in replay["items"]],
+            [item["id"] for item in result["items"]],
+        )
+        self.assertEqual(
+            [fact["id"] for fact in replay["facts"]],
+            [fact["id"] for fact in result["facts"]],
+        )
+
+    def test_T204_feedback_uses_original_public_item_set(self):
+        result, candidate = self._semantic_public_selection()
+        base = dict(
+            run_id=result["run_id"],
+            record_version=1,
+            category="回答不完整",
+            message="核对该条目",
+        )
+        selected = self.c.post(
+            "/api/knowledge-service/feedback",
+            json={**base, "record_id": self.rid, "idempotency_key": uuid4().hex},
+        )
+        self.assertEqual(selected.status_code, 200, selected.text)
+        not_selected = self.c.post(
+            "/api/knowledge-service/feedback",
+            json={**base, "record_id": candidate, "idempotency_key": uuid4().hex},
+        )
+        self.assertEqual(not_selected.status_code, 422, not_selected.text)
+
+    def test_T205_replay_retains_original_item_version_after_edit(self):
+        result = self.query()
+        original = result["items"][0]
+        self.p = self.admin
+        self.c.put(
+            "/api/ontologies/objects/" + str(self.rid),
+            json=dict(
+                data=dict(
+                    title="维护规程新版",
+                    summary="维护周期已调整",
+                    scope="保障",
+                    topic="维护",
+                ),
+                expected_version=original["version"],
+            ),
+        ).raise_for_status()
+        self.p = self.reader
+        current = self.c.get("/api/knowledge-service/items/" + str(self.rid)).json()
+        self.assertGreater(current["version"], original["version"])
+        replay = self.c.get("/api/knowledge-service/runs/" + result["run_id"])
+        self.assertEqual(replay.status_code, 200, replay.text)
+        historical = replay.json()["items"][0]
+        self.assertEqual(historical["version"], original["version"])
+        self.assertEqual(historical["data"], original["data"])
+        self.assertEqual(historical["title"], original["title"])

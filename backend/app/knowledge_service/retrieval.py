@@ -7,7 +7,7 @@ from datetime import date
 from hashlib import sha256
 from fastapi import HTTPException
 from sqlalchemy import select
-from ..ontology import objects, evidence
+from ..ontology import objects, evidence, registry
 from ..ontology.models import (
     Claim,
     ObjectBinding,
@@ -70,8 +70,12 @@ async def object_scope(db, p, record_id, ontology_id=None):
     return obj, projection.ontology_id
 
 
-async def fact(db, p, claim, revisions, at, *, request=None, pinned=None):
+async def fact(
+    db, p, claim, revisions, at, *, request=None, pinned=None, object_views=None
+):
     obj, _ = await object_scope(db, p, claim.object_id, claim.ontology_id)
+    if object_views and claim.object_id in object_views:
+        obj = object_views[claim.object_id]
     data = obj["_semantic"]
     if claim.target_id is not None:
         await object_scope(db, p, claim.target_id, claim.ontology_id)
@@ -142,7 +146,7 @@ async def terms(db, p, ontology_id, q="", scope=None, *, internal=False):
             items=[],
             ambiguous=False,
             incomplete=False,
-            **({"_dependencies": []} if internal else {})
+            **({"_dependencies": [], "_selections": []} if internal else {})
         )
     ids = list(
         await db.scalars(
@@ -153,6 +157,7 @@ async def terms(db, p, ontology_id, q="", scope=None, *, internal=False):
         )
     )
     items = []
+    selections = []
     for rid in ids[:OBJECT_BUDGET]:
         try:
             obj, _ = await object_scope(db, p, rid, ontology_id)
@@ -177,6 +182,7 @@ async def terms(db, p, ontology_id, q="", scope=None, *, internal=False):
             for w in words
         ):
             continue
+        selections.append(object_descriptor(obj))
         items.append(
             dict(
                 id=rid,
@@ -201,6 +207,7 @@ async def terms(db, p, ontology_id, q="", scope=None, *, internal=False):
     )
     if internal:
         result["_dependencies"] = [t["id"] for t in items]
+        result["_selections"] = selections[:RESULT_LIMIT]
     return result
 
 
@@ -300,6 +307,73 @@ def references(type_ids, record_ids, claim_ids, rendered, revisions=()):
     )
 
 
+def object_descriptor(obj):
+    return {key: obj[key] for key in ("id", "version", "revision_id", "type_id")}
+
+
+async def historical_object(db, p, ontology_id, selection, current=None):
+    if current is None:
+        current, _ = await object_scope(db, p, selection["id"], ontology_id)
+    if current["type_id"] != selection["type_id"]:
+        raise HTTPException(409, "原查询条目类型已变化，无法回放原版本")
+    if (
+        current["version"] == selection["version"]
+        and current["revision_id"] == selection["revision_id"]
+    ):
+        return current
+    history = await db.get(ObjectHistory, (selection["id"], selection["version"]))
+    if not history or history.revision_id != selection["revision_id"]:
+        raise HTTPException(409, "原查询条目版本不可用，请重新查询")
+    ontology, registration, _, _ = await policy.space(db, p, ontology_id)
+    revision = await registry.revision(db, ontology, history.revision_id)
+    original = {
+        **current,
+        "data": history.data,
+        "version": history.version,
+        "revision_id": history.revision_id,
+    }
+    original["_semantic"] = policy.semantic_data(
+        registration, revision.schema, original
+    )
+    return original
+
+
+def public_selection(result, limit):
+    # Only IDs, versions and exact excerpt locations are persisted, not cached
+    # object bodies or generated text. ObjectHistory and immutable snapshots
+    # remain the authorities for reconstructing historical public results.
+    return dict(
+        version=1,
+        limit=limit,
+        incomplete=result["incomplete"],
+        items=[object_descriptor(obj) for obj in result["items"]],
+        facts=[dict(id=f["id"], version=f["version"]) for f in result["facts"]],
+        citations=[
+            dict(
+                id=e["id"],
+                revision_id=e["revision_id"],
+                start=e["start"],
+                end=e["end"],
+                quote_sha=sha256(e["quote"].encode()).hexdigest(),
+            )
+            for e in result["citations"]
+        ],
+        sources=[
+            dict(
+                id=r["id"],
+                snapshot_id=r["snapshot_id"],
+                start=r["start"],
+                end=r["end"],
+                quote_sha=sha256(r["quote"].encode()).hexdigest(),
+            )
+            for r in result["sources"]
+        ],
+        relations=[dict(edge) for edge in result["relations"]],
+        terms=result.pop("_term_selections", []),
+        conflicts=result["conflicts"],
+    )
+
+
 async def search(db, p, request):
     ont, registration, schema, visible = await policy.space(
         db, p, request["ontology_id"]
@@ -327,6 +401,7 @@ async def search(db, p, request):
         incomplete=revisions.incomplete or term_result["incomplete"],
         reasons=[],
         terms=term_result["items"],
+        _term_selections=term_result["_selections"],
         as_of=request["as_of"],
         scope=request.get("scope"),
         budget=dict(
@@ -498,9 +573,13 @@ async def search(db, p, request):
     ]
     items = [public_object(records[rid]) for rid in item_ids[: request["limit"]]]
     excerpt_needles = set(needles)
+    anchor_dependencies = set()
     for rid in roots:
         if rid in records:
-            excerpt_needles |= anchors(records[rid]["_semantic"])
+            expanded = anchors(records[rid]["_semantic"])
+            if expanded:
+                excerpt_needles |= expanded
+                anchor_dependencies.add(rid)
     excerpts = []
     for revision in revisions:
         if not sources.active(revision, request["as_of"], revisions) or not matches(
@@ -539,6 +618,7 @@ async def search(db, p, request):
         set(item_ids[: request["limit"]])
         | set(term_dependencies)
         | set(rank_dependencies)
+        | anchor_dependencies
     )
     dependency_records |= {edge["source"] for edge in edges} | {
         edge["target"] for edge in edges

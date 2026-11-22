@@ -179,6 +179,9 @@ async def query(payload: dict, db: DB, p: User):
             ),
         ),
     )
+    references["public_selection"] = retrieval.public_selection(
+        result, request["limit"]
+    )
     run = QueryRun(
         actor=actor(p),
         ontology_id=request["ontology_id"],

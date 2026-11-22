@@ -959,3 +959,5 @@ __all__ = [
     "DnaGeneScore", "DnaAsset", "DnaAssetUse", "DnaOpenkbSource",
     "DevProject", "DevTask", "DevArtifact", "DevSession", "DevCitation",
 ]
+# Register additive ontology tables before Base.metadata.create_all().
+from ..ontology import models as ontology_models

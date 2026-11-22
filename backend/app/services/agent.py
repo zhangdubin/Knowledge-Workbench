@@ -526,6 +526,19 @@ async def _load_target(db: AsyncSession, principal, model_key: str):
     return t, None
 
 
+async def _checked_payload(db, fields, data, *, previous=None, model_key):
+    if model_key == "note":
+        return _validate_payload(fields, data, partial=previous is not None, model_key=model_key)
+    from ..ontology.validation import validate_record
+    if not isinstance(data, dict) or not data or len(data) > MAX_DATA_KEYS:
+        return {}, ["字段数量无效"], []
+    try:
+        await validate_record(db, fields, {**(previous or {}), **data}, previous)
+    except ValueError as error:
+        return {}, [str(error)], []
+    return data, [], []
+
+
 async def prepare_write(db: AsyncSession, principal, name: str, args: dict) -> dict:
     """把一次写调用整理成「待确认操作」。
 
@@ -541,8 +554,7 @@ async def prepare_write(db: AsyncSession, principal, name: str, args: dict) -> d
     fields = sorted(t.fields or [], key=lambda f: (f.order or 0, f.id or 0))
 
     if name == "create_record":
-        clean, errors, warnings = _validate_payload(
-            fields, args.get("data") or {}, partial=False, model_key=t.key)
+        clean, errors, warnings = await _checked_payload(db, fields, args.get("data") or {}, model_key=t.key)
         if errors:
             return {"error": "；".join(errors)}
         rows = [
@@ -579,8 +591,7 @@ async def prepare_write(db: AsyncSession, principal, name: str, args: dict) -> d
     label = _record_label(old_data)
 
     if name == "update_record":
-        clean, errors, warnings = _validate_payload(
-            fields, args.get("data") or {}, partial=True, model_key=t.key)
+        clean, errors, warnings = await _checked_payload(db, fields, args.get("data") or {}, previous=old_data, model_key=t.key)
         if errors:
             return {"error": "；".join(errors)}
         if not clean:

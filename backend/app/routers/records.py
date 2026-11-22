@@ -127,7 +127,7 @@ async def update_record(
             data["content"] = touched
 
     try:
-        rec = await svc.update_record(db, record_id, data)
+        rec = await svc.update_record(db, record_id, data, expected_version=payload.expected_version)
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
     if not rec:
@@ -136,10 +136,10 @@ async def update_record(
 
 
 @router.delete("/{record_id}")
-async def delete_record(record_id: int, db: AsyncSession = Depends(get_db),
+async def delete_record(record_id: int, expected_version: int | None = None, db: AsyncSession = Depends(get_db),
                         principal: Principal = Depends(current_principal)):
     ensure_model(principal, await _record_type_key(db, record_id), "write")
-    if not await svc.delete_record(db, record_id):
+    if not await svc.delete_record(db, record_id, expected_version=expected_version):
         raise HTTPException(404, "记录不存在")
     return {"ok": True}
 

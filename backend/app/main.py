@@ -15,6 +15,8 @@ from .routers import (    entity_types, records, relations, attachments, apps, s
     knowledge, documents, note_groups, nav_items, auth, system, dashboards, recycle, dna,
     dna_library, dev,
 )
+from .ontology.router import router as ontology_router
+from .ontology.migrations import install as install_ontology
 from .services.audit import AuditMiddleware
 from .services.auth import current_principal
 
@@ -32,6 +34,8 @@ log = logging.getLogger("kb-workbench")
 async def lifespan(app: FastAPI):
     log.info("Initializing database...")
     await init_db()
+    async with SessionLocal() as db:
+        await install_ontology(db)
 
     # 启动自检：库结构有问题要在启动时就喊出来，而不是等某个查询报错才发现
     from .services.scheduler import scheduler
@@ -302,6 +306,7 @@ async def health_deep(response: Response):
 
 
 # ---- 公开路由（无需登录）----
+app.include_router(ontology_router)
 app.include_router(auth.router)
 
 # ---- 需登录的路由 ----

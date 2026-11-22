@@ -22,6 +22,9 @@ from ..models import (
     Document, DocumentLink, EntityRecord, EntityType,
     FieldDefinition, RelationDef, RelationRecord,
 )
+from ..ontology.migrations import lock_writer
+from ..ontology.policy import protect_projection
+from ..ontology.schemas import CARDINALITIES
 from . import access
 
 KINDS = ("record", "document")
@@ -94,6 +97,9 @@ async def list_relation_defs(db: AsyncSession) -> list[dict]:
 
 
 async def create_relation_def(db: AsyncSession, payload: dict) -> RelationDef:
+    await lock_writer(db)
+    if payload.get("cardinality", "many-to-many") not in CARDINALITIES:
+        raise HTTPException(422, "关系基数无效")
     key = (payload.get("key") or "").strip()
     if not key:
         raise HTTPException(400, "请填写关联标识")
@@ -109,6 +115,7 @@ async def create_relation_def(db: AsyncSession, payload: dict) -> RelationDef:
         if kind == "record":
             if not type_id:
                 raise HTTPException(400, "记录端必须指定业务模型")
+            await protect_projection(db, "type", type_id)
             if not await db.get(EntityType, type_id):
                 raise HTTPException(400, f"模型 #{type_id} 不存在")
         else:
@@ -132,24 +139,40 @@ async def create_relation_def(db: AsyncSession, payload: dict) -> RelationDef:
 
 
 async def update_relation_def(db: AsyncSession, def_id: int, payload: dict) -> RelationDef:
+    await lock_writer(db)
+    await protect_projection(db,"relation",def_id)
     rd = await db.get(RelationDef, def_id)
     if not rd:
         raise HTTPException(404, "关联定义不存在")
+    for type_id in (rd.source_type_id,rd.target_type_id):
+        await protect_projection(db,"type",type_id)
     if payload.get("name"):
         rd.name = payload["name"]
     if payload.get("description") is not None:
         rd.description = payload["description"]
     if payload.get("cardinality"):
-        rd.cardinality = payload["cardinality"]
+        cardinality = payload["cardinality"]
+        if cardinality not in CARDINALITIES:
+            raise HTTPException(422,"关联基数无效")
+        for side, unique in (("source",cardinality.endswith("-one")),("target",cardinality.startswith("one-"))):
+            column = getattr(RelationRecord,f"{side}_{getattr(rd,side+'_kind') or 'record'}_id")
+            if unique and await db.scalar(select(func.count()).where(RelationRecord.relation_def_id==rd.id)
+                    .group_by(column).having(func.count()>1).limit(1)):
+                raise HTTPException(409,"现有关系不符合指定基数")
+        rd.cardinality = cardinality
     await db.commit()
     await db.refresh(rd)
     return rd
 
 
 async def delete_relation_def(db: AsyncSession, def_id: int) -> bool:
+    await lock_writer(db)
+    await protect_projection(db,"relation",def_id)
     rd = await db.get(RelationDef, def_id)
     if not rd:
         return False
+    for type_id in (rd.source_type_id,rd.target_type_id):
+        await protect_projection(db,"type",type_id)
     # 先清关系实例：SQLite 的外键级联只在连接开启 foreign_keys 时生效，
     # 显式删一遍更稳（也让 delete 的语义在两种配置下一致）
     for rr in (await db.execute(
@@ -181,6 +204,7 @@ def _side_ids(payload: dict, side: str, kind: str) -> int:
 
 
 async def create_relation_record(db: AsyncSession, payload: dict) -> RelationRecord:
+    await lock_writer(db)
     rd = await db.get(RelationDef, payload.get("relation_def_id") or 0)
     if not rd:
         raise HTTPException(400, "关联定义不存在")
@@ -194,7 +218,7 @@ async def create_relation_record(db: AsyncSession, payload: dict) -> RelationRec
     # 能把任意记录挂到任意定义上，库里就会出现与定义自相矛盾的关联。
     async def check_record(rid: int, expected_type_id: int | None) -> None:
         rec = await db.get(EntityRecord, rid)
-        if not rec:
+        if not rec or rec.deleted_at:
             raise HTTPException(400, f"记录 #{rid} 不存在")
         if expected_type_id and rec.entity_type_id != expected_type_id:
             et = await db.get(EntityType, expected_type_id)
@@ -226,6 +250,15 @@ async def create_relation_record(db: AsyncSession, payload: dict) -> RelationRec
     if existing:
         return existing
 
+    cardinality = rd.cardinality or "many-to-many"
+    for constrained, side, kind, endpoint in [
+        (cardinality.endswith("-one"), "source", src_kind, src_id),
+        (cardinality.startswith("one-"), "target", tgt_kind, tgt_id),
+    ]:
+        column = getattr(RelationRecord, f"{side}_{kind}_id")
+        if constrained and await db.scalar(select(RelationRecord.id).where(
+                RelationRecord.relation_def_id == rd.id, column == endpoint).limit(1)):
+            raise HTTPException(409, f"关联不符合 {cardinality} 基数")
     rr = RelationRecord(
         relation_def_id=rd.id,
         source_record_id=src_id if src_kind == "record" else None,

@@ -204,3 +204,11 @@ class CapabilityDefinition(Base):
     __tablename__ = "ontology_capability_definition"
     name = Column(String, primary_key=True)
     definition = Column(JSON, nullable=False)
+
+
+class RecordSource(Base):
+    """Every projected record retains its source independently of external identity."""
+
+    __tablename__ = "ontology_record_source"
+    record_id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, primary_key=True)

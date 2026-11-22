@@ -1,5 +1,4 @@
 import json
-from collections import defaultdict
 from fastapi import HTTPException
 from sqlalchemy import or_, select
 
@@ -161,7 +160,11 @@ async def search(db, principal, space, request, *, listing=False):
                 for citation in fact["evidence"]:
                     citations[citation["id"]] = citation
                 records[claim.object_id] = subject
-                if level < depth and claim.target_id is not None:
+                if (
+                    level < depth
+                    and claim.status == "accepted"
+                    and claim.target_id is not None
+                ):
                     following.add(claim.target_id)
                     records[claim.target_id] = await objects.detail(
                         db, principal, claim.target_id
@@ -180,29 +183,66 @@ async def search(db, principal, space, request, *, listing=False):
         if budget_exhausted or not following or len(facts) >= limit or frontier is None:
             break
         frontier = following
-    groups = defaultdict(list)
+    conflicts = set()
     for fact in facts.values():
-        if fact["status"] == "accepted":
-            groups[fact["object_id"], fact["predicate_id"]].append(fact)
-    conflicts = []
-    for group in groups.values():
-        for i, a in enumerate(group):
-            for b in group[i + 1 :]:
-                if a["target_id"] or b["target_id"]:
+        if fact["status"] != "accepted" or fact["target_id"] is not None:
+            continue
+        competitors = select(Claim).where(
+            Claim.ontology_id == space.id,
+            Claim.status == "accepted",
+            Claim.object_id == fact["object_id"],
+            Claim.predicate_id == fact["predicate_id"],
+            Claim.id != fact["id"],
+            Claim.target_id.is_(None),
+        )
+        start, end = (at, at) if at else (fact["effective_from"], fact["effective_to"])
+        if start:
+            competitors = competitors.where(
+                or_(Claim.effective_to.is_(None), Claim.effective_to >= start)
+            )
+        if end:
+            competitors = competitors.where(
+                or_(Claim.effective_from.is_(None), Claim.effective_from <= end)
+            )
+        for other in await db.scalars(
+            competitors.order_by(Claim.id).limit(max(1, 2001 - visited))
+        ):
+            visited += 1
+            if visited > 2000:
+                budget_exhausted = True
+                break
+            if json.dumps(other.value, sort_keys=True) == json.dumps(
+                fact["value"], sort_keys=True
+            ):
+                continue
+            try:
+                await knowledge.render(db, principal, other)
+            except HTTPException as error:
+                if error.status_code in (403, 404):
                     continue
-                overlaps = (a["effective_from"] or "") <= (
-                    b["effective_to"] or "9999"
-                ) and (b["effective_from"] or "") <= (a["effective_to"] or "9999")
-                if overlaps and json.dumps(a["value"], sort_keys=True) != json.dumps(
-                    b["value"], sort_keys=True
-                ):
-                    conflicts.append([a["id"], b["id"]])
+                raise
+            conflicts.add(tuple(sorted((fact["id"], other.id))))
+            if len(conflicts) >= limit:
+                break
+        if budget_exhausted or len(conflicts) >= limit:
+            break
+    status_result = "unknown"
+    if conflicts:
+        status_result = "conflict"
+    elif budget_exhausted:
+        status_result = "incomplete"
+    elif facts:
+        status_result = (
+            "supported"
+            if all(f["status"] == "accepted" for f in facts.values())
+            else status or "unreviewed"
+        )
     return dict(
-        status="conflict" if conflicts else "supported" if facts else "unknown",
+        status=status_result,
         facts=list(facts.values()),
         objects=list(records.values())[:limit],
         evidence=list(citations.values())[:limit],
         paths=paths[:limit],
-        conflicts=conflicts[:limit],
+        conflicts=sorted(conflicts)[:limit],
         budget_exhausted=budget_exhausted,
     )

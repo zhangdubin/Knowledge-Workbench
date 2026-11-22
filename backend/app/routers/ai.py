@@ -141,12 +141,22 @@ async def agent_confirm(
 ) -> dict:
     """执行用户已确认的 AI 写操作，并把结果交给模型收尾"""
     from ..ontology.capabilities import register_run
-    result = await agent_svc.run_agent(
-        db, payload.question, principal, payload.history,
-        continuation=payload.continuation or "",
-        confirmed={"change_id": payload.change_id},
-    )
-    return await register_run(db, principal, result)
+    try:
+        result = await agent_svc.run_agent(
+            db, payload.question or "确认执行", principal, payload.history,
+            continuation=payload.continuation or "",
+            confirmed={"change_id": payload.change_id},
+        )
+    except Exception as error:
+        await db.rollback()
+        if principal.user is not None:
+            from sqlalchemy import inspect
+            if inspect(principal.user, raiseerr=False) is not None:
+                await db.refresh(principal.user)
+        await register_run(db,principal,{"status":"failed","error":str(getattr(error,"status_code",500))},
+                           change_id=payload.change_id)
+        raise
+    return await register_run(db, principal, result, change_id=payload.change_id)
 
 
 

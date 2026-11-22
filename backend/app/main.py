@@ -306,7 +306,8 @@ async def health_deep(response: Response):
 
 
 # ---- 公开路由（无需登录）----
-app.include_router(ontology_router)
+from .ontology.provenance import scope_record_reads
+app.include_router(ontology_router, dependencies=[Depends(scope_record_reads)])
 app.include_router(auth.router)
 
 # ---- 需登录的路由 ----
@@ -316,9 +317,9 @@ PROTECTED = [
     note_groups, nav_items, dna, dna_library, dev,
 ]
 for mod in PROTECTED:
-    app.include_router(mod.router, dependencies=[Depends(current_principal)])
+    app.include_router(mod.router, dependencies=[Depends(scope_record_reads)])
 
-app.include_router(apps.stats_router, dependencies=[Depends(current_principal)])
+app.include_router(apps.stats_router, dependencies=[Depends(scope_record_reads)])
 app.include_router(system.router)   # 内部自带 require_feature 依赖
 
 

@@ -198,6 +198,23 @@ class AssistantTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(response.status_code, 200, response.text)
             self.assertNotIn("forged-instruction", str(model.call_args))
+            from app.ontology.models import AssistantRun
+
+            async with SessionLocal() as db:
+                completed = await db.get(AssistantRun, response.json()["run_id"])
+                self.assertEqual(completed.change_id, pending["change_id"])
+            bad_id = uuid4().hex
+            self.assertEqual(
+                c.post("/api/ai/agent/confirm", json={"change_id": bad_id}).status_code,
+                404,
+            )
+            from sqlalchemy import select
+
+            async with SessionLocal() as db:
+                failed = await db.scalar(
+                    select(AssistantRun).where(AssistantRun.change_id == bad_id)
+                )
+                self.assertEqual(failed.status, "failed")
             trace = response.json()["tool_calls"]
             self.assertEqual(trace[0]["name"], "create_record")
             rid = trace[0]["result"]["record_id"]

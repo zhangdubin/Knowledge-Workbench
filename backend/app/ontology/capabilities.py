@@ -34,6 +34,15 @@ async def readable_gene(db, principal, gene):
         row = await db.get(EntityRecord, int(ref[len(prefix) :]))
         if not row or row.deleted_at:
             return False
+        from .provenance import readable
+        from sqlalchemy import select
+
+        if not await db.scalar(
+            select(EntityRecord.id).where(
+                EntityRecord.id == row.id, readable(principal)
+            )
+        ):
+            return False
         model = await db.get(EntityType, row.entity_type_id)
         return bool(
             model
@@ -257,16 +266,28 @@ async def sync_definitions(db):
         )
 
 
-async def register_run(db, principal, result):
+async def register_run(db, principal, result, change_id=None):
     from .models import AssistantRun
 
+    if not change_id:
+        change_id = (result.get("pending") or {}).get("change_id")
+    if not change_id:
+        change_id = next(
+            (
+                step["result"]["change_id"]
+                for step in result.get("tool_calls", [])
+                if isinstance(step.get("result"), dict)
+                and step["result"].get("change_id")
+            ),
+            None,
+        )
     row = AssistantRun(
         actor=actor(principal),
         status=result["status"],
         error=result.get("error"),
         tools=[step.get("name") for step in result.get("tool_calls", [])],
         rounds=result.get("rounds", 0),
-        change_id=(result.get("pending") or {}).get("change_id"),
+        change_id=change_id,
     )
     db.add(row)
     await db.commit()

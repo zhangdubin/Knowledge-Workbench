@@ -33,6 +33,7 @@ from .ai import (
     MAX_LENGTH_RETRIES,
 )
 from ..models import EntityType, FieldDefinition, EntityRecord
+from ..ontology.provenance import readable, ensure_record_source
 
 log = logging.getLogger("kb.agent")
 
@@ -273,7 +274,7 @@ async def tool_list_models(db: AsyncSession, principal) -> dict:
         (
             await db.execute(
                 select(EntityRecord.entity_type_id, func.count(EntityRecord.id))
-                .where(EntityRecord.deleted_at.is_(None))
+                .where(EntityRecord.deleted_at.is_(None), readable(principal))
                 .group_by(EntityRecord.entity_type_id)
             )
         ).all()
@@ -318,6 +319,7 @@ async def tool_search_records(
     limit = max(1, min(int(limit or 10), MAX_TOOL_ITEMS))
     like = f"%{keyword}%"
     q = select(EntityRecord).where(
+        readable(principal),
         EntityRecord.search_text.like(like),
         EntityRecord.deleted_at.is_(None),
     )
@@ -356,6 +358,7 @@ async def tool_stats_records(
     fields = {f.key: f for f in (t.fields or [])}
 
     base = select(EntityRecord).where(
+        readable(principal),
         EntityRecord.entity_type_id == t.id,
         EntityRecord.deleted_at.is_(None),
     ).subquery()
@@ -589,6 +592,7 @@ async def prepare_write(db: AsyncSession, principal, name: str, args: dict) -> d
     rec = await db.get(EntityRecord, rid)
     if not rec or rec.deleted_at:
         return {"error": f"记录 #{rid} 不存在或已在回收站"}
+    await ensure_record_source(db,principal,rid)
     if rec.entity_type_id != t.id:
         return {"error": f"记录 #{rid} 不属于模型「{t.name}」"}
 

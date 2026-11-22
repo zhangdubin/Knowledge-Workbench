@@ -57,6 +57,9 @@ async def detail(db, principal, record_id, *, write=False):
     rec = await db.get(EntityRecord, record_id)
     if not binding or not rec or rec.deleted_at:
         raise HTTPException(404, "对象不存在")
+    from .provenance import ensure_record_source
+
+    await ensure_record_source(db, principal, record_id)
     et = await db.get(EntityType, rec.entity_type_id)
     if not et or et.deleted_at:
         raise HTTPException(404, "模型不存在")

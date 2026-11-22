@@ -431,6 +431,7 @@ async def list_ingestions(
         select(IngestionJob)
         .where(IngestionJob.ontology_id == space_id)
         .order_by(IngestionJob.created_at.desc(), IngestionJob.id)
+        .limit(1000)
     ):
         try:
             await ingestion.authorized(db, p, job)

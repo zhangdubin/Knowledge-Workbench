@@ -63,7 +63,7 @@ def source_hash(doc):
 async def authorized(db, principal, job):
     if not job:
         raise HTTPException(404, "加工任务不存在")
-    space = await db.get(Ontology, job.ontology_id)
+    space = await db.get(Ontology, job.ontology_id, populate_existing=True)
     current = await registry.current(db, space)
     require_schema(principal, current)
     historical = await registry.revision(db, space, job.revision_id)
@@ -80,6 +80,8 @@ async def run(db, principal, space, request):
     mode = request.get("mode")
     if mode not in ("manual", "ai") or type(request.get("document_id")) is not int:
         raise HTTPException(422, "需要文件和明确的 manual 或 ai 模式")
+    if mode == "ai" and not principal.has_feature("ai"):
+        raise HTTPException(403, "缺少 AI 权限")
     doc = await evidence.source(db, principal, request["document_id"])
     schema = await registry.current(db, space)
     require_schema(principal, schema)
@@ -108,6 +110,11 @@ async def run(db, principal, space, request):
 
     previous = await existing()
     if previous:
+        await lock_writer(db)
+        await db.refresh(doc)
+        await db.refresh(space)
+        if source_hash(doc) != identity or space.current_revision_id != previous.revision_id:
+            raise HTTPException(409, "来源或本体修订已变化")
         await authorized(db, principal, previous)
         return previous
     job = IngestionJob(
@@ -130,8 +137,6 @@ async def run(db, principal, space, request):
     )
     if not text or len(text) > 2000000:
         job.status, job.error = "unsupported", "来源为空或超过支持的大小"
-    elif mode == "ai" and not principal.has_feature("ai"):
-        raise HTTPException(403, "缺少 AI 权限")
     elif mode == "ai" and not all(
         cfg.get(k) for k in ("enabled", "base_url", "api_key", "model")
     ):
@@ -163,15 +168,16 @@ async def run(db, principal, space, request):
         except (ValueError, KeyError, IndexError, TypeError, httpx.HTTPError):
             job.status, job.error = "failed", "抽取结果无效或模型请求失败"
     await lock_writer(db)
-    previous = await existing()
-    if previous:
-        return previous
     await db.refresh(space)
     await db.refresh(doc)
     require_schema(principal, await registry.current(db, space))
     await evidence.source(db, principal, doc.id)
     if source_hash(doc) != identity or space.current_revision_id != job.revision_id:
         raise HTTPException(409, "抽取期间来源或本体已变化")
+    previous = await existing()
+    if previous:
+        await authorized(db, principal, previous)
+        return previous
     if job.status == "ready":
         try:
             _, issues = await simulate(db, principal, space, job)
@@ -224,9 +230,12 @@ async def project(db, principal, space, job):
             continue
         name = data.get("name") or data.get("title")
         if name:
+            from .provenance import readable
+
             rows = await db.scalars(
                 select(EntityRecord.id)
                 .where(
+                    readable(principal),
                     EntityRecord.entity_type_id == projection.legacy_id,
                     EntityRecord.deleted_at.is_(None),
                     (
@@ -245,6 +254,10 @@ async def project(db, principal, space, job):
         record = await create_record(db, projection.legacy_id, data, commit=False)
         refs[ref] = record.id
         new_ids.add(record.id)
+        from .models import RecordSource
+
+        db.add(RecordSource(record_id=record.id, document_id=job.document_id))
+        await db.flush()
         if source_id:
             db.add(
                 SourceObject(
@@ -368,7 +381,9 @@ async def authorize_change(db, principal, change):
 async def confirm(db, principal, change):
     job, space = await authorize_change(db, principal, change)
     if job.status == "published":
-        return job.result
+        change.status, change.error = "conflicted", "任务已由另一计划发布"
+        await db.commit()
+        raise HTTPException(409, change.error)
     doc = await evidence.source(db, principal, job.document_id)
     if (
         space.current_revision_id != change.base_revision_id

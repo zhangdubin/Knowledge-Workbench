@@ -61,15 +61,25 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
         client = TestClient(app)
         root = "/api/ontologies"
         key = "q" + uuid4().hex
+        sem = uuid4().hex
         spec = {
             "types": [
                 {
+                    "id": sem,
                     "key": key,
                     "name": "物品",
                     "fields": [{"key": "count", "name": "数量", "type": "number"}],
                 }
             ],
-            "relations": [],
+            "relations": [
+                dict(
+                    key="related",
+                    name="Related",
+                    source=sem,
+                    target=sem,
+                    cardinality="many-to-many",
+                )
+            ],
         }
         space = client.post(
             root + "/", json=dict(key=key, name=key, schema=spec)
@@ -118,6 +128,36 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["status"], "conflict")
         self.assertEqual(len(response.json()["facts"]), 2)
+        for filters in ({"limit": 1}, {"value": 3}):
+            scoped = client.post(url + "/query", json=filters).json()
+            self.assertEqual(scoped["status"], "conflict")
+            self.assertEqual(len(scoped["facts"]), 1)
+        relation = rev["schema"]["relations"][0]
+        related = client.post(url + "/objects", json=dict(type_id=sem, data={})).json()[
+            "id"
+        ]
+        edge = {k: v for k, v in payload.items() if k != "value"}
+        edge.update(predicate_id=relation["id"], target_id=related)
+        new_candidate = client.post(url + "/claims", json=edge)
+        self.assertEqual(new_candidate.status_code, 200, new_candidate.text)
+        for status in ("candidate", "rejected"):
+            if status == "rejected":
+                client.post(
+                    f"{root}/claims/{new_candidate.json()['id']}/review",
+                    json={"action": "reject", "expected_version": 1},
+                ).raise_for_status()
+            graph = client.post(
+                url + "/query",
+                json={"status": status, "object_id": record["id"], "depth": 2},
+            ).json()
+            self.assertEqual(graph["status"], status)
+            self.assertEqual(graph["paths"], [])
+        client.post(url + "/claims", json=payload).raise_for_status()
+        candidate_query = client.post(
+            url + "/query", json={"status": "candidate", "depth": 2}
+        ).json()
+        self.assertEqual(candidate_query["status"], "candidate")
+        self.assertEqual(candidate_query["paths"], [])
         self.assertEqual(
             client.post(url + "/query", json=dict(as_of="2019-01-01")).json()["status"],
             "unknown",
@@ -190,6 +230,15 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
             c.post(url + "/ingestions", json=payload).json()["id"], job["id"]
         )
         plan = c.post(f"{root}/ingestions/{job['id']}/plan", json={}).json()
+        from app.services.auth import current_principal
+        from types import SimpleNamespace
+
+        peer = Principal(SimpleNamespace(id=742, username="peer"), {"all": True})
+        app.dependency_overrides[current_principal] = lambda: peer
+        try:
+            peer_plan = c.post(f"{root}/ingestions/{job['id']}/plan").json()
+        finally:
+            del app.dependency_overrides[current_principal]
         confirm = f"{root}/changes/{plan['id']}/confirm"
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier
@@ -206,6 +255,13 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
         applied = responses[0]
         self.assertEqual(applied.status_code, 200, applied.text)
         self.assertEqual(c.post(confirm).json(), applied.json())
+        app.dependency_overrides[current_principal] = lambda: peer
+        try:
+            peer_url = f"{root}/changes/{peer_plan['id']}"
+            self.assertEqual(c.post(peer_url + "/confirm").status_code, 409)
+            self.assertEqual(c.get(peer_url).json()["status"], "conflicted")
+        finally:
+            del app.dependency_overrides[current_principal]
         self.assertEqual(len(c.get(url + "/objects").json()), 1)
         self.assertEqual(c.get(url + "/claims").json()[0]["status"], "candidate")
         ai_payload = dict(document_id=did, mode="ai")
@@ -239,6 +295,17 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
         from sqlalchemy import select
         from copy import deepcopy
 
+        no_ai = Principal(
+            None, {"pages": ["types", "library"], "models": {key: "write"}}
+        )
+        app.dependency_overrides[current_principal] = lambda: no_ai
+        try:
+            with patch("app.ontology.ingestion.get_full_config", return_value=cfg):
+                self.assertEqual(
+                    c.post(url + "/ingestions", json=ai_payload).status_code, 403
+                )
+        finally:
+            del app.dependency_overrides[current_principal]
         ambiguity = deepcopy(payload)
         ambiguity["candidates"]["objects"][0]["source_id"] = "different"
         ambiguous = c.post(url + "/ingestions", json=ambiguity).json()
@@ -261,9 +328,55 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(c.get(url + "/claims").json()), 1)
         source_denied = Principal(None, {"pages": ["types"], "models": {key: "write"}})
+        anon_input = {
+            "mode": "manual",
+            "document_id": did,
+            "candidates": {
+                "objects": [
+                    {
+                        "ref": "x",
+                        "type_id": typ["id"],
+                        "data": {"name": "From anonymous-source projection"},
+                    }
+                ]
+            },
+        }
+        anon_job = c.post(url + "/ingestions", json=anon_input).json()
+        anon_plan = c.post(f"{root}/ingestions/{anon_job['id']}/plan").json()
+        other = c.post(f"{root}/changes/{anon_plan['id']}/confirm").json()["objects"][
+            "x"
+        ]
+        from app.ontology.models import Projection
+
+        async with SessionLocal() as db:
+            legacy = (await db.get(Projection, typ["id"])).legacy_id
         app.dependency_overrides[current_principal] = lambda: source_denied
         try:
             self.assertEqual(c.get(url + "/claims").json(), [])
+            for rid in (other, existing_obj["id"]):
+                for path in (
+                    f"/api/records/{rid}",
+                    f"{root}/objects/{rid}",
+                    f"{root}/objects/{rid}/history",
+                ):
+                    self.assertIn(c.get(path).status_code, (403, 404))
+            self.assertEqual(c.get(url + "/objects").json(), [])
+            from app.services import agent
+
+            async with SessionLocal() as db:
+                self.assertEqual(
+                    (
+                        await agent.tool_search_records(
+                            db, source_denied, "anonymous-source"
+                        )
+                    )["count"],
+                    0,
+                )
+            self.assertEqual(c.post(url + "/query", json={}).json()["objects"], [])
+            self.assertEqual(c.get(f"/api/records/type/{legacy}").json()["total"], 0)
+            self.assertNotIn(
+                "anonymous-source", c.get(f"/api/records/type/{legacy}/export").text
+            )
             self.assertEqual(c.get(f"{root}/ingestions/{job['id']}").status_code, 403)
             self.assertNotIn("Alpha", c.get(f"{root}/changes/{replay_plan['id']}").text)
         finally:

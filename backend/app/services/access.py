@@ -78,6 +78,7 @@ async def linked_type_keys(db: AsyncSession, doc_id: int) -> list[str]:
         .join(EntityRecord, EntityRecord.entity_type_id == EntityType.id)
         .join(DocumentLink, DocumentLink.record_id == EntityRecord.id)
         .where(DocumentLink.document_id == doc_id)
+        .execution_options(source_policy_lookup=True)
     )).scalars().all()
     return list(dict.fromkeys(rows))
 
@@ -126,6 +127,7 @@ async def filter_readable_documents(
         .join(EntityRecord, EntityRecord.id == DocumentLink.record_id)
         .join(EntityType, EntityType.id == EntityRecord.entity_type_id)
         .where(DocumentLink.document_id.in_(doc_ids))
+        .execution_options(source_policy_lookup=True)
     )).all()
     by_doc: dict[int, list[str]] = {}
     for did, key in rows:

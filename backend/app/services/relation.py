@@ -203,7 +203,7 @@ def _side_ids(payload: dict, side: str, kind: str) -> int:
     return int(did)
 
 
-async def create_relation_record(db: AsyncSession, payload: dict, *, commit: bool = True) -> RelationRecord:
+async def create_relation_record(db: AsyncSession, payload: dict, *, commit: bool = True, support=None) -> RelationRecord:
     await lock_writer(db)
     rd = await db.get(RelationDef, payload.get("relation_def_id") or 0)
     if not rd:
@@ -247,7 +247,22 @@ async def create_relation_record(db: AsyncSession, payload: dict, *, commit: boo
         RelationRecord.target_document_id == (tgt_id if tgt_kind == "document" else None),
     )
     existing = (await db.execute(dup_q)).scalars().first()
+    from ..ontology.models import RelationSupport
     if existing:
+        if support:
+            # No prior support means this edge was authored independently.
+            origin = await db.scalar(select(RelationSupport.manual_origin).where(
+                RelationSupport.relation_id == existing.id).limit(1))
+            support.manual_origin = 1 if origin is None else origin
+            support.relation_id = existing.id
+            db.add(support)
+            await db.flush()
+        else:
+            from sqlalchemy import update
+            await db.execute(update(RelationSupport).where(
+                RelationSupport.relation_id == existing.id).values(manual_origin=1))
+            if commit:
+                await db.commit()
         return existing
 
     cardinality = rd.cardinality or "many-to-many"
@@ -268,6 +283,11 @@ async def create_relation_record(db: AsyncSession, payload: dict, *, commit: boo
         data=payload.get("data") or {},
     )
     db.add(rr)
+    if support:
+        await db.flush()
+        support.relation_id = rr.id
+        support.manual_origin = 0
+        db.add(support)
     if commit:
         await db.commit()
     else:

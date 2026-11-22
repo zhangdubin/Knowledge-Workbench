@@ -18,17 +18,31 @@ def day(value):
         raise HTTPException(422, "有效日期格式错误")
 
 
-async def render(db, principal, claim, *, write=False):
+async def visible_evidence(db, principal, claim, *, write=False):
     require_workspace(principal)
     await objects.detail(db, principal, claim.object_id, write=write)
     if claim.target_id is not None:
         await objects.detail(db, principal, claim.target_id)
-    citations = [
+    return [
         await evidence.read_evidence(db, principal, eid) for eid in claim.evidence_ids
     ]
+
+async def render(db, principal, claim, *, write=False):
+    citations = await visible_evidence(db, principal, claim, write=write)
     result = {
         column.name: getattr(claim, column.name) for column in Claim.__table__.columns
     }
+    if claim.superseded_by:
+        replacement = await db.get(Claim, claim.superseded_by)
+        try:
+            if replacement:
+                await visible_evidence(db, principal, replacement)
+            else:
+                result["superseded_by"] = None
+        except HTTPException as error:
+            if error.status_code not in (403, 404):
+                raise
+            result["superseded_by"] = None
     result["evidence"] = citations
     return result
 
@@ -121,6 +135,8 @@ async def review(db, principal, claim_id, decision):
     status = statuses.get(decision.get("action"))
     if not status:
         raise HTTPException(422, "无效的审核决定")
+    if claim.status == "superseded":
+        raise HTTPException(409, "已替代的声明不可再次审核")
     if status == "superseded":
         replacement = await db.get(Claim, decision.get("superseded_by"))
         if not replacement or replacement.id == claim.id:
@@ -132,8 +148,6 @@ async def review(db, principal, claim_id, decision):
         ) or replacement.status != "accepted":
             raise HTTPException(422, "替代声明须为同一对象和谓词的已接受声明")
         claim.superseded_by = replacement.id
-    elif claim.superseded_by is not None:
-        raise HTTPException(409, "已替代的声明不可再次审核")
     claim.version += 1
     claim.status = status
     claim.reviewed_by = principal.username
@@ -146,7 +160,7 @@ async def review(db, principal, claim_id, decision):
             resource="claim",
             resource_id=claim.id,
             status=200,
-            detail=dict(version=claim.version, status=status),
+            detail=dict(version=claim.version, status=status, superseded_by=claim.superseded_by),
         )
     )
     return await render(db, principal, claim)

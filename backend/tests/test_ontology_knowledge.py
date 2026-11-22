@@ -105,10 +105,12 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
             client.post(url + "/claims", json={**payload, "value": "bad"}).status_code,
             422,
         )
+        accepted = []
         for value in [3, 4]:
             response = client.post(url + "/claims", json={**payload, "value": value})
             self.assertEqual(response.status_code, 200, response.text)
             claim = response.json()
+            accepted.append(claim["id"])
             self.assertEqual(claim["status"], "candidate")
             review = f"{root}/claims/{claim['id']}/review"
             decision = dict(action="accept", expected_version=1)
@@ -122,11 +124,21 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(history.json()[0]["status"], "accepted")
         from app.services.auth import current_principal
 
-        denied = Principal(None, {"models": {key: "read"}, "pages": ["library"]})
+        denied = Principal(None, {"models": {key: "write"}, "pages": ["library"]})
         app.dependency_overrides[current_principal] = lambda: denied
         try:
             self.assertEqual(client.get(history_url).status_code, 403)
             self.assertEqual(client.get(claim_url).status_code, 403)
+            self.assertEqual(client.get(f"/api/records/{record['id']}").status_code, 200)
+            obj_url = root + "/objects/" + str(record["id"])
+            for method, path, body in [
+                ("GET", url + "/objects", None), ("GET", obj_url, None),
+                ("GET", obj_url + "/history", None),
+                ("PUT", obj_url, {"data": {}, "expected_version": 1}),
+                ("POST", url + "/objects", {"type_id": sem, "data": {}}),
+            ]:
+                with self.subTest(method=method, path=path):
+                    self.assertEqual(client.request(method, path, json=body).status_code, 403)
             blocked = client.post(url + "/query", json={})
             self.assertEqual(blocked.status_code, 403)
             self.assertNotIn("预算", blocked.text)
@@ -160,6 +172,92 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
             ).json()
             self.assertEqual(graph["status"], status)
             self.assertEqual(graph["paths"], [])
+        async with SessionLocal() as db:
+            original_doc = Document(filename="original.txt", extracted_text="数量", extract_status="ok")
+            db.add(original_doc)
+            await db.commit()
+            original_id = original_doc.id
+        original = {**payload, "evidence": [{**payload["evidence"][0], "document_id": original_id}]}
+        superseded = client.post(url + "/claims", json=original).json()["id"]
+        review_url = f"{root}/claims/{superseded}/review"
+        first = {"action": "supersede", "expected_version": 1, "superseded_by": accepted[0]}
+        client.post(review_url, json=first).raise_for_status()
+        repeat = client.post(review_url, json={**first, "expected_version": 2, "superseded_by": accepted[1]})
+        with self.subTest("terminal supersession"):
+            self.assertEqual(repeat.status_code, 409)
+            events = client.get(f"{root}/claims/{superseded}/history").json()
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["superseded_by"], accepted[0])
+        def ingest_edge(proposal):
+            job = client.post(url + "/ingestions", json=dict(document_id=did, mode="manual",
+                candidates=dict(objects=[], claims=[], relationships=[proposal]))).json()
+            link_plan = client.post(f"{root}/ingestions/{job['id']}/plan").json()
+            response = client.post(f"{root}/changes/{link_plan['id']}/confirm")
+            response.raise_for_status()
+            return response.json()
+
+        def relation_def():
+            return next(d for d in client.get("/api/relations/defs").json() if d["key"] == relation["key"])
+
+        links_url = "/api/relations/for-record/" + str(record["id"])
+        def visible_count(expected):
+            self.assertEqual(len(client.get(links_url).json()), expected)
+            graph = client.get(f"/api/graph/record/{record['id']}").json()
+            self.assertEqual(len(graph["edges"]), expected)
+            self.assertEqual(relation_def()["link_count"], expected)
+
+        imported = ingest_edge(edge)
+        review_link = f"{root}/claims/{imported['claims'][0]}/review"
+        visible_count(0)
+        client.post(review_link, json=dict(action="reject", expected_version=1)).raise_for_status()
+        visible_count(0)
+        client.post(review_link, json=dict(action="accept", expected_version=2)).raise_for_status()
+        visible_count(1)
+        def paths():
+            return client.post(url + "/query", json=dict(object_id=record["id"], depth=1)).json()["paths"]
+        self.assertTrue(paths())
+        app.dependency_overrides[current_principal] = lambda: Principal(None, {
+            "models": {key: "read"}, "pages": ["types"]})
+        try:
+            self.assertEqual(client.get(f"/api/records/{related}").status_code, 200)
+            visible_count(0)
+            self.assertFalse(paths())
+        finally:
+            del app.dependency_overrides[current_principal]
+
+        manual = client.post("/api/relations/records", json=dict(relation_def_id=relation_def()["id"],
+            source_record_id=related, target_record_id=record["id"])).json()["id"]
+        reused = ingest_edge({**edge, "object_id": related, "target_id": record["id"]})
+        self.assertEqual(reused["relationships"], [manual])
+        visible_count(2)
+
+        # Reconstruct a database from the previous metadata version, then repeat installation.
+        from sqlalchemy import delete
+        from app.ontology.models import RelationSupport, OntologyInstallation
+        from app.ontology.migrations import install
+        async with SessionLocal() as db:
+            await db.execute(delete(RelationSupport))
+            await db.execute(delete(OntologyInstallation).where(OntologyInstallation.version == 2))
+            await install(db)
+            await install(db)
+        visible_count(2)
+        async with SessionLocal() as db:
+            doc = await db.get(Document, did)
+            doc.deleted_at = datetime.now()
+            await db.commit()
+        visible_count(1)
+        original_url = f"{root}/claims/{superseded}"
+        old = client.get(original_url).json()
+        self.assertEqual(old["version"], 2)
+        self.assertIsNone(old["superseded_by"])
+        self.assertIsNone(client.get(original_url + "/history").json()[0]["superseded_by"])
+        self.assertEqual(client.get(f"{root}/claims/{accepted[0]}").status_code, 404)
+        self.assertEqual(client.get(links_url).json()[0]["link_id"], manual)
+        self.assertFalse(paths())
+        async with SessionLocal() as db:
+            doc = await db.get(Document, did)
+            doc.deleted_at = None
+            await db.commit()
         client.post(url + "/claims", json=payload).raise_for_status()
         candidate_query = client.post(
             url + "/query", json={"status": "candidate", "depth": 2}

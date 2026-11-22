@@ -212,3 +212,12 @@ class RecordSource(Base):
     __tablename__ = "ontology_record_source"
     record_id = Column(Integer, primary_key=True)
     document_id = Column(Integer, primary_key=True)
+
+
+class RelationSupport(Base):
+    """One documentary assertion for a projected edge, including deduplicated imports."""
+    __tablename__ = "ontology_relation_support"
+    claim_id = Column(ForeignKey("ontology_claim.id", ondelete="CASCADE"), primary_key=True)
+    relation_id = Column(ForeignKey("relation_record.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(Integer, nullable=False)
+    manual_origin = Column(Integer, nullable=False)

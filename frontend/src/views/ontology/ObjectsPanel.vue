@@ -48,7 +48,21 @@
         ><button v-if="object" @click="run(() => select(object.record_id))">重新加载对象</button>
       </div>
       <template v-if="object"
-        ><h3>版本历史</h3>
+        >
+        <h3>对象关系</h3>
+        <p v-if="!context.relations.length">暂无可见关系。</p>
+        <p v-for="link in context.relations" :key="link.link_id">
+          {{ link.direction === 'out' ? '指向' : '来自' }} · {{ link.relation }} · {{ link.other_label }}
+        </p>
+        <h3>事实与证据</h3>
+        <p v-if="!context.facts.length">暂无可见声明或证据。</p>
+        <article v-for="fact in context.facts" :key="fact.id">
+          <h4>{{ predicateName(fact.predicate_id) }} · {{ label(fact.status) }}</h4>
+          <p>{{ fact.target_id ? '目标对象 #' + fact.target_id : pretty(fact.value) }}</p>
+          <EvidenceCard v-for="citation in fact.evidence" :key="citation.id" :evidence="citation" />
+        </article>
+        <p v-if="context.facts.length === 50">显示最近 50 条可见声明。</p>
+        <h3>时间线 · 版本历史</h3>
         <details v-for="h in history" :key="h.version">
           <summary>v{{ h.version }} · {{ h.created_at }} · {{ h.revision_id }}</summary>
           <pre>{{ pretty(h.data) }}</pre>
@@ -61,10 +75,11 @@
 </template>
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import EvidenceCard from './EvidenceCard.vue'
 import RecordFieldInput from '../../components/record/RecordFieldInput.vue'
 import { Api } from '../../api'
 import { studio } from '../../api/ontology'
-import { clone, pretty, versionedData } from '../../utils/ontology'
+import { clone, pretty, versionedData, label, loadObjectContext } from '../../utils/ontology'
 import { coerceRecordData, validateRecordData } from '../../utils/recordFields'
 import { useStudioAction } from './useStudioAction'
 const props = defineProps({ space: Object })
@@ -79,6 +94,9 @@ const objects = ref([]),
   history = ref([]),
   more = ref(false),
   moreHistory = ref(false)
+const context = ref({ relations: [], facts: [] })
+const predicateName = (id) => [...(type.value?.fields || []), ...props.space.schema.relations]
+  .find(p => p.id === id)?.name || id
 const legacyId = computed(() => models.value.find((m) => m.key === type.value?.key)?.id)
 const { busy, error, run } = useStudioAction()
 async function load(append = false) {
@@ -98,11 +116,18 @@ async function loadHistory(append = false) {
   moreHistory.value = rows.length === 50
 }
 async function select(id) {
+  object.value = null
+  context.value = { relations: [], facts: [] }
+  history.value = []
+  moreHistory.value = false
   object.value = id ? await studio.list('objects/' + id) : null
   data.value = clone(object.value?.data || {})
   typeId.value = object.value?.type_id || types[0]?.id
-  history.value = []
-  if (id) await loadHistory()
+  if (id) {
+    await loadHistory()
+    context.value = await loadObjectContext(props.space.id, object.value.record_id,
+      Api.relationsForRecord, studio.list)
+  }
 }
 async function save() {
   const check = validateRecordData(type.value.fields, data.value)

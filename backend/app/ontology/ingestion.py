@@ -305,6 +305,7 @@ async def project(db, principal, space, job):
                 if not principal.has_feature("relation_manage"):
                     raise HTTPException(403, "缺少关联管理权限")
                 projection = await db.get(Projection, claim.predicate_id)
+                from .models import RelationSupport
                 rel = await create_relation_record(
                     db,
                     dict(
@@ -313,6 +314,7 @@ async def project(db, principal, space, job):
                         target_record_id=claim.target_id,
                     ),
                     commit=False,
+                    support=RelationSupport(claim_id=claim.id, document_id=job.document_id),
                 )
                 relation_ids.append(rel.id)
     return dict(

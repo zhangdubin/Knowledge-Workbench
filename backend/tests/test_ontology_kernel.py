@@ -152,7 +152,7 @@ class Kernel(unittest.IsolatedAsyncioTestCase):
                 fid,
             )
         app.dependency_overrides[current_principal] = lambda: Principal(
-            None, {"models": {key: "none"}}
+            None, {"pages": ["types"], "models": {key: "none"}}
         )
         try:
             self.assertEqual(client.get(obj_url).status_code, 403)

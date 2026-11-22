@@ -113,3 +113,11 @@ export function eligibleReplacements(fact, rows) {
   return rows.filter(other => other.id !== fact.id && other.status === 'accepted'
     && other.object_id === fact.object_id && other.predicate_id === fact.predicate_id)
 }
+
+export async function loadObjectContext(spaceId, recordId, listRelations, listClaims) {
+  const [relations, facts] = await Promise.all([
+    listRelations(recordId),
+    listClaims(spaceId + '/claims', { object_id: recordId, limit: 50 }),
+  ])
+  return { relations, facts }
+}

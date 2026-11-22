@@ -37,7 +37,7 @@
             ><label>属性标识<input v-model="f.key" /></label>
             <label
               >属性类型<select v-model="f.type">
-                <option v-for="k in fieldTypes" :key="k">{{ k }}</option>
+                <option v-for="k in fieldTypes" :key="k" :value="k">{{ fieldTypeLabel(k) }}</option>
               </select></label
             >
             <label>必填<input v-model="f.required" type="checkbox" /></label>
@@ -72,7 +72,7 @@
           >
           <label
             >关系基数<select v-model="r.cardinality">
-              <option v-for="c in cardinalities" :key="c">{{ c }}</option>
+              <option v-for="c in cardinalities" :key="c" :value="c">{{ cardinalityLabels[c] }}</option>
             </select></label
           >
           <button @click="schema.relations.splice(i, 1)">移除关系</button>
@@ -111,6 +111,8 @@
   </section>
 </template>
 <script setup>
+import { fieldTypeLabel } from '../../utils/format'
+const cardinalityLabels = { 'one-to-one': '一对一', 'one-to-many': '一对多', 'many-to-one': '多对一', 'many-to-many': '多对多' }
 import { ref, computed, watch } from 'vue'
 import { studio } from '../../api/ontology'
 import { useAuthStore } from '../../stores/auth'

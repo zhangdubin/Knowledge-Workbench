@@ -111,3 +111,13 @@ test('independent examples have disjoint global keys and stable relation endpoin
     assert.equal(schema.relations[0].target, team.id)
   }
 })
+
+test('object context follows selected subject and can be empty', async () => {
+  const { loadObjectContext } = await import('../src/utils/ontology.js')
+  const links = async id => id === 1 ? [{ other_id: 2 }] : []
+  const claims = async (path, params) => params.object_id === 1 ? [{ object_id: 1, evidence: ['quote'] }] : []
+  assert.deepEqual(await loadObjectContext('space', 1, links, claims), {
+    relations: [{ other_id: 2 }], facts: [{ object_id: 1, evidence: ['quote'] }],
+  })
+  assert.deepEqual(await loadObjectContext('space', 2, links, claims), { relations: [], facts: [] })
+})

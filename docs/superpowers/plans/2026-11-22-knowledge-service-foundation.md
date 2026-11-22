@@ -56,7 +56,7 @@ POST /feedback/{id}/resolve {expected_version,resolution,idempotency_key} -> fee
 
 **Interfaces:** 消费对象与证据领域服务；产出完整上述 HTTP 合同。`knowledge_service` 新页面位与 `knowledge_review` 功能位分别管理查阅和反馈处理；模板安装需原 types/model_manage/relation_manage，修订登记需来源写权限及对应模型写权限。审核反馈还需关联范围可读，不能通过功能位全局越权。
 
-- [ ] **Step 1: 写失败的受控 API 测试及 40 用例清单。** 使用 `_guard.use_temp_db()`，原 fixture 发布一个知识空间、创建含换行 emoji 的原文、候选及人工接受。普通读者明确只有 knowledge_service 页面和所需模型/来源读权限，types 为 false。关键断言：
+- [x] **Step 1: 写失败的受控 API 测试及 40 用例清单。** 使用 `_guard.use_temp_db()`，原 fixture 发布一个知识空间、创建含换行 emoji 的原文、候选及人工接受。普通读者明确只有 knowledge_service 页面和所需模型/来源读权限，types 为 false。关键断言：
 
 ```python
 result = client.post('/api/knowledge-service/query', json={
@@ -71,7 +71,7 @@ for ev in result.json()['citations']:
 
 40 用例分组：直接查阅12（目录/安装预览/确认/重复确认/条目/原文/术语/别名/文号/标点/空输入/无模型）；跨资料8（双来源/相同依据/冲突/候选拒绝/关系接受/关系未接受/歧义/不同范围不冲突）；历史6（当前/过去/未来/明确替代/日期非法/新时间不自动替代）；权限6（普通无types/无入口/模型拒绝/来源拒绝/撤回后运行/他人运行）；不足4（空库/无依据/引文越界/扫描超限）；反馈4（重试一次/伪造关联/版本冲突/处理审计）。测试允许按具体行为增加子用例，必须保持可追溯用例编号。
 
-- [ ] **Step 2: 运行红灯。**
+- [x] **Step 2: 运行红灯。**
 
 ```sh
 docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD/backend:/src:ro" -w /tmp kb-workbench-backend:1.11.0-3d39657 sh -c 'cp -R /src /tmp/testbackend && cd /tmp/testbackend && python -m unittest discover -s tests -p test_knowledge_service.py'
@@ -79,13 +79,13 @@ docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD/backend:/sr
 
 预期新增路由/模块缺失失败，不能是依赖或测试库护栏错误。
 
-- [ ] **Step 3: 实现持久化和显式模板。** 资料修订不可变且唯一关联 Document/hash/snapshot/显式group，日期验证、替代仅同组且旧版本只在新版本生效后停止当前适用。模板包含知识条目(title/summary/scope/topic)、术语(preferred/aliases/definition/scope)和引用依据/主题/术语相关/明确替代关系；模板预览不发布，不把旧记录自动接管。字段稳定身份由现有注册器生成。运行保存主体、请求、修订、证据ID、状态、提示/模型版本、耗时及预算，不保存隐式推理；不在日志泄露正文或密钥。
+- [x] **Step 3: 实现持久化和显式模板。** 资料修订不可变且唯一关联 Document/hash/snapshot/显式group，日期验证、替代仅同组且旧版本只在新版本生效后停止当前适用。模板包含知识条目(title/summary/scope/topic)、术语(preferred/aliases/definition/scope)和引用依据/主题/术语相关/明确替代关系；模板预览不发布，不把旧记录自动接管。字段稳定身份由现有注册器生成。运行保存主体、请求、修订、证据ID、状态、提示/模型版本、耗时及预算，不保存隐式推理；不在日志泄露正文或密钥。
 
-- [ ] **Step 4: 实现检索和证据答复。** Unicode NFKC/中文标点和文号规范化；仅在授权词表内扩展别名，歧义返回候选；先来源/模型/范围/时点筛选再限额排序。已接受事实与可见关系提供依据，候选可提示但不提供已核实结论。原文独立搜索允许展示资料摘录，不能把未经审核摘录冒充已接受知识。明确记录扫描预算耗尽；范围不同不判冲突，冲突在截断前检测。模型通过既有 ai.chat_real_meta 可选启用；仅为知识服务设置输出上限1200及零重试，其他调用保持原默认行为；运行记录保存真实usage、最大token及重试信息；仅在当前主体有AI权限且配置可用时，在已授权且适用的候选内进行有界向量召回及重排，用受控替身验证候选范围；失败明确降级至确定性检索并记录；只发送本次授权证据，结构化响应中逐项验证 evidence_id/quote/start/end，失败不降格为有依据；无配置保留结构化检索。对已有模型/来源撤回再读运行、条目、术语、关联、修订、反馈均重验，不返回历史缓存正文。
+- [x] **Step 4: 实现检索和证据答复。** Unicode NFKC/中文标点和文号规范化；仅在授权词表内扩展别名，歧义返回候选；先来源/模型/范围/时点筛选再限额排序。已接受事实与可见关系提供依据，候选可提示但不提供已核实结论。原文独立搜索允许展示资料摘录，不能把未经审核摘录冒充已接受知识。明确记录扫描预算耗尽；范围不同不判冲突，冲突在截断前检测。模型通过既有 ai.chat_real_meta 可选启用；仅为知识服务设置输出上限1200及零重试，其他调用保持原默认行为；运行记录保存真实usage、最大token及重试信息；仅在当前主体有AI权限且配置可用时，在已授权且适用的候选内进行有界向量召回及重排，用受控替身验证候选范围；失败明确降级至确定性检索并记录；只发送本次授权证据，结构化响应中逐项验证 evidence_id/quote/start/end，失败不降格为有依据；无配置保留结构化检索。对已有模型/来源撤回再读运行、条目、术语、关联、修订、反馈均重验，不返回历史缓存正文。
 
-- [ ] **Step 5: 实现反馈闭环。** 所有者读本人运行和反馈，审核者还需 knowledge_review 且关联模型与来源可读；提交 run/item 至少一个且有版本，验证同一用户或明确审核可读。幂等键与请求摘要绑定；同键异载荷409。处理 expected_version 和事务审计，重复同键返回原结果，不同旧版本409。反馈列表先逐项授权后分页，不暴露隐藏计数。
+- [x] **Step 5: 实现反馈闭环。** 所有者读本人运行和反馈，审核者还需 knowledge_review 且关联模型与来源可读；提交 run/item 至少一个且有版本，验证同一用户或明确审核可读。幂等键与请求摘要绑定；同键异载荷409。处理 expected_version 和事务审计，重复同键返回原结果，不同旧版本409。反馈列表先逐项授权后分页，不暴露隐藏计数。
 
-- [ ] **Step 6: 运行聚焦及全量后端测试，提交。** 沿用Step2容器命令，先聚焦绿灯，再一次全量 `python -m unittest discover -s tests`。完整报告写本计划 workspace/task-1-report.md，含红绿证据、40用例映射及API精确返回样例。提交 `feat(knowledge): add authorized Chinese knowledge service`。
+- [x] **Step 6: 运行聚焦及全量后端测试，提交。** 沿用Step2容器命令，先聚焦绿灯，再一次全量 `python -m unittest discover -s tests`。完整报告写本计划 workspace/task-1-report.md，含红绿证据、40用例映射及API精确返回样例。提交 `feat(knowledge): add authorized Chinese knowledge service`。
 
 ### Task 2: 中文知识工作区与反馈界面
 

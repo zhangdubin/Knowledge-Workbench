@@ -62,6 +62,8 @@ async def revalidate(db, p, ontology_id, refs, request, *, selection=None):
         raise HTTPException(409, "旧运行缺少完整授权追溯，请重新查询")
     policy.require_types(p, schema, refs.get("type_ids", []))
     revisions = await sources.selected(db, p, ontology_id, refs.get("revision_ids", []))
+    if any(not sources.active(row, request["as_of"], revisions) for row in revisions):
+        raise HTTPException(404, "原查询资料依据已不适用")
     items = []
     by_id = {}
     for rid in refs.get("record_ids", []):
@@ -114,8 +116,12 @@ async def revalidate(db, p, ontology_id, refs, request, *, selection=None):
 
 
 async def public_run_selection(db, p, run, selection, items, facts, revisions):
-    if not isinstance(selection, dict) or selection.get("version") != 1:
+    if not isinstance(selection, dict) or selection.get("version") not in (1, 2):
         raise HTTPException(409, "旧运行缺少原展示选择，请重新查询")
+    if selection["version"] == 1 and selection["incomplete"] and any(
+        len(selection[key]) == selection["limit"] for key in ("items", "sources")
+    ):
+        raise HTTPException(409, "旧运行缺少截断结果的授权依据，请重新查询")
     item_map = {obj["id"]: obj for obj in items}
     fact_map = {fact["id"]: fact for fact in facts}
     revision_map = {row.id: row for row in revisions}

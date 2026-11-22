@@ -2134,3 +2134,86 @@ class KnowledgeServiceTest(unittest.IsolatedAsyncioTestCase):
             await db.delete(link)
             await db.commit()
         self.assertNotRegex(reasons(), "审核|过期")
+
+    async def test_residual_extra_excerpt_required_for_run_and_feedback(self):
+        from datetime import datetime
+        from app.knowledge_service.models import SourceRevision, QueryRun
+
+        self.p = self.admin
+        _, first = await self._document_revision(text="截断用词甲", group="主资料")
+        _, extra = await self._document_revision(text="截断用词乙", group="额外资料", linked=False)
+        async with SessionLocal() as db:
+            (await db.get(SourceRevision, first["id"])).recorded_at = datetime(2020, 1, 1)
+            await db.commit()
+        self.p = self.reader
+        self.reader.perms["pages"].append("library")
+        run = self.c.post("/api/knowledge-service/query", json=dict(
+            ontology_id=self.sid, as_of="2026-11-22", question="截断用词", limit=1,
+        )).json()
+        run_path = "/api/knowledge-service/runs/" + run["run_id"]
+        self.assertTrue(run["incomplete"])
+        for selection in [run, self.c.get(run_path).json()]:
+            self.assertEqual([r["id"] for r in selection["sources"]], [first["id"]])
+            self.assertNotIn(extra["id"], str(selection))
+        receipt = self.c.post("/api/knowledge-service/feedback", json=dict(run_id=run["run_id"],
+            category="回答不完整", message="额外命中反馈", idempotency_key=uuid4().hex)).json()
+        feedback_path = "/api/knowledge-service/feedback/" + receipt["id"]
+
+        def assert_hidden():
+            for path in [run_path, feedback_path]:
+                response = self.c.get(path)
+                self.assertIn(response.status_code, (403, 404), response.text)
+                self.assertNotIn("额外命中反馈", response.text)
+            listing = self.c.get("/api/knowledge-service/feedback").json()
+            self.assertNotIn(receipt["id"], [f["id"] for f in listing["items"]])
+
+        # Pre-fix runs at the display cap did not retain the extra authority.
+        async with SessionLocal() as db:
+            original = await db.get(QueryRun, run["run_id"])
+            refs = original.references
+            original.references = {**refs, "revision_ids": [first["id"]],
+                                   "public_selection": {**refs["public_selection"], "version": 1}}
+            await db.commit()
+        self.assertEqual(self.c.get(run_path).status_code, 409)
+        self.assertEqual(self.c.get(feedback_path).status_code, 409)
+        async with SessionLocal() as db:
+            (await db.get(QueryRun, run["run_id"])).references = refs
+            await db.commit()
+
+        self.p = self._reviewer()
+        assert_hidden()
+        self.p = self.reader
+        async with SessionLocal() as db:
+            row = await db.get(SourceRevision, extra["id"])
+            row.effective_to = "2025-01-01"
+            await db.commit()
+        assert_hidden()
+        async with SessionLocal() as db:
+            original = await db.get(QueryRun, run["run_id"])
+            self.assertIn(extra["id"], original.references["revision_ids"])
+
+    async def test_residual_extra_item_without_search_anchors_is_authorized(self):
+        from datetime import datetime
+        from app.ontology.models import RecordSource
+
+        self.p = self.admin
+        first, second = [self.obj(dict(title="甲")) for _ in range(2)]
+        async with SessionLocal() as db:
+            doc = Document(filename="第二项来源.txt")
+            db.add(doc)
+            await db.flush()
+            db.add(DocumentLink(document_id=doc.id, record_id=second))
+            db.add(RecordSource(document_id=doc.id, record_id=second))
+            await db.commit()
+            source_id = doc.id
+        self.p = self.reader
+        run = self.c.post("/api/knowledge-service/query", json=dict(
+            ontology_id=self.sid, question="甲", limit=1,
+        )).json()
+        self.assertTrue(run["incomplete"])
+        self.assertEqual([item["id"] for item in run["items"]], [first])
+        async with SessionLocal() as db:
+            (await db.get(Document, source_id)).deleted_at = datetime.now()
+            await db.commit()
+        response = self.c.get("/api/knowledge-service/runs/" + run["run_id"])
+        self.assertIn(response.status_code, (403, 404), response.text)

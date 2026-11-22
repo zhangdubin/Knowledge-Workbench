@@ -367,7 +367,7 @@ def public_selection(result, limit):
     # object bodies or generated text. ObjectHistory and immutable snapshots
     # remain the authorities for reconstructing historical public results.
     return dict(
-        version=1,
+        version=2,
         limit=limit,
         incomplete=result["incomplete"],
         items=[object_descriptor(obj) for obj in result["items"]],
@@ -630,7 +630,6 @@ async def search(db, p, request):
             if len(excerpts) > request["limit"]:
                 break
     display_truncated = max(len(item_ids), len(excerpts)) > request["limit"]
-    excerpts = excerpts[: request["limit"]]
     reference_claims = (
         {f["id"] for f in selected_facts}
         | {cid for pair in conflicts for cid in pair}
@@ -642,7 +641,7 @@ async def search(db, p, request):
         for f in scalar_facts.get(rid, [])
     }
     dependency_records = (
-        set(item_ids[: request["limit"]])
+        set(item_ids[: request["limit"] + 1])
         | set(term_dependencies)
         | set(rank_dependencies)
         | anchor_dependencies
@@ -654,7 +653,7 @@ async def search(db, p, request):
         items=items,
         facts=selected_facts,
         citations=list(citations.values()),
-        sources=excerpts,
+        sources=excerpts[: request["limit"]],
         conflicts=conflicts,
         relations=edges[: request["limit"]],
         incomplete=exhausted or citation_truncated or display_truncated,

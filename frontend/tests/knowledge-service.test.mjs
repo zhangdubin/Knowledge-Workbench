@@ -705,3 +705,50 @@ test('knowledge-only home form routes its question and business scope on explici
   find(tree, 'form').props.onSubmit({ preventDefault() {} })
   assert.deepEqual(routes, [{ name: 'knowledge-service', query: { question: '查制度', scope: '培训' } }])
 })
+
+test('a current denied snapshot clears old source rows and refreshes the authorized list', async t => {
+  let sourceReads = 0
+  const refresh = deferred()
+  const ws = workspace(t, path => {
+    if (path === '/sources') return ++sourceReads === 1 ? { items: [edition] } : refresh.wait
+    if (path === '/sources/edition') throw rejectHttp(404)
+  })
+  await settle()
+  await ws.switchTab('sources')
+  assert.equal(ws.state.sources.data.items[0].id, 'edition')
+  await ws.openSource('edition')
+  await settle()
+  assert.equal(ws.state.sources.data, null)
+  assert.equal(ws.state.source.data, null)
+  refresh.resolve({ items: [] })
+  await settle()
+  assert.deepEqual(ws.state.sources.data.items, [])
+  assert.equal(sourceReads, 2)
+})
+
+test('a denied feedback-history owner clears old feedback bodies and reloads visible rows', async t => {
+  const refresh = deferred()
+  const feedback = { id: 'case', run_id: 'original', message: '应撤回的旧正文' }
+  let listReads = 0
+  let runReads = 0
+  const ws = workspace(t, path => {
+    if (path === '/feedback') return ++listReads === 1 ? { items: [feedback] } : refresh.wait
+    if (path === '/feedback/case') return feedback
+    if (path === '/runs/original') {
+      if (++runReads === 1) return originalRun
+      throw rejectHttp(403)
+    }
+    if (path === '/sources/edition') return edition
+  })
+  await openFeedbackHistory(ws)
+  assert.equal(ws.state.feedbackList.data.items[0].message, feedback.message)
+  await ws.openSource('edition', ws.state.run.data.citations[0])
+  await settle()
+  assert.equal(ws.state.feedbackList.data, null)
+  assert.equal(ws.state.run.data, null)
+  assert.equal(ws.state.source.data, null)
+  refresh.resolve({ items: [] })
+  await settle()
+  assert.deepEqual(ws.state.feedbackList.data.items, [])
+  assert.equal(listReads, 2)
+})

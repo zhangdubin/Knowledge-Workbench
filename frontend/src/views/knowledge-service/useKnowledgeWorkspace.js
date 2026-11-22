@@ -226,7 +226,7 @@ export function useKnowledgeWorkspace(auth, initialScope, initialQuestion) {
         if (owner.itemId) parent = await api.item(owner.itemId, isCurrent)
         if (owner.runId && owner.runId !== activeRunId) parent = await api.run(owner.runId, isCurrent)
         return { base, comparison, parent }
-      }, fallback, { requestId: baseId, publish: false, recheck: true }),
+      }, fallback, { requestId: baseId, publish: false }),
     )
     if (!isCurrent()) return
     const parent = detail?.parent || checkedRun
@@ -267,7 +267,7 @@ export function useKnowledgeWorkspace(auth, initialScope, initialQuestion) {
         if (!target.run_id) return api.item(target.record_id, isCurrent)
         if (target.run_id !== activeRunId) return api.run(target.run_id, isCurrent)
         return null
-      }, fallback, { requestId, publish: false, recheck: true }),
+      }, fallback, { requestId, publish: false }),
     )
     if (state.submission.requestId !== requestId) return
     const run = target.run_id === activeRunId ? checkedRun : detail

@@ -52,7 +52,7 @@ POST /feedback/{id}/resolve {expected_version,resolution,idempotency_key} -> fee
 
 ### Task 1: 知识服务后端及安全验收集
 
-**Files:** 上述 backend/app/knowledge_service 全模块；backend/app/main.py、database.py、services/permissions.py；backend/tests/test_knowledge_service.py；必要的 ontology 领域读边界。
+**Files:** 上述 backend/app/knowledge_service 全模块；backend/app/main.py、database.py、services/permissions.py；backend/tests/test_knowledge_service.py；必要的 ontology 领域读边界；services/ai.py 的向后兼容可选 token 上限与重试参数。
 
 **Interfaces:** 消费对象与证据领域服务；产出完整上述 HTTP 合同。`knowledge_service` 新页面位与 `knowledge_review` 功能位分别管理查阅和反馈处理；模板安装需原 types/model_manage/relation_manage，修订登记需来源写权限及对应模型写权限。审核反馈还需关联范围可读，不能通过功能位全局越权。
 
@@ -81,7 +81,7 @@ docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD/backend:/sr
 
 - [ ] **Step 3: 实现持久化和显式模板。** 资料修订不可变且唯一关联 Document/hash/snapshot/显式group，日期验证、替代仅同组且旧版本只在新版本生效后停止当前适用。模板包含知识条目(title/summary/scope/topic)、术语(preferred/aliases/definition/scope)和引用依据/主题/术语相关/明确替代关系；模板预览不发布，不把旧记录自动接管。字段稳定身份由现有注册器生成。运行保存主体、请求、修订、证据ID、状态、提示/模型版本、耗时及预算，不保存隐式推理；不在日志泄露正文或密钥。
 
-- [ ] **Step 4: 实现检索和证据答复。** Unicode NFKC/中文标点和文号规范化；仅在授权词表内扩展别名，歧义返回候选；先来源/模型/范围/时点筛选再限额排序。已接受事实与可见关系提供依据，候选可提示但不提供已核实结论。原文独立搜索允许展示资料摘录，不能把未经审核摘录冒充已接受知识。明确记录扫描预算耗尽；范围不同不判冲突，冲突在截断前检测。模型通过既有 ai.chat_real_meta 可选启用，只发送本次授权证据，结构化响应中逐项验证 evidence_id/quote/start/end，失败不降格为有依据；无配置保留结构化检索。对已有模型/来源撤回再读运行、条目、术语、关联、修订、反馈均重验，不返回历史缓存正文。
+- [ ] **Step 4: 实现检索和证据答复。** Unicode NFKC/中文标点和文号规范化；仅在授权词表内扩展别名，歧义返回候选；先来源/模型/范围/时点筛选再限额排序。已接受事实与可见关系提供依据，候选可提示但不提供已核实结论。原文独立搜索允许展示资料摘录，不能把未经审核摘录冒充已接受知识。明确记录扫描预算耗尽；范围不同不判冲突，冲突在截断前检测。模型通过既有 ai.chat_real_meta 可选启用；仅为知识服务设置输出上限1200及零重试，其他调用保持原默认行为；运行记录保存真实usage、最大token及重试信息；只发送本次授权证据，结构化响应中逐项验证 evidence_id/quote/start/end，失败不降格为有依据；无配置保留结构化检索。对已有模型/来源撤回再读运行、条目、术语、关联、修订、反馈均重验，不返回历史缓存正文。
 
 - [ ] **Step 5: 实现反馈闭环。** 所有者读本人运行和反馈，审核者还需 knowledge_review 且关联模型与来源可读；提交 run/item 至少一个且有版本，验证同一用户或明确审核可读。幂等键与请求摘要绑定；同键异载荷409。处理 expected_version 和事务审计，重复同键返回原结果，不同旧版本409。反馈列表先逐项授权后分页，不暴露隐藏计数。
 

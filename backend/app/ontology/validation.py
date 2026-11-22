@@ -1,5 +1,6 @@
 """Validate canonical JSON values at the record write boundary."""
 
+import json
 from datetime import date, datetime
 from math import isfinite
 
@@ -8,17 +9,28 @@ from sqlalchemy import select
 from ..models import EntityRecord, EntityType
 
 
-async def validate_record(db, fields, data, previous=None):
+async def validate_record(db, fields, data, previous=None, reference_targets=None):
     if not isinstance(data, dict):
         raise ValueError("记录数据必须是对象")
     previous = previous or {}
     known = {field.key for field in fields}
     for key in data.keys() - known - {"group_id"}:
-        if key not in previous or data[key] != previous[key]:
+        if key not in previous or json.dumps(data[key], sort_keys=True) != json.dumps(
+            previous[key], sort_keys=True
+        ):
             raise ValueError(f"未知字段 {key}")
     for field in fields:
         value = data.get(field.key)
-        if value is None or value == "" or value == []:
+        if (
+            value is None
+            or value == ""
+            or (
+                value == []
+                and (
+                    field.type == "multiselect" or (field.options or {}).get("multiple")
+                )
+            )
+        ):
             if field.required:
                 raise ValueError(f"{field.key} 为必填字段")
             continue
@@ -52,7 +64,12 @@ async def validate_record(db, fields, data, previous=None):
                         .where(
                             EntityRecord.id == item,
                             EntityRecord.deleted_at.is_(None),
-                            EntityType.key == target,
+                            (
+                                EntityType.id == reference_targets[target]
+                                if reference_targets is not None
+                                and target in reference_targets
+                                else EntityType.key == target
+                            ),
                             EntityType.deleted_at.is_(None),
                         )
                     )

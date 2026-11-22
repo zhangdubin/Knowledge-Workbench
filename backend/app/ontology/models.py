@@ -49,6 +49,12 @@ class Projection(Base):
     __table_args__ = (UniqueConstraint("kind", "legacy_id"),)
 
 
+class RetiredProperty(Base):
+    __tablename__ = "ontology_retired_property"
+    semantic_id = Column(String, primary_key=True)
+    owner_type_id = Column(String, nullable=False)
+
+
 class ObjectBinding(Base):
     __tablename__ = "ontology_object"
     record_id = Column(ForeignKey("entity_record.id"), primary_key=True)

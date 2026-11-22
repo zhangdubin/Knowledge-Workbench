@@ -63,8 +63,8 @@ async def purge_type(
 
 
 @router.post("/records/{record_id}/restore", dependencies=_MANAGE)
-async def restore_record(record_id: int, db: AsyncSession = Depends(get_db)) -> dict:
-    result = await rec_svc.restore_record(db, record_id)
+async def restore_record(record_id: int, expected_version: int | None = None, db: AsyncSession = Depends(get_db)) -> dict:
+    result = await rec_svc.restore_record(db, record_id, expected_version=expected_version)
     if result is None:
         raise HTTPException(404, "回收站中没有这条记录")
     return {"ok": True, "model_restored": result["model_restored"]}

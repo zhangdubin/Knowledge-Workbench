@@ -16,7 +16,13 @@ from ..models import (
     RelationRecord,
 )
 from ..services.record import build_search_text
-from .models import ObjectBinding, Ontology, OntologyRevision, Projection
+from .models import (
+    ObjectBinding,
+    Ontology,
+    OntologyRevision,
+    Projection,
+    RetiredProperty,
+)
 from .objects import snapshot
 from .policy import require_schema
 from .schemas import EMPTY, normalize
@@ -50,8 +56,14 @@ async def current(db, space):
     )
 
 
+async def baseline(db, space):
+    if space.current_revision_id:
+        return await current(db, space)
+    return space.adoption_schema or EMPTY
+
+
 async def save_draft(db, principal, space, raw, existing=None):
-    previous = await current(db, space)
+    previous = await baseline(db, space)
     require_schema(principal, previous, write=True)
     if existing and existing.status not in ("draft", "validated"):
         raise HTTPException(409, "已发布修订不可修改")
@@ -143,9 +155,21 @@ async def assess(db, space, rev, migration):
                 for row in rows_now
             ):
                 blockers.append("接管草稿建立后旧模型字段已变化，请重新核对")
-    proposed_type_keys = {t["key"] for t in rev.schema["types"]}
+    proposed_targets = {t["key"]: mapping.get(t["id"]) for t in rev.schema["types"]}
+    renamed_keys = {t["key"] for t in old["types"]} - proposed_targets.keys()
+    if renamed_keys:
+        governed_types = {mapping[t["id"]] for t in old["types"] if t["id"] in mapping}
+        inbound = await db.scalars(
+            select(FieldDefinition).where(
+                FieldDefinition.type == "reference",
+                FieldDefinition.entity_type_id.not_in(governed_types),
+            )
+        )
+        if any((f.options or {}).get("target") in renamed_keys for f in inbound):
+            blockers.append("外部模型仍引用原标识，请先迁移引用")
+    owners = {field["id"]: t["id"] for t in old["types"] for field in t["fields"]}
     old_types = {t["id"]: t for t in old["types"]}
-    counts = {"types": len(rev.schema["types"]), "records": 0, "relations": 0}
+    counts = {"types": 0, "records": 0, "relations": 0}
     definitions = []
     for typ in rev.schema["types"]:
         definitions.extend(
@@ -155,11 +179,16 @@ async def assess(db, space, rev, migration):
             ]
         )
         for field in typ["fields"]:
+            if owners.get(field["id"], typ["id"]) != typ["id"]:
+                blockers.append(f"字段 {field['key']} 的归属模型已变化")
             if field["type"] == "reference":
                 target = field["options"]["target"]
-                if target not in proposed_type_keys and not await db.scalar(
-                    select(EntityType.id).where(
-                        EntityType.key == target, EntityType.deleted_at.is_(None)
+                if target in renamed_keys or (
+                    target not in proposed_targets
+                    and not await db.scalar(
+                        select(EntityType.id).where(
+                            EntityType.key == target, EntityType.deleted_at.is_(None)
+                        )
                     )
                 ):
                     blockers.append(f"引用字段 {field['key']} 的目标模型不存在")
@@ -184,6 +213,9 @@ async def assess(db, space, rev, migration):
                         f"必填 {before.get('required', False)} → {after.get('required', False)})"
                     )
             changes.append(f"更新类型 {typ['name']} ({typ['key']})")
+        if typ == previous and space.current_revision_id:
+            continue
+        counts["types"] += 1
         if typ["id"] not in mapping:
             continue
         fields = [SimpleNamespace(**f) for f in typ["fields"]]
@@ -205,7 +237,9 @@ async def assess(db, space, rev, migration):
             )
             try:
                 data = migrate(rec.data, previous, typ, migration)
-                await validate_record(db, fields, data, rec.data)
+                await validate_record(
+                    db, fields, data, rec.data, reference_targets=proposed_targets
+                )
                 rows.append((rec, typ, data, fields))
             except ValueError as error:
                 blockers.append(f"记录 #{rec.id}: {error}")
@@ -250,6 +284,8 @@ async def assess(db, space, rev, migration):
                         blockers.append(f"关联 #{link.id} 与新端点或基数不兼容")
                     seen.add(record_id)
     for kind, item, model in definitions:
+        if await db.get(RetiredProperty, item["id"]):
+            blockers.append(f"身份已停用 {item['id']}")
         binding = await db.get(Projection, item["id"])
         if binding and (binding.kind != kind or binding.ontology_id != space.id):
             blockers.append(f"身份已被占用 {item['id']}")
@@ -310,6 +346,7 @@ async def publish(db, space, rev, rows):
         for f in t["fields"]:
             if f["id"] not in active_fields:
                 await db.delete(await db.get(FieldDefinition, mapping[f["id"]]))
+                db.add(RetiredProperty(semantic_id=f["id"], owner_type_id=t["id"]))
                 binding = await db.get(Projection, f["id"])
                 if binding:
                     await db.delete(binding)

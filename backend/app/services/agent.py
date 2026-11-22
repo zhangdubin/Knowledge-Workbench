@@ -597,7 +597,7 @@ async def prepare_write(db: AsyncSession, principal, name: str, args: dict) -> d
         if not clean:
             return {"error": "没有提供任何要修改的字段值"}
         unchanged = [
-            by_key[k].name for k, v in clean.items()
+            (by_key[k].name if k in by_key else k) for k, v in clean.items()
             if k in old_data and _display(old_data.get(k)) == _display(v)
         ]
         changed = {k: v for k, v in clean.items()
@@ -605,7 +605,7 @@ async def prepare_write(db: AsyncSession, principal, name: str, args: dict) -> d
         if not changed:
             return {"error": f"这些字段的值与原值完全相同（{'、'.join(unchanged)}），无需修改"}
         rows = [
-            {"key": k, "name": by_key[k].name, "type": by_key[k].type,
+            {"key": k, "name": (by_key[k].name if k in by_key else k), "type": (by_key[k].type if k in by_key else "text"),
              "old": _display(old_data.get(k)), "value": _display(v), "changed": True}
             for k, v in changed.items()
         ]
@@ -616,7 +616,7 @@ async def prepare_write(db: AsyncSession, principal, name: str, args: dict) -> d
             "record_id": rid, "record_label": label,
             "fields": rows, "warnings": warnings,
             "summary": f"修改「{t.name}」的记录 #{rid}（{len(changed)} 个字段）",
-            "note": f"未提及的字段保持原值；原值：{'；'.join(f'{by_key[k].name}={_display(old_data.get(k))}' for k in changed)}",
+            "note": f"未提及的字段保持原值；原值：{'；'.join(f'{(by_key[k].name if k in by_key else k)}={_display(old_data.get(k))}' for k in changed)}",
         }
         return {"pending": pending}
 

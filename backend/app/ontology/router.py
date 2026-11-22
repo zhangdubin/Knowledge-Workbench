@@ -38,18 +38,31 @@ def revision_json(r):
     )
 
 
-async def describe(db, p, space):
+async def describe(db, p, space, limit=25, offset=0, summary=False):
     current = await registry.current(db, space)
-    require_schema(p, current)
+    require_schema(p, await registry.baseline(db, space))
     revisions = []
+    visible = 0
     for rev in await db.scalars(
         select(OntologyRevision)
         .where(OntologyRevision.ontology_id == space.id)
-        .order_by(OntologyRevision.created_at, OntologyRevision.id)
+        .order_by(OntologyRevision.created_at.desc(), OntologyRevision.id.desc())
     ):
         if all(p.can_model(t["key"]) for t in rev.schema["types"]):
-            revisions.append(revision_json(rev))
-    if not revisions:
+            if summary:
+                return dict(
+                    id=space.id,
+                    key=space.key,
+                    name=space.name,
+                    description=space.description,
+                    current_revision_id=space.current_revision_id,
+                )
+            if visible >= offset:
+                revisions.append(revision_json(rev))
+            visible += 1
+            if len(revisions) >= limit:
+                break
+    if not visible:
         raise HTTPException(403, "缺少模型权限")
     return dict(
         id=space.id,
@@ -63,11 +76,19 @@ async def describe(db, p, space):
 
 
 @router.get("/")
-async def list_spaces(db: DB, p: User):
+async def list_spaces(
+    db: DB, p: User, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)
+):
+    visible = 0
     out = []
     for space in await db.scalars(select(Ontology).order_by(Ontology.key)):
         try:
-            out.append(await describe(db, p, space))
+            item = await describe(db, p, space, summary=True)
+            if visible >= offset:
+                out.append(item)
+            visible += 1
+            if len(out) >= limit:
+                break
         except HTTPException as error:
             if error.status_code != 403:
                 raise
@@ -156,12 +177,20 @@ async def detail(record_id: int, db: DB, p: User):
 
 
 @router.get("/objects/{record_id}/history")
-async def history(record_id: int, db: DB, p: User):
+async def history(
+    record_id: int,
+    db: DB,
+    p: User,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
     await objects.detail(db, p, record_id)
     rows = await db.scalars(
         select(ObjectHistory)
         .where(ObjectHistory.record_id == record_id)
         .order_by(ObjectHistory.version)
+        .limit(limit)
+        .offset(offset)
     )
     return list(rows)
 
@@ -236,8 +265,14 @@ async def add_object(space_id: str, payload: dict, db: DB, p: User):
 
 
 @router.get("/{space_id}")
-async def space_detail(space_id: str, db: DB, p: User):
-    return await describe(db, p, await space_row(db, space_id))
+async def space_detail(
+    space_id: str,
+    db: DB,
+    p: User,
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    return await describe(db, p, await space_row(db, space_id), limit, offset)
 
 
 @router.post("/{space_id}/revisions")
@@ -270,7 +305,7 @@ async def validate(
     await lock_writer(db)
     space = await space_row(db, space_id)
     rev = await registry.revision(db, space, revision_id)
-    require_schema(p, await registry.current(db, space), write=True)
+    require_schema(p, await registry.baseline(db, space), write=True)
     require_schema(p, rev.schema, write=True)
     impact, _ = await registry.assess(db, space, rev, payload.get("migration", {}))
     rev.status = "draft" if impact["blockers"] else "validated"

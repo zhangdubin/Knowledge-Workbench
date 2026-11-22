@@ -175,13 +175,15 @@ async def list_deleted_records(
     return out
 
 
-async def restore_record(db: AsyncSession, record_id: int) -> dict | None:
+async def restore_record(db: AsyncSession, record_id: int, *, expected_version=None) -> dict | None:
     """从回收站恢复记录；模型本身已入回收站时一并恢复模型"""
     await lock_writer(db)
     rec = await db.get(EntityRecord, record_id,populate_existing=True)
     if not rec or not rec.deleted_at:
         return None
+    await check_version(db,rec,expected_version)
     rec.deleted_at = None
+    await track(db,rec)
     et = await db.get(EntityType, rec.entity_type_id)
     model_restored = False
     if et and et.deleted_at:
@@ -199,6 +201,9 @@ async def purge_record(db: AsyncSession, record_id: int) -> bool:
     rec = await db.get(EntityRecord, record_id,populate_existing=True)
     if not rec or not rec.deleted_at:
         return False
+    if await db.get(ObjectBinding,rec.id):
+        from fastapi import HTTPException
+        raise HTTPException(409,"本体对象保留删除历史，可从回收站恢复")
     await db.delete(rec)
     await db.commit()
     return True
@@ -309,9 +314,10 @@ async def import_records(
             return {"error": "JSON 记录必须是数组"}
     else:
         try:
-            rows = list(csv.DictReader(io.StringIO(content.lstrip("\ufeff")), strict=True))
+            reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")), strict=True)
+            rows = list(reader)
         except csv.Error as error:
-            return {"error": f"CSV 解析失败：{error}"}
+            return {"error": f"CSV 第 {reader.reader.line_num} 行解析失败：{error}"}
 
     created, errors, warnings = 0, [], []
     for line, row in enumerate(rows, 1 if fmt == "json" else 2):

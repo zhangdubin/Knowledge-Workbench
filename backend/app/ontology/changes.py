@@ -5,7 +5,7 @@ from ..models import AuditLog
 from .migrations import lock_writer
 from .models import Ontology, OntologyChangeSet
 from .policy import require_schema
-from .registry import assess, current, digest, publish, revision
+from .registry import assess, baseline, digest, publish, revision
 
 
 def actor(principal):
@@ -13,7 +13,7 @@ def actor(principal):
 
 
 async def plan(db, principal, space, rev, migration):
-    require_schema(principal, await current(db, space), write=True)
+    require_schema(principal, await baseline(db, space), write=True)
     require_schema(principal, rev.schema, write=True)
     impact, _ = await assess(db, space, rev, migration)
     if impact["blockers"]:
@@ -40,7 +40,7 @@ async def preview(db, principal, change_id):
         raise HTTPException(404, "变更计划不存在")
     require_schema(principal, change.payload["schema"], write=True)
     space = await db.get(Ontology, change.ontology_id)
-    require_schema(principal, await current(db, space), write=True)
+    require_schema(principal, await baseline(db, space), write=True)
     return change
 
 

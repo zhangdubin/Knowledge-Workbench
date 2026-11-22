@@ -169,3 +169,39 @@ class RecordConstraints(unittest.IsolatedAsyncioTestCase):
                         "target_record_id": target.id,
                     },
                 )
+
+    async def test_scalar_shape_and_exact_legacy_json(self):
+        from app.ontology.validation import validate_record
+        from types import SimpleNamespace
+
+        async with SessionLocal() as db:
+            for kind in ("number", "boolean", "reference"):
+                field = SimpleNamespace(key="x", type=kind, required=False, options={})
+                with self.assertRaises(ValueError):
+                    await validate_record(db, [field], {"x": []})
+            with self.assertRaises(ValueError):
+                await validate_record(db, [], {"old": {"x": 0}}, {"old": {"x": False}})
+
+    async def test_agent_legacy_label_and_csv_location(self):
+        from app.services.agent import prepare_write
+        from app.services.auth import _anonymous_principal
+        from app.services.record import import_records
+
+        async with SessionLocal() as db:
+            et = await db.get(EntityType, self.type_id)
+            rec = await create_record(db, et.id, {"amount": 1})
+            rec.data = {"amount": 1, "extension": "retained"}
+            await db.commit()
+            prep = await prepare_write(
+                db,
+                _anonymous_principal(),
+                "update_record",
+                {
+                    "model_key": et.key,
+                    "record_id": rec.id,
+                    "data": {"extension": "retained", "amount": 2},
+                },
+            )
+            self.assertIn("pending", prep)
+            result = await import_records(db, et.id, 'amount\n"unclosed', "csv")
+            self.assertIn("2", result["error"])

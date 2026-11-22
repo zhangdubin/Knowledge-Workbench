@@ -43,3 +43,12 @@ docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 \
 旧镜像可保留新增表，但旧代码不会执行新的对象版本、历史和来源约束。出现新写入后，不可把“换回旧镜像”当作数据回滚；应先停止写入并保存当前快照，再进行明确的逆迁移或导出补偿。不得直接删除本体表、丢弃新记录，或用验收副本覆盖正式数据库。
 
 实际镜像、备份位置、校验值、发布提交及健康检查结果以本次本地部署的 manifest 和验证记录为准。
+
+
+## 已完成的本机发布
+
+2026-11-22 已从隔离工作区部署 1.11.0（产品代码 `3d39657`），前后端健康。正式接口为 http://localhost:8082，原 main 未合并。正式库九张业务表与发布前逐行摘要一致，含 213 条记录、6 份文档、44 个分块；5 份原文文件 SHA256 完全保留。原缺失的 #3 手册已核验恢复，没有覆盖原文件或修改数据库行。
+
+主备份：`/Volumes/Samsung/poc/知识库/project-backups/kb-workbench-pre-dynamic-ontology-20261122-154545`；副备份：`/Volumes/Trisome/kb-backups/project-snapshots/kb-workbench-pre-dynamic-ontology-20261122-154545`。每处 20 项 SHA256 校验通过。旧镜像保留 `pre-dynamic-ontology-20261122-154545` 标签。
+
+后端实际镜像 `sha256:3d86cbcd3251c90081c39228dd5c3d2def1e474f9af3a7aa84386980b8442377`；前端实际镜像 `sha256:3d24ac58250219e24b5f9d2c98803c9a3452ec40ae6078f4512dfc8dacbb1b3a`。详细测试、审查、截图、元数据和部署 manifest 归档于 `/Volumes/Samsung/poc/知识库/project-research/ontoflow-20261122/implementation-verification`（含私有副本数据，仅本机保留）。

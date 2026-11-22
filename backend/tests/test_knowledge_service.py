@@ -2012,3 +2012,125 @@ class KnowledgeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(historical["version"], original["version"])
         self.assertEqual(historical["data"], original["data"])
         self.assertEqual(historical["title"], original["title"])
+
+    async def test_final_overlapping_snapshot_scopes_and_authority_revalidation(self):
+        from datetime import datetime
+        from app.knowledge_service.models import SourceRevision
+        self.p = self.admin
+        self.c.put("/api/ontologies/objects/" + str(self.rid), json=dict(
+            data={"title": "授权依赖检验", "topic": "维护"}, expected_version=1,
+        )).raise_for_status()
+        training = self.c.post("/api/knowledge-service/sources", json={
+            **self.source_payload(), "scope": "培训", "label": "培训版",
+        }).json()
+        async with SessionLocal() as db:
+            (await db.get(SourceRevision, training["id"])).recorded_at = datetime(2030, 1, 1)
+            await db.commit()
+        self.did, _ = await self._document_revision(text="维护规程😀四天", group="second")
+        self.add_claim("四天")
+        self.p = self.reader
+        self.reader.perms["features"] = {"ai": True}
+        def query(**options):
+            response = self.c.post("/api/knowledge-service/query", json=dict(
+                ontology_id=self.sid, question="授权依赖检验", as_of="2026-11-22", **options
+            ))
+            response.raise_for_status()
+            return response.json()
+        with patch("app.knowledge_service.answers.model_config", return_value=dict(
+            enabled=True, api_key="test", base_url="https://invalid"
+        )), patch("app.knowledge_service.answers.ai.chat_real_meta", new_callable=AsyncMock) as generation:
+            result = query(generate=True)
+            generation.assert_not_awaited()
+        self.assertEqual(result["sources"], [])
+        self.assertEqual(result["status"], "conflict")
+        self.assertEqual(len(result["conflicts"]), 1)
+        self.assertIsNone(result["answer"])
+        self.assertEqual(query(scope="培训")["status"], "supported")
+        self.assertEqual(query(scope="保障")["status"], "conflict")
+        path = "/api/knowledge-service/runs/" + result["run_id"]
+        self.assertEqual(self.c.get(path).json()["conflicts"], result["conflicts"])
+        submission = self.c.post("/api/knowledge-service/feedback", json=dict(
+            run_id=result["run_id"], category="存在分歧", message="核对范围", idempotency_key=uuid4().hex,
+        ))
+        self.assertEqual(submission.status_code, 200, submission.text)
+        self.p = self.admin
+        await self._document_revision(group="maintenance", supersedes=self.rev["id"])
+        self.p = self.reader
+        self.assertEqual(self.c.get(path).status_code, 404)
+        self.assertEqual(self.c.get("/api/knowledge-service/feedback/" + submission.json()["id"]).status_code, 404)
+
+    async def test_final_limit_checks_one_extra_visible_excerpt(self):
+        self.p = self.admin
+        await self._document_revision(text="版本检验用词甲", group="first-excerpt")
+        await self._document_revision(text="版本检验用词乙", group="second-excerpt")
+        self.p = self.reader
+        self._check_limit("版本检验用词", "sources")
+
+    def test_final_limit_checks_one_extra_visible_item(self):
+        self.p = self.admin
+        for title in ["专属检验甲", "专属检验乙"]:
+            self.obj(dict(title=title, scope="保障"))
+        self.p = self.reader
+        self._check_limit("专属检验", "items")
+
+    def _check_limit(self, question, field):
+        for limit, expected in [(1, True), (2, False), (5, False)]:
+            result = self.c.post("/api/knowledge-service/query", json=dict(
+                ontology_id=self.sid, question=question, limit=limit,
+            )).json()
+            self.assertEqual(len(result[field]), min(2, limit))
+            self.assertEqual(result["incomplete"], expected)
+            replay = self.c.get("/api/knowledge-service/runs/" + result["run_id"]).json()
+            self.assertEqual(replay["incomplete"], expected)
+            self.assertEqual(replay[field], result[field])
+
+    async def test_final_source_search_applies_authorization_before_limit(self):
+        key = self.key + "-查找"
+        async with SessionLocal() as db:
+            visible = [Document(filename=f"{key}-{i}.txt", title=f"{key}-{i}") for i in range(51)]
+            db.add_all(visible)
+            await db.flush()
+            oldest = visible[0].id
+            db.add_all(DocumentLink(document_id=d.id, record_id=self.rid) for d in visible)
+            db.add_all(Document(filename=f"{key}-私有-{i}.txt") for i in range(505))
+            await db.commit()
+        self.p = Principal(self.reader.user, dict(pages=["knowledge_service"],
+            models={self.typ["key"]: "write", self.term["key"]: "write"}, features={"file_write": True}))
+        def search(q):
+            return self.c.get("/api/knowledge-service/source-candidates", params=dict(ontology_id=self.sid, q=q))
+        page = search(key)
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertEqual(len(page.json()["items"]), 50)
+        self.assertTrue(page.json()["incomplete"])
+        self.assertNotIn("私有", page.text)
+        found = search(key + "-0.txt").json()
+        self.assertEqual([item["id"] for item in found["items"]], [oldest])
+        self.assertFalse(found["incomplete"])
+        self.assertEqual(search(key + "-私有").json(), dict(items=[], incomplete=False))
+        self.c.post("/api/knowledge-service/sources", json={**self.source_payload(), "document_id": oldest}).raise_for_status()
+        self.p = self.reader
+        self.assertEqual(search(key).status_code, 403)
+
+    async def test_final_insufficient_reasons_follow_visible_evidence(self):
+        from app.ontology.models import Claim
+        async with SessionLocal() as db:
+            claim = await db.get(Claim, self.claim["id"])
+            claim.status = "candidate"
+            await db.commit()
+        def reasons():
+            result = self.query()
+            self.assertEqual(result["status"], "insufficient")
+            self.assertEqual(result["facts"], [])
+            return "".join(result["reasons"])
+        self.assertIn("审核", reasons())
+        async with SessionLocal() as db:
+            claim = await db.get(Claim, self.claim["id"])
+            claim.status = "accepted"
+            claim.effective_to = "2025-01-01"
+            await db.commit()
+        self.assertIn("过期", reasons())
+        async with SessionLocal() as db:
+            link = await db.scalar(select(DocumentLink).where(DocumentLink.document_id == self.did))
+            await db.delete(link)
+            await db.commit()
+        self.assertNotRegex(reasons(), "审核|过期")

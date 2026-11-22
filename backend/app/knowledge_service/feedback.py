@@ -377,14 +377,15 @@ async def create(db, p, payload):
     item_references = {}
     if payload.get("record_id") and not payload.get("run_id"):
         obj, oid = await retrieval.object_scope(db, p, payload["record_id"])
-        detail = await retrieval.detail(db, p, payload["record_id"])
+        authorities = {}
+        detail = await retrieval.detail(db, p, payload["record_id"], authorities=authorities)
         rendered = {f["id"]: f for f in detail["facts"]}
         from datetime import date
 
         item_references = dict(
             request=dict(as_of=date.today().isoformat()),
             dependencies=retrieval.references(
-                {obj["type_id"]}, {obj["id"]}, set(rendered), rendered
+                {obj["type_id"]}, {obj["id"]}, set(rendered), rendered, authorities=authorities
             ),
         )
     f = Feedback(

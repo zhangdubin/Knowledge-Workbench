@@ -39,15 +39,21 @@
     </template>
 
     <template v-else>
-      <p v-if="!candidates.length" class="ks-muted">当前没有可选的原始资料。</p>
-      <p v-if="candidatesIncomplete" class="ks-muted">仅显示检索限额内可登记的原文件。</p>
-      <form v-if="candidates.length" class="ks-form" @submit.prevent="registerSource">
+      <form class="ks-form" @submit.prevent="searchFiles">
+        <label><span>文件名或标题</span><input v-model="fileQuery" maxlength="200" :disabled="saving.busy" /></label>
+        <button class="ks-button" type="submit" :disabled="saving.busy || files.busy">查找文件</button>
+      </form>
+      <p v-if="files.error" class="ks-error" role="alert">{{ files.error }}</p>
+      <p v-else-if="files.busy" role="status">正在查找原始资料…</p>
+      <p v-else-if="!fileOptions.length" class="ks-muted">没有找到可选的原始资料。</p>
+      <p v-if="files.data?.incomplete ?? candidatesIncomplete" class="ks-muted">最多显示 50 份文件，可输入更完整的名称缩小范围。</p>
+      <form v-if="fileOptions.length" class="ks-form" @submit.prevent="registerSource">
         <fieldset class="ks-form-grid ks-fieldset" :disabled="saving.busy">
           <label class="ks-full">
             <span>原始资料</span>
             <select v-model="form.document_id" required>
               <option value="">选择已有文件</option>
-              <option v-for="doc in candidates" :key="doc.id" :value="doc.id">
+              <option v-for="doc in fileOptions" :key="doc.id" :value="doc.id">
                 {{ doc.title }}{{ doc.filename !== doc.title ? ` · ${doc.filename}` : '' }}
               </option>
             </select>
@@ -91,6 +97,6 @@ const props = defineProps({
   selectedRevision: { type: Object, default: null },
 })
 const emit = defineEmits(['close', 'installed', 'registered', 'permission', 'saving'])
-const { definition, preview, saving, name, form, schema, predecessors,
+const { definition, preview, saving, name, form, schema, predecessors, files, fileOptions, fileQuery, searchFiles,
   loadDefinition, previewTemplate, confirmTemplate, registerSource } = useKnowledgeManagement(props, emit)
 </script>

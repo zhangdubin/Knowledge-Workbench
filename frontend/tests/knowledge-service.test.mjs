@@ -146,7 +146,7 @@ test('permission-hidden custom links stay hidden while the main navigation stays
 const { default: http } = await import('../src/api/index.js')
 const { useKnowledgeWorkspace } = await import('../src/views/knowledge-service/useKnowledgeWorkspace.js')
 const renderer = createRenderer({
-  createComment: () => ({}), insert() {}, remove() {},
+  createComment: () => ({}), insert() {}, remove() {}, parentNode: () => null, nextSibling: () => null,
 })
 const manager = () => reactive({ user: { id: 1 }, canPage: () => true, can: () => true })
 const catalogResponse = {
@@ -544,4 +544,164 @@ test('the restored query card uses the original question, date and scope from th
   const restored = ws.state.result
   assert.deepEqual([restored.question, restored.as_of, restored.scope],
     [question, '2024-03-03', '培训'])
+})
+
+async function openFeedbackHistory(ws) {
+  await settle()
+  await ws.switchTab('feedback')
+  await ws.openFeedback('case')
+  await ws.openRun('original')
+}
+
+function historyWorkspace(t, respond) {
+  const feedback = { id: 'case', run_id: 'original' }
+  let opened = false
+  return workspace(t, (path, config) => {
+    if (path === '/feedback') return { items: [feedback] }
+    if (path === '/feedback/case') return feedback
+    if (path === '/runs/original' && !opened) { opened = true; return originalRun }
+    return respond(path, config)
+  })
+}
+
+test('a citation from feedback history waits for the owning run and drops a withdrawn source association', async t => {
+  const replay = deferred()
+  let checks = 0
+  const ws = historyWorkspace(t, path => {
+    if (path === '/sources/edition') return edition
+    if (path === '/runs/original') { checks++; return replay.wait }
+  })
+  await openFeedbackHistory(ws)
+  const opening = ws.openSource('edition', ws.state.run.data.citations[0])
+  await settle()
+  const pending = ws.state.source.target?.citation
+  if (checks) replay.reject(rejectHttp(404))
+  await opening
+  assert.equal(checks, 1)
+  assert.equal(pending, null)
+  assert.equal(ws.state.source.data, null)
+  assert.equal(ws.state.source.target?.citation ?? null, null)
+})
+
+test('historical feedback uses the owning run selection and title returned at form opening', async t => {
+  let selection = [{ ...originalItem, title: '已核对标题' }]
+  const ws = historyWorkspace(t, path => {
+    if (path === '/runs/original') return { ...originalRun, items: selection }
+  })
+  await openFeedbackHistory(ws)
+  await ws.startRunItemFeedback(ws.state.run.data, originalItem)
+  assert.equal(ws.feedbackTarget.value?.label, '已核对标题 · 版本 1')
+  await ws.openFeedback('case')
+  await ws.openRun('original')
+  selection = []
+  await ws.startRunItemFeedback(ws.state.run.data, ws.state.run.data.items[0])
+  assert.equal(ws.feedbackTarget.value, null)
+})
+
+test('current item citations and comparisons re-read the exact owning item version', async t => {
+  let item = { ...currentItem, citations: [{ ...originalRun.citations[0], quote: '原引文' }] }
+  const second = { ...edition, id: 'other' }
+  const ws = workspace(t, path => ({
+    '/query': originalRun, '/runs/original': originalRun, '/items/8': item,
+    '/sources/edition': { ...edition, group_revisions: [edition, second] }, '/sources/other': second,
+  })[path])
+  await settle()
+  ws.filters.question = '维护规程'
+  await ws.search()
+  await ws.openItem(8)
+  const clicked = ws.state.item.data.citations[0]
+  item = { ...item, citations: [{ ...clicked, quote: '重新核对引文' }] }
+  await ws.openSource('edition', clicked)
+  assert.equal(ws.state.source.target?.citation?.quote, '重新核对引文')
+  item = { ...item, version: 3 }
+  await ws.compareSource('other')
+  assert.equal(ws.state.comparison.data, null)
+  assert.equal(ws.state.source.data, null)
+})
+
+test('item-only feedback waits for a current matching item version', async t => {
+  let item = currentItem
+  const ws = workspace(t, path => ({
+    '/query': originalRun, '/runs/original': originalRun, '/items/8': item,
+  })[path])
+  await settle()
+  ws.filters.question = '维护规程'
+  await ws.search()
+  await ws.openItem(8)
+  item = { ...currentItem, version: 3 }
+  await ws.startItemFeedback(ws.state.item.data)
+  assert.equal(ws.feedbackTarget.value, null)
+})
+
+test('editor searches older file names and submits the selected authorized document', async t => {
+  const { useKnowledgeManagement } = await import('../src/views/knowledge-service/useKnowledgeManagement.js')
+  const calls = []
+  const management = mountController(t, () => useKnowledgeManagement({
+    kind: 'sources', spaceId: 'space', revisions: [], candidates: catalogResponse.source_candidates,
+  }, () => {}), (path, config) => {
+    calls.push([path, config.params, config.data])
+    if (path === '/source-candidates') return { items: [{ id: 41, filename: '旧手册.txt' }], incomplete: false }
+    return { id: 'registered' }
+  })
+  assert.deepEqual(management.fileOptions?.value, catalogResponse.source_candidates)
+  management.fileQuery.value = '旧手册'
+  await management.searchFiles()
+  assert.deepEqual(calls[0].slice(0, 2), ['/source-candidates', { ontology_id: 'space', q: '旧手册' }])
+  management.form.document_id = management.fileOptions.value[0].id
+  await management.registerSource()
+  assert.equal(JSON.parse(calls[1][2]).document_id, 41)
+})
+
+test('home knowledge handoff prefills both filters and only reads the catalog on mount', async t => {
+  const calls = []
+  const ws = mountController(t, () => useKnowledgeWorkspace(manager(), '保障', '哪份规程适用？'),
+    path => { calls.push(path); return catalogResponse })
+  await settle()
+  assert.deepEqual([ws.filters.question, ws.filters.scope, ws.filters.generate], ['哪份规程适用？', '保障', false])
+  assert.deepEqual(calls, ['/catalog'])
+})
+
+test('knowledge-only home form routes its question and business scope on explicit submit', async t => {
+  const { readFile } = await import('node:fs/promises')
+  const { parse, compileScript } = await import('@vue/compiler-sfc')
+  const { transform } = await import('esbuild')
+  const vue = await import('vue')
+  const src = await readFile(new URL('../src/views/Dashboard.vue', import.meta.url), 'utf8')
+  const script = compileScript(parse(src).descriptor, { id: 'home', inlineTemplate: true }).content
+  const { code } = await transform(script, { format: 'cjs' })
+  const routes = []
+  const modules = {
+    vue,
+    'vue-router': { useRouter: () => ({ push: target => routes.push(target) }) },
+    '../stores/auth': { useAuthStore: () => ({
+      canPage: key => ['dashboard', 'knowledge_service'].includes(key), can: () => false, canModel: () => false,
+    }) },
+    '../composables/useWorkspaceActions': { useWorkspaceActions: () => ({ openAssistant: assert.fail }) },
+  }
+  const loaded = { exports: {} }
+  new Function('require', 'module', 'exports', code)(key => modules[key] || {}, loaded, loaded.exports)
+  let tree
+  const app = renderer.createApp({
+    setup() {
+      const render = loaded.exports.default.setup({}, { expose() {} })
+      return () => { tree = render({}, []); return null }
+    },
+  })
+  for (const name of ['MagicStick', 'Search', 'ArrowRight', 'el-icon', 'Upload', 'EditPen', 'RouterLink']) {
+    app.component(name, { render: () => null })
+  }
+  app.mount({})
+  t.after(() => app.unmount())
+  function find(node, type) {
+    if (node?.type === type) return node
+    if (Array.isArray(node?.children)) return node.children.map(child => find(child, type)).find(Boolean)
+  }
+  const form = find(tree, 'form')
+  assert.ok(form)
+  find(form, 'textarea').props['onUpdate:modelValue'](' 查制度 ')
+  find(form, 'input').props['onUpdate:modelValue']('培训')
+  assert.deepEqual(routes, [])
+  await nextTick()
+  find(tree, 'form').props.onSubmit({ preventDefault() {} })
+  assert.deepEqual(routes, [{ name: 'knowledge-service', query: { question: '查制度', scope: '培训' } }])
 })

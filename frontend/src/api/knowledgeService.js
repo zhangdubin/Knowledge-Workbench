@@ -11,6 +11,7 @@ export const knowledgeService = {
   previewTemplate: (data, isCurrent) => post('/template', data, isCurrent),
   confirmTemplate: (id, isCurrent) => post(member('/template', id) + '/confirm', {}, isCurrent),
   listSources: (params, isCurrent) => get('/sources', params, isCurrent),
+  sourceCandidates: (params, isCurrent) => get('/source-candidates', params, isCurrent),
   registerSource: (data, isCurrent) => post('/sources', data, isCurrent),
   source: (id, isCurrent) => get(member('/sources', id), undefined, isCurrent),
   terms: (params, isCurrent) => get('/terms', params, isCurrent),

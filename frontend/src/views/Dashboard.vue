@@ -2,23 +2,29 @@
   <div class="daily-workspace">
     <section class="daily-intro" aria-labelledby="daily-heading">
       <h1 id="daily-heading">今天，想了解什么？</h1>
-      <form v-if="canUseAI || canSearch" class="daily-composer" @submit.prevent="submitQuestion">
+      <form v-if="canUseAI || canSearch || canUseKnowledge" class="daily-composer" @submit.prevent="submitQuestion">
         <label class="daily-question">
           <el-icon aria-hidden="true"><MagicStick v-if="canUseAI" /><Search v-else /></el-icon>
           <textarea
             v-model="question"
-            :aria-label="canUseAI ? '向 AI 助手提问' : '搜索工作区内容'"
-            :placeholder="canUseAI ? '问一个关于笔记、文件或业务记录的问题…' : '搜索笔记、文件或业务记录…'"
+            :aria-label="canUseAI ? '向 AI 助手提问' : canSearch ? '搜索工作区内容' : '输入知识问题'"
+            :placeholder="canUseAI ? '问一个关于笔记、文件或业务记录的问题…' : canSearch ? '搜索笔记、文件或业务记录…' : '输入中文问题或文号…'"
             rows="2"
             @keydown="onQuestionKey"
           ></textarea>
         </label>
+        <label v-if="canUseKnowledge" class="daily-knowledge-scope">
+          知识范围
+          <input v-model.trim="knowledgeScope" maxlength="200" placeholder="例如：保障" />
+        </label>
         <div class="daily-composer-actions">
+          <button v-if="canUseKnowledge && (canUseAI || canSearch)" class="daily-search" type="button"
+            :disabled="!question.trim()" @click="openKnowledge">查知识</button>
           <button v-if="canUseAI && canSearch" class="daily-search" type="button" :disabled="!question.trim()" @click="searchContent">
             <el-icon aria-hidden="true"><Search /></el-icon>搜索内容
           </button>
           <button class="daily-submit" type="submit" :disabled="!question.trim()">
-            {{ canUseAI ? '询问 AI 助手' : '搜索内容' }}
+            {{ canUseAI ? '询问 AI 助手' : canSearch ? '搜索内容' : '查知识' }}
             <el-icon aria-hidden="true"><ArrowRight /></el-icon>
           </button>
         </div>
@@ -77,6 +83,8 @@ const auth = useAuthStore()
 const router = useRouter()
 const { openAssistant } = useWorkspaceActions()
 const question = ref('')
+const knowledgeScope = ref('')
+const canUseKnowledge = computed(() => auth.canPage('knowledge_service'))
 const canUseAI = computed(() => auth.can('ai'))
 const canSearch = computed(() => auth.canPage('search'))
 const canSeeFiles = computed(() => auth.canPage('library'))
@@ -95,11 +103,20 @@ function searchContent() {
   if (canSearch.value && kw) router.push({ name: 'search', query: { kw } })
 }
 
+function openKnowledge() {
+  const text = question.value.trim()
+  if (!text || !canUseKnowledge.value) return
+  const query = { question: text }
+  if (knowledgeScope.value) query.scope = knowledgeScope.value
+  router.push({ name: 'knowledge-service', query })
+}
+
 function submitQuestion() {
   const text = question.value.trim()
   if (!text) return
   if (!canUseAI.value) {
-    searchContent()
+    if (canSearch.value) searchContent()
+    else openKnowledge()
     return
   }
   openAssistant(text)
@@ -219,6 +236,11 @@ watch(canSeeFiles, allowed => { if (allowed) loadFiles() }, { immediate: true })
   line-height: 1.65;
 }
 .daily-question textarea::placeholder { color: var(--text-tertiary); }
+.daily-knowledge-scope { display: flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); }
+.daily-knowledge-scope input {
+  max-width: 60%; padding: var(--space-1) var(--space-2); color: var(--text-primary);
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); font: inherit;
+}
 .daily-composer-actions, .daily-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .daily-composer-actions { justify-content: flex-end; }
 .daily-actions { margin-top: var(--space-4); }

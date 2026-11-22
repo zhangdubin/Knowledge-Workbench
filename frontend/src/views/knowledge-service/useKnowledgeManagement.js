@@ -6,6 +6,9 @@ export function useKnowledgeManagement(props, emit) {
   const definition = reactive(createRequestPanel())
   const preview = reactive(createRequestPanel())
   const saving = reactive(createRequestPanel())
+  const fileQuery = ref('')
+  const files = reactive(createRequestPanel())
+  const fileOptions = computed(() => files.data?.items || (files.busy || files.error ? [] : props.candidates))
   const name = ref('')
   const form = reactive({
     document_id: '', group_key: '', label: '', scope: '', topic: '',
@@ -52,6 +55,12 @@ export function useKnowledgeManagement(props, emit) {
     const data = await request(saving, isCurrent => api.confirmTemplate(id, isCurrent), '无法确认模板安装，请重试。')
     if (data) emit('installed', data.space_id)
   }
+  async function searchFiles() {
+    if (saving.busy) return
+    form.document_id = ''
+    const params = { ontology_id: props.spaceId, q: fileQuery.value.trim() }
+    await request(files, isCurrent => api.sourceCandidates(params, isCurrent), '无法查找原始资料，请重试。')
+  }
   function sourceDraft() {
     return { ontology_id: props.spaceId, ...form,
       effective_from: form.effective_from || null, effective_to: form.effective_to || null,
@@ -87,12 +96,13 @@ export function useKnowledgeManagement(props, emit) {
     if (props.kind === 'template') void loadDefinition()
   })
   onScopeDispose(() => {
+    files.clear()
     definition.clear()
     preview.clear()
     saving.clear()
     emit('saving', false)
   })
 
-  return { definition, preview, saving, name, form, schema, predecessors,
+  return { definition, preview, saving, name, form, schema, predecessors, files, fileOptions, fileQuery, searchFiles,
     loadDefinition, previewTemplate, confirmTemplate, registerSource }
 }

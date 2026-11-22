@@ -21,8 +21,9 @@ def model_readable(principal, model):
     return model.c.key.not_in(keys) if fallback else model.c.key.in_(keys)
 
 
-def live_source(principal, source):
-    doc = Document.__table__
+def document_readable(principal, doc):
+    if principal.is_super:
+        return True
     link = DocumentLink.__table__
     record = EntityRecord.__table__.alias("source_link_record")
     model = EntityType.__table__.alias("source_link_model")
@@ -35,18 +36,21 @@ def live_source(principal, source):
         .where(link.c.document_id == doc.c.id)
         .correlate(doc)
     )
+    permitted = linked.where(model_readable(principal, model)).exists()
+    if principal.has_page("library"):
+        return or_(permitted, ~linked.exists())
+    return permitted
+
+
+def live_source(principal, source):
+    doc = Document.__table__
     live = (
         select(1)
         .select_from(doc)
         .where(doc.c.id == source.c.document_id, doc.c.deleted_at.is_(None))
         .correlate(source)
     )
-    if not principal.is_super:
-        model_allowed = model_readable(principal, model)
-        permitted_link = linked.where(model_allowed).exists()
-        if principal.has_page("library"):
-            permitted_link = or_(permitted_link, ~linked.exists())
-        live = live.where(permitted_link)
+    live = live.where(document_readable(principal, doc))
     return live.exists()
 
 

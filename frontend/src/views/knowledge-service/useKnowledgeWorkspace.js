@@ -1,14 +1,14 @@
-import { computed, onMounted, onScopeDispose, reactive, ref, toRaw, watch } from 'vue'
+import { computed, onMounted, onScopeDispose, reactive, ref, watch } from 'vue'
 import { knowledgeService as api } from '../../api/knowledgeService.js'
 import {
   createKnowledgeState, createRequestPanel, createRetryKeys, feedbackCategories,
   knowledgeCapabilities, knowledgeError, queryPayload, sourceIsSelected,
 } from '../../utils/knowledgeService.js'
 
-export function useKnowledgeWorkspace(auth, initialScope) {
+export function useKnowledgeWorkspace(auth, initialScope, initialQuestion) {
   const state = reactive(createKnowledgeState())
   const catalog = reactive(createRequestPanel())
-  const filters = reactive({ ontology_id: '', question: '', type_id: '', scope: '', topic: '', as_of: '', generate: false })
+  const filters = reactive({ ontology_id: '', question: typeof initialQuestion === 'string' ? initialQuestion : '', type_id: '', scope: '', topic: '', as_of: '', generate: false })
   const space = computed(() => catalog.data?.spaces.find(item => item.id === filters.ontology_id))
   const capabilities = computed(() => knowledgeCapabilities(auth, catalog.data, space.value))
   const scopeOptions = computed(() => [...new Set([...(space.value?.scopes || []), filters.scope].filter(Boolean))])
@@ -125,7 +125,7 @@ export function useKnowledgeWorkspace(auth, initialScope) {
     if (!available?.scopes.includes(filters.scope)) filters.scope = ''
     if (!available?.topics.includes(filters.topic)) filters.topic = ''
     if (!available?.types.some(type => type.id === filters.type_id)) filters.type_id = ''
-    if (scopeHint && available?.scopes.includes(scopeHint)) filters.scope = scopeHint
+    if (scopeHint && available) filters.scope = scopeHint
     scopeHint = ''
     if (tab.value === 'sources') void loadSources()
     if (tab.value === 'feedback') void loadFeedback()
@@ -186,34 +186,15 @@ export function useKnowledgeWorkspace(auth, initialScope) {
       request(state.item, recordId, isCurrent => api.item(recordId, isCurrent), '无法查看条目详情，请重试。'))
   }
 
-  async function openSource(revisionId, citation = null) {
+  async function openSource(revisionId, citation = null, origin) {
     const current = details.value === 'item' ? state.item.data : details.value === 'run' ? state.run.data : null
-    const isBrowseSelection = !citation && tab.value === 'sources' &&
-      state.sources.data?.items.some(item => item.id === revisionId)
-    const selectedByDetail = sourceIsSelected(current, revisionId, citation?.id)
-    if (!isBrowseSelection && !selectedByDetail && !sourceIsSelected(state.result, revisionId, citation?.id)) return
-    let sourceRunId = null
-    if (selectedByDetail && details.value === 'run') sourceRunId = current.run_id
-    else if (!selectedByDetail && !isBrowseSelection) sourceRunId = queryRunId
-    const needsReplayCitation = Boolean(sourceRunId && sourceRunId === queryRunId)
+    const browse = !citation && tab.value === 'sources' && state.sources.data?.items.some(row => row.id === revisionId)
+    const parent = origin || (sourceIsSelected(current, revisionId, citation?.id) ? current : state.result)
+    if (!browse && (!parent || ![current, state.result].includes(parent) || !sourceIsSelected(parent, revisionId, citation?.id))) return
+    const owner = browse ? {} : parent.run_id ? { runId: parent.run_id } : { itemId: parent.id, version: parent.version }
     closeDetails()
     details.value = 'source'
-    const target = {
-      revisionId,
-      runId: sourceRunId,
-      citation: needsReplayCitation ? null : citation,
-      checking: Boolean(queryRunId),
-    }
-    const { detail, checkedRun } = await withQueryRecheck(() =>
-      request(state.source, target, isCurrent => api.source(revisionId, isCurrent), '无法打开资料快照，请重试。'))
-    if (toRaw(state.source.target) === target) {
-      const citations = [...(checkedRun?.citations || []), ...(checkedRun?.conflict_citations || [])]
-      if (detail && needsReplayCitation && citation) {
-        state.source.target.citation = citations.find(item => item.id === citation.id && item.revision_id === revisionId) || null
-      }
-      state.source.target.checking = false
-    }
-    return detail
+    return loadSourceView(revisionId, owner, citation?.id)
   }
 
   async function compareSource(revisionId) {
@@ -223,43 +204,48 @@ export function useKnowledgeWorkspace(auth, initialScope) {
       state.comparison.clear()
       return
     }
+    const { owner, citationId } = state.source.target
+    return loadSourceView(source.id, owner, citationId, revisionId)
+  }
 
+  async function loadSourceView(revisionId, owner, citationId, comparisonId) {
     const activeRunId = queryRunId
-    const { runId, citation } = state.source.target
-    const baseTarget = { revisionId: source.id, runId, citation: null, checking: true }
-    const baseRequest = state.source.begin(baseTarget)
-    const compareRequest = state.comparison.begin(revisionId)
-    const fallback = '无法重新核对两个资料版本，请重新打开资料。'
-    const { detail: pair, checkedRun } = await withQueryRecheck(() =>
-      request(state.comparison, revisionId, async isComparisonCurrent => {
-        const isCurrent = () => isComparisonCurrent() && state.source.requestId === baseRequest
-        // Stage both texts locally. Neither becomes visible before the last authorization check.
-        const [base, selected] = await Promise.all([
-          api.source(source.id, isCurrent),
+    const target = { revisionId, owner, citationId, citation: null, checking: true }
+    const baseId = state.source.begin(target)
+    const compareId = comparisonId ? state.comparison.begin(comparisonId) : null
+    const isCurrent = () => state.source.requestId === baseId && (!comparisonId || state.comparison.requestId === compareId)
+    const fallback = '无法重新核对资料及其引用关系，请重新打开。'
+    const { detail, checkedRun } = await withQueryRecheck(() =>
+      request(state.source, target, async () => {
+        const [base, comparison] = await Promise.all([
           api.source(revisionId, isCurrent),
+          comparisonId ? api.source(comparisonId, isCurrent) : null,
         ])
         if (!isCurrent()) return null
-        const otherRun = runId && runId !== activeRunId ? await api.run(runId, isCurrent) : null
-        return { base, selected, otherRun }
-      }, fallback, { requestId: compareRequest, publish: false }),
+        let parent
+        if (owner.itemId) parent = await api.item(owner.itemId, isCurrent)
+        if (owner.runId && owner.runId !== activeRunId) parent = await api.run(owner.runId, isCurrent)
+        return { base, comparison, parent }
+      }, fallback, { requestId: baseId, publish: false, recheck: true }),
     )
-
-    if (state.source.requestId !== baseRequest || state.comparison.requestId !== compareRequest) return
-    if (!pair || (activeRunId && !checkedRun)) {
-      const message = state.comparison.error || state.query.error || fallback
-      state.comparison.clear()
-      state.source.fail(baseRequest, message)
+    if (!isCurrent()) return
+    const parent = detail?.parent || checkedRun
+    const validOwner = owner.itemId
+      ? parent?.id === owner.itemId && parent.version === owner.version
+      : !owner.runId || parent?.run_id === owner.runId
+    if (!detail || (activeRunId && !checkedRun) || !validOwner ||
+        ((owner.itemId || owner.runId) && !sourceIsSelected(parent, revisionId, citationId))) {
+      const message = state.source.error || state.query.error || fallback
+      state.source.fail(baseId, message)
+      if (comparisonId) state.comparison.fail(compareId, message)
       return
     }
-
-    const run = pair.otherRun || checkedRun
-    const citations = [...(run?.citations || []), ...(run?.conflict_citations || [])]
-    state.source.target.citation = runId
-      ? citations.find(item => item.id === citation?.id && item.revision_id === source.id) || null
-      : citation
+    const citations = [...(parent?.citations || []), ...(parent?.conflict_citations || [])]
+    state.source.target.citation = citations.find(item => item.id === citationId && item.revision_id === revisionId) || null
     state.source.target.checking = false
-    state.source.accept(baseRequest, pair.base)
-    state.comparison.accept(compareRequest, pair.selected)
+    state.source.accept(baseId, detail.base)
+    if (comparisonId) state.comparison.accept(compareId, detail.comparison)
+    return detail.base
   }
 
   async function openRun(runId) {
@@ -270,38 +256,46 @@ export function useKnowledgeWorkspace(auth, initialScope) {
       request(state.run, runId, isCurrent => api.run(runId, isCurrent), '无法查看查询回放，请重试。'), runId)
   }
 
-  async function startFeedback(target, label) {
-    const onSearch = Boolean(queryRunId)
+  async function startFeedback(target) {
+    const activeRunId = queryRunId
     closeDetails()
     details.value = 'submit'
     const requestId = state.submission.begin()
-    const { checkedRun } = await withQueryRecheck(() => null)
+    const fallback = '原反馈目标已不可用，请重新核对条目或查询。'
+    const { detail, checkedRun } = await withQueryRecheck(() =>
+      request(state.submission, target, async isCurrent => {
+        if (!target.run_id) return api.item(target.record_id, isCurrent)
+        if (target.run_id !== activeRunId) return api.run(target.run_id, isCurrent)
+        return null
+      }, fallback, { requestId, publish: false, recheck: true }),
+    )
     if (state.submission.requestId !== requestId) return
-    if (onSearch && target.run_id && (!checkedRun || (target.record_id && !checkedRun.items?.some(
-      item => item.id === target.record_id && item.version === target.record_version,
-    )))) {
-      state.submission.fail(requestId, '原查询的反馈目标已不可用。请重新检索。')
+    const run = target.run_id === activeRunId ? checkedRun : detail
+    const item = target.run_id ? run?.items?.find(row => row.id === target.record_id) : detail
+    if ((target.run_id && run?.run_id !== target.run_id) ||
+        (target.record_id && (item?.id !== target.record_id || item.version !== target.record_version))) {
+      state.submission.fail(requestId, state.submission.error || fallback)
       return
     }
+    const label = target.record_id ? `${item.title} · 版本 ${item.version}` : '本次查询'
     feedbackTarget.value = { ...target, label }
     state.submission.accept(requestId, null)
   }
 
   function startRunFeedback() {
     const run = state.result
-    if (run?.run_id) return startFeedback({ run_id: run.run_id }, '本次查询')
+    if (run?.run_id) return startFeedback({ run_id: run.run_id })
   }
 
   function startRunItemFeedback(run, item) {
     if (!run?.run_id || (run !== state.result && run !== state.run.data)) return
     if (!run.items?.some(selected => selected.id === item.id && selected.version === item.version)) return
-    return startFeedback({ run_id: run.run_id, record_id: item.id, record_version: item.version },
-      `${item.title} · 版本 ${item.version}`)
+    return startFeedback({ run_id: run.run_id, record_id: item.id, record_version: item.version })
   }
 
   function startItemFeedback(item) {
     if (state.item.data !== item) return
-    return startFeedback({ record_id: item.id, record_version: item.version }, `${item.title} · 版本 ${item.version}`)
+    return startFeedback({ record_id: item.id, record_version: item.version })
   }
 
   async function submitFeedback() {

@@ -3,12 +3,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import defer
 from ..database import get_db
 from ..models import Document
 from ..ontology.changes import actor
 from ..ontology.models import Ontology
-from ..ontology import evidence
+from ..ontology.provenance import document_readable
 from ..services.auth import Principal, current_principal
 from . import policy, schemas, template, sources, retrieval, answers, feedback
 from .models import KnowledgeSpace, QueryRun
@@ -26,6 +25,26 @@ router = APIRouter(
     tags=["knowledge_service"],
     dependencies=[Depends(require_entry)],
 )
+
+
+async def candidate_page(db, p, q=""):
+    query = select(Document.id, Document.title, Document.filename, Document.sha256).where(
+        Document.deleted_at.is_(None), document_readable(p, Document.__table__)
+    )
+    if q:
+        query = query.where(
+            Document.title.contains(q, autoescape=True) | Document.filename.contains(q, autoescape=True)
+        )
+    rows = (await db.execute(query.order_by(Document.id.desc()).limit(51))).mappings().all()
+    return dict(items=[{**r, "title": r["title"] or r["filename"]} for r in rows[:50]], incomplete=len(rows) > 50)
+
+
+@router.get("/source-candidates")
+async def source_candidates(ontology_id: str, db: DB, p: User, q: str = Query("", max_length=200)):
+    await policy.space(db, p, ontology_id, write=True)
+    if not p.has_feature("file_write"):
+        raise HTTPException(403, "缺少资料写入权限")
+    return await candidate_page(db, p, q.strip())
 
 
 @router.get("/catalog")
@@ -71,46 +90,18 @@ async def catalog(db: DB, p: User):
                 can_manage_sources=write,
             )
         )
-    candidates = []
-    candidates_incomplete = False
-    if can_manage_sources:
-        documents = list(
-            await db.scalars(
-                select(Document)
-                .options(defer(Document.data), defer(Document.extracted_text))
-                .where(Document.deleted_at.is_(None))
-                .order_by(Document.id.desc())
-                .limit(501)
-            )
-        )
-        candidates_incomplete = len(documents) > 500
-        for doc in documents[:500]:
-            try:
-                await evidence.source(db, p, doc.id)
-            except HTTPException as e:
-                if e.status_code in (403, 404):
-                    continue
-                raise
-            candidates.append(
-                dict(
-                    id=doc.id,
-                    title=doc.title or doc.filename,
-                    filename=doc.filename,
-                    sha256=doc.sha256,
-                )
-            )
+    candidates = await candidate_page(db, p) if can_manage_sources else dict(items=[], incomplete=False)
     return dict(
         spaces=spaces[:50],
         can_manage=policy.manager(p),
         can_review=policy.reviewer(p),
         can_manage_sources=can_manage_sources,
-        source_candidates=candidates[:50],
-        source_candidates_incomplete=candidates_incomplete or len(candidates) > 50,
+        source_candidates=candidates["items"],
+        source_candidates_incomplete=candidates["incomplete"],
         incomplete=truncated
         or len(registrations) > 200
         or len(spaces) > 50
-        or candidates_incomplete
-        or len(candidates) > 50,
+        or candidates["incomplete"],
     )
 
 

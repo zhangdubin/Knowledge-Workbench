@@ -177,7 +177,7 @@
                   </div>
                 </div>
                 <KnowledgeResult :result="state.result" :type-names="typeNames" allow-feedback
-                  @item="showItem" @source="showSource" @feedback="item => showDetail(startRunItemFeedback, state.result, item)" />
+                  @item="showItem" @source="(id, citation) => showSource(id, citation, state.result)" @feedback="item => showDetail(startRunItemFeedback, state.result, item)" />
               </template>
             </section>
           </template>
@@ -236,7 +236,7 @@
               <span v-if="state.item.data.topic">{{ state.item.data.topic }}</span>
             </div>
             <button class="ks-button" type="button" @click="showDetail(startItemFeedback, state.item.data)">反馈当前条目版本</button>
-            <KnowledgeEvidence :facts="state.item.data.facts" :citations="state.item.data.citations" :items="[state.item.data]" @source="showSource" />
+            <KnowledgeEvidence :facts="state.item.data.facts" :citations="state.item.data.citations" :items="[state.item.data]" @source="(id, citation) => showSource(id, citation, state.item.data)" />
             <section v-if="state.item.data.relations.length" class="ks-stack">
               <h4>关联条目</h4>
               <ul class="ks-rows">
@@ -279,7 +279,7 @@
             <p class="ks-muted">原查询于 {{ dateTime(state.run.data.created_at) }} 执行，耗时 {{ state.run.data.elapsed_ms }} 毫秒。引文已按当前权限校验。</p>
             <p v-if="state.run.data.incomplete" class="ks-muted">原查询选中的内容受检索上限限制。</p>
             <KnowledgeResult :result="state.run.data" :type-names="typeNames" replay allow-feedback
-              @item="showItem" @source="showSource" @feedback="item => showDetail(startRunItemFeedback, state.run.data, item)" />
+              @item="showItem" @source="(id, citation) => showSource(id, citation, state.run.data)" @feedback="item => showDetail(startRunItemFeedback, state.run.data, item)" />
             <details class="ks-row">
               <summary>检索预算</summary>
               <p class="ks-meta">
@@ -367,7 +367,7 @@ const {
   feedbackForm, resolution, loadCatalog, refreshAuthorization, changeSpace, switchTab, search, lookupTerms, pickTerm, loadSources,
   openItem, openSource, compareSource, openRun, closeDetails, startRunFeedback, startRunItemFeedback, startItemFeedback, submitFeedback,
   loadFeedback, openFeedback, resolveFeedback,
-} = useKnowledgeWorkspace(useAuthStore(), route.query.scope)
+} = useKnowledgeWorkspace(useAuthStore(), route.query.scope, route.query.question)
 
 const tasks = [
   { name: '查制度', placeholder: '输入制度名称、文号或适用条款', help: '可以用制度名称或文号查找，在适用日期选择需要核对的时间。', topics: ['制度流程', '制度'] },
@@ -429,7 +429,7 @@ async function showDetail(action, ...args) {
   await task
 }
 const showItem = id => showDetail(openItem, id)
-const showSource = (id, citation) => showDetail(openSource, id, citation)
+const showSource = (id, citation, owner) => showDetail(openSource, id, citation, owner)
 
 function dismissDetail() {
   closeDetails()

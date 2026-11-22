@@ -71,7 +71,7 @@ async def object_scope(db, p, record_id, ontology_id=None):
 
 
 async def fact(
-    db, p, claim, revisions, at, *, request=None, pinned=None, object_views=None
+    db, p, claim, revisions, at, *, request=None, pinned=None, object_views=None, authorities=None, diagnostics=None
 ):
     obj, _ = await object_scope(db, p, claim.object_id, claim.ontology_id)
     if object_views and claim.object_id in object_views:
@@ -79,15 +79,16 @@ async def fact(
     data = obj["_semantic"]
     if claim.target_id is not None:
         await object_scope(db, p, claim.target_id, claim.ontology_id)
-    if (
-        claim.status != "accepted"
-        or (claim.effective_from and claim.effective_from > at)
-        or (claim.effective_to and claim.effective_to < at)
-    ):
+    expired = bool(claim.effective_to and claim.effective_to < at)
+    if claim.effective_from and claim.effective_from > at:
+        return None
+    if diagnostics is None and (claim.status != "accepted" or expired):
         return None
     if request and not matches(data, request, allow_unknown=True):
         return None
     citations = []
+    domains = set()
+    revision_map = {}
     for eid in claim.evidence_ids:
         ev = await evidence.read_evidence(db, p, eid)
         snap = await db.get(SourceSnapshot, ev["snapshot_id"])
@@ -98,11 +99,10 @@ async def fact(
             or snap.text[ev["start"] : ev["end"]] != ev["quote"]
         ):
             raise HTTPException(422, "引文与原文字符区间不符")
-        applicable = [
+        matching = [
             r
             for r in revisions
             if r.snapshot_id == ev["snapshot_id"]
-            and sources.active(r, at, revisions)
             and all(
                 not data.get(k) or getattr(r, k) in ("", data[k])
                 for k in ("scope", "topic")
@@ -111,10 +111,25 @@ async def fact(
                 not (request or {}).get(k) or getattr(r, k) in ("", request[k])
                 for k in ("scope", "topic")
             )
-            and (pinned is None or r.id == pinned.get(eid))
         ]
+        applicable = [r for r in matching if sources.active(r, at, revisions)]
+        if pinned is not None:
+            original = pinned[eid]
+            ids = [original] if isinstance(original, str) else original
+            by_id = {r.id: r for r in applicable}
+            if not ids or any(rid not in by_id for rid in ids):
+                return None
+            applicable = [by_id[rid] for rid in ids]
         if not applicable:
-            return None
+            if diagnostics is None or not any(
+                (r.effective_to and r.effective_to < at)
+                or (r._successor_from and r._successor_from <= at) for r in matching
+            ):
+                return None
+            expired = True
+            applicable = matching
+        revision_map[eid] = [r.id for r in applicable]
+        domains.update(r.scope for r in applicable)
         rev = applicable[-1]
         ev.update(
             {
@@ -126,7 +141,15 @@ async def fact(
         citations.append(ev)
     if not citations:
         return None
-    domains = sorted({c["scope"] for c in citations if c["scope"]})
+    if diagnostics is not None:
+        if expired:
+            diagnostics.add("expired")
+        elif claim.status == "candidate":
+            diagnostics.add("unreviewed")
+        return None
+    if authorities is not None:
+        authorities[claim.id] = revision_map
+    domains = [] if "" in domains else sorted(domains)
     if data.get("scope"):
         domains = [data["scope"]]
     elif (request or {}).get("scope"):
@@ -286,7 +309,7 @@ def bounded_facts(facts, limit):
     return selected, citations, False
 
 
-def references(type_ids, record_ids, claim_ids, rendered, revisions=()):
+def references(type_ids, record_ids, claim_ids, rendered, revisions=(), authorities=None):
     facts = [rendered[cid] for cid in sorted(claim_ids)]
     records = (
         set(record_ids)
@@ -294,16 +317,17 @@ def references(type_ids, record_ids, claim_ids, rendered, revisions=()):
         | {f["target_id"] for f in facts if f["target_id"] is not None}
     )
     citations = [e for f in facts for e in f["evidence"]]
+    claim_revisions = {cid: authorities[cid] for cid in claim_ids}
     return dict(
         version=2,
         type_ids=sorted(type_ids),
         record_ids=sorted(records),
         claim_ids=sorted(claim_ids),
         evidence_ids=sorted({e["id"] for e in citations}),
-        revision_ids=sorted(set(revisions) | {e["revision_id"] for e in citations}),
-        claim_revisions={
-            f["id"]: {e["id"]: e["revision_id"] for e in f["evidence"]} for f in facts
-        },
+        revision_ids=sorted(set(revisions) | {
+            rid for mapping in claim_revisions.values() for ids in mapping.values() for rid in ids
+        }),
+        claim_revisions=claim_revisions,
     )
 
 
@@ -474,12 +498,13 @@ async def search(db, p, request):
     )
     exhausted = exhausted or len(candidates) > SCAN_BUDGET
     rendered = {}
+    authorities = {}
     for claim in candidates[:SCAN_BUDGET]:
         if claim.object_id not in records:
             continue
         try:
             item = await fact(
-                db, p, claim, revisions, request["as_of"], request=request
+                db, p, claim, revisions, request["as_of"], request=request, authorities=authorities
             )
         except HTTPException as error:
             if error.status_code in (403, 404, 409, 422):
@@ -602,8 +627,10 @@ async def search(db, p, request):
                     kind="source_excerpt"
                 )
             )
-            if len(excerpts) >= request["limit"]:
+            if len(excerpts) > request["limit"]:
                 break
+    display_truncated = max(len(item_ids), len(excerpts)) > request["limit"]
+    excerpts = excerpts[: request["limit"]]
     reference_claims = (
         {f["id"] for f in selected_facts}
         | {cid for pair in conflicts for cid in pair}
@@ -630,13 +657,14 @@ async def search(db, p, request):
         sources=excerpts,
         conflicts=conflicts,
         relations=edges[: request["limit"]],
-        incomplete=exhausted or citation_truncated,
+        incomplete=exhausted or citation_truncated or display_truncated,
         _references=references(
             dependency_types,
             dependency_records,
             reference_claims,
             rendered,
             [s["id"] for s in excerpts],
+            authorities,
         ),
     )
     if has_conflicts:
@@ -652,11 +680,31 @@ async def search(db, p, request):
     elif selected_facts:
         result["status"] = "supported"
     else:
-        result["reasons"] = ["未找到适用且有已接受证据的知识；资料摘录仅供核对。"]
+        diagnostics = set()
+        if roots:
+            rows = await db.scalars(
+                select(Claim).where(
+                    Claim.ontology_id == ont.id, Claim.object_id.in_(roots),
+                    Claim.status.in_(("accepted", "candidate")),
+                ).order_by(Claim.id).limit(SCAN_BUDGET)
+            )
+            for claim in rows:
+                try:
+                    await fact(db, p, claim, revisions, request["as_of"],
+                               request=request, diagnostics=diagnostics)
+                except HTTPException as error:
+                    if error.status_code not in (403, 404, 409, 422):
+                        raise
+        if "unreviewed" in diagnostics:
+            result["reasons"].append("相关知识仍待审核，请在审核完成后核对。")
+        if "expired" in diagnostics:
+            result["reasons"].append("相关知识或依据已过期，可调整查询日期核对历史版本。")
+        if not diagnostics:
+            result["reasons"].append("缺少适用且有已接受证据的知识，资料摘录仅供核对。")
     return result
 
 
-async def detail(db, p, record_id):
+async def detail(db, p, record_id, *, authorities=None):
     obj, oid = await object_scope(db, p, record_id)
     revisions = await sources.visible(db, p, oid)
     rows = list(
@@ -674,7 +722,7 @@ async def detail(db, p, record_id):
     found = []
     for claim in rows[:SCAN_BUDGET]:
         try:
-            item = await fact(db, p, claim, revisions, date.today().isoformat())
+            item = await fact(db, p, claim, revisions, date.today().isoformat(), authorities=authorities)
         except HTTPException as error:
             if error.status_code in (403, 404, 409, 422):
                 continue

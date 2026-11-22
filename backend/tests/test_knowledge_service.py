@@ -1010,3 +1010,814 @@ class KnowledgeServiceTest(unittest.IsolatedAsyncioTestCase):
         result = self.query()
         self.assertEqual(result["facts"], [])
         self.assertEqual(result["budget"]["scanned"], 0)
+
+    def _reviewer(self, models=None):
+        return Principal(
+            SimpleNamespace(id=91003, username="独立审核人"),
+            dict(
+                pages=["knowledge_service"],
+                models=models or self.reader.perms["models"].copy(),
+                features={"knowledge_review": True},
+            ),
+        )
+
+    async def _document_revision(
+        self, text=None, scope="保障", group="extra", supersedes=None, linked=True
+    ):
+        async with SessionLocal() as db:
+            doc = Document(
+                filename=group + ".txt",
+                title=group,
+                extracted_text=text or self.text,
+                extract_status="ok",
+            )
+            db.add(doc)
+            await db.flush()
+            if linked:
+                db.add(DocumentLink(document_id=doc.id, record_id=self.rid))
+            await db.commit()
+            did = doc.id
+        response = self.c.post(
+            "/api/knowledge-service/sources",
+            json={
+                **self.source_payload(),
+                "document_id": did,
+                "group_key": group,
+                "scope": scope,
+                "label": group,
+                "effective_from": "2025-01-01",
+                "supersedes_id": supersedes,
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return did, response.json()
+
+    def test_R01_selected_empty_type_revocation_blocks_reviewer_and_feedback(self):
+        response = self.c.post(
+            "/api/knowledge-service/query",
+            json=dict(
+                ontology_id=self.sid, type_id=self.typ["id"], question="不存在的知识"
+            ),
+        ).json()
+        f = self.c.post(
+            "/api/knowledge-service/feedback",
+            json=dict(
+                run_id=response["run_id"],
+                category="回答不完整",
+                message="原始范围受限",
+                idempotency_key=uuid4().hex,
+            ),
+        ).json()
+        self.p = self._reviewer({self.term["key"]: "read"})
+        for path in ["/runs/" + response["run_id"], "/feedback/" + f["id"]]:
+            r = self.c.get("/api/knowledge-service" + path)
+            self.assertIn(r.status_code, (403, 404), r.text)
+            self.assertNotIn("原始范围受限", r.text)
+
+    async def test_R02_ambiguous_term_dependencies_rechecked(self):
+        from app.ontology.models import RecordSource
+
+        self.p = self.admin
+        ids = [
+            self.obj(dict(preferred=n, aliases="手册", scope="保障"), self.term)
+            for n in ("维护规程", "培训规范")
+        ]
+        async with SessionLocal() as db:
+            db.add_all(
+                [RecordSource(record_id=rid, document_id=self.did) for rid in ids]
+            )
+            await db.commit()
+        self.p = self.reader
+        run = self.c.post(
+            "/api/knowledge-service/query",
+            json=dict(ontology_id=self.sid, question="手册"),
+        ).json()
+        self.assertEqual(run["status"], "ambiguous")
+        f = self.c.post(
+            "/api/knowledge-service/feedback",
+            json=dict(
+                run_id=run["run_id"],
+                category="存在分歧",
+                message="术语问题",
+                idempotency_key=uuid4().hex,
+            ),
+        ).json()
+        async with SessionLocal() as db:
+            doc = await db.get(Document, self.did)
+            doc.deleted_at = __import__("datetime").datetime.now()
+            await db.commit()
+        self.p = self._reviewer()
+        self.assertIn(
+            self.c.get("/api/knowledge-service/runs/" + run["run_id"]).status_code,
+            (403, 404),
+        )
+        self.assertIn(
+            self.c.get("/api/knowledge-service/feedback/" + f["id"]).status_code,
+            (403, 404),
+        )
+
+    async def test_R03_resolution_plaintext_never_enters_generic_audit(self):
+        f = self.feedback().json()
+        self.reader.perms["features"] = {"knowledge_review": True}
+        secret = "引用原文不应进入通用审计"
+        r = self.c.post(
+            "/api/knowledge-service/feedback/" + f["id"] + "/resolve",
+            json=dict(
+                expected_version=1, resolution=secret, idempotency_key=uuid4().hex
+            ),
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        async with SessionLocal() as db:
+            log = await db.scalar(
+                select(AuditLog).where(
+                    AuditLog.action == "knowledge_feedback_resolve",
+                    AuditLog.resource_id == f["id"],
+                )
+            )
+            import json
+
+            self.assertNotIn(secret, json.dumps(log.detail, ensure_ascii=False))
+            self.assertEqual(log.detail["status"], "resolved")
+        self.p = Principal(
+            SimpleNamespace(id=91004, username="通用审计人"),
+            dict(pages=["system"], models={}, features={"audit_view": True}),
+        )
+        audits = self.c.get(
+            "/api/system/audit", params={"action": "knowledge_feedback_resolve"}
+        )
+        self.assertEqual(audits.status_code, 200, audits.text)
+        self.assertNotIn(secret, audits.text)
+
+    async def test_R04_successor_outside_scan_window_stops_old_authority(self):
+        from app.knowledge_service.models import SourceRevision
+        from datetime import datetime
+
+        original_run = self.query()
+        self.p = self.admin
+        _, spacer = await self._document_revision(group="spacer", linked=False)
+        _, replacement = await self._document_revision(
+            group="maintenance", supersedes=self.rev["id"], linked=False
+        )
+        async with SessionLocal() as db:
+            for rid, year in [
+                (self.rev["id"], 2020),
+                (spacer["id"], 2021),
+                (replacement["id"], 2022),
+            ]:
+                row = await db.get(SourceRevision, rid)
+                row.recorded_at = datetime(year, 1, 1)
+            await db.commit()
+        self.p = self.reader
+        with patch("app.knowledge_service.sources.SOURCE_BUDGET", 1):
+            result = self.query()
+            self.assertEqual(result["facts"], [])
+            item = self.c.get(f"/api/knowledge-service/items/{self.rid}").json()
+            self.assertEqual(item["facts"], [])
+            self.assertEqual(
+                self.c.get(
+                    "/api/knowledge-service/runs/" + original_run["run_id"]
+                ).status_code,
+                404,
+            )
+
+    def test_R05_graph_respects_depth_and_scope_at_fact_boundary(self):
+        self.p = self.admin
+        self.schema_relation = self.c.get("/api/ontologies/" + self.sid).json()[
+            "schema"
+        ]["relations"][0]["id"]
+        nodes = [
+            self.obj(dict(title="流程" + str(i), scope="保障", topic="维护"))
+            for i in range(3)
+        ]
+        for a, b in zip([self.rid, *nodes], nodes):
+            self.add_claim(None, rid=a, target=b)
+        excluded = self.obj(dict(title="跨范围目标", scope="培训", topic="维护"))
+        self.add_claim(None, target=excluded)
+        self.p = self.reader
+        for depth in (1, 2):
+            result = self.query(depth=depth, scope="保障")
+            actual = {
+                (f["object_id"], f["target_id"])
+                for f in result["facts"]
+                if f["target_id"] is not None
+            }
+            expected = {(self.rid, nodes[0])}
+            if depth == 2:
+                expected.add((nodes[0], nodes[1]))
+            self.assertEqual(actual, expected)
+            self.assertNotIn(
+                excluded,
+                [
+                    i["id"]
+                    for i in self.c.get(
+                        "/api/knowledge-service/runs/" + result["run_id"]
+                    ).json()["items"]
+                ],
+            )
+
+        self.p = self.admin
+        term_target = self.obj(dict(preferred="专用术语", scope="保障"), self.term)
+        self.schema_relation = self.c.get("/api/ontologies/" + self.sid).json()[
+            "schema"
+        ]["relations"][2]["id"]
+        self.add_claim(None, target=term_target)
+        self.p = self.reader
+        filtered = self.query(type_id=self.typ["id"], depth=2, scope="保障")
+        self.assertNotIn(
+            term_target,
+            [f["target_id"] for f in filtered["facts"] if f["target_id"] is not None],
+        )
+
+    async def test_R06_same_object_distinct_source_domains_do_not_conflict(self):
+        self.p = self.admin
+        self.c.put(
+            "/api/ontologies/objects/" + str(self.rid),
+            json=dict(data={"title": "维护规程", "topic": "维护"}, expected_version=1),
+        ).raise_for_status()
+        original = self.did
+        self.did, _ = await self._document_revision(scope="培训", group="training")
+        self.add_claim("四天")
+        self.did = original
+        self.p = self.reader
+        result = self.query()
+        self.assertEqual(result["status"], "supported")
+        self.assertEqual(result["conflicts"], [])
+        self.assertEqual({f["scope"] for f in result["facts"]}, {"保障", "培训"})
+        self.assertEqual(len(self.query(scope="保障")["facts"]), 1)
+
+    async def test_R07_run_pins_original_evidence_revision_assignment(self):
+        from app.knowledge_service.models import SourceRevision
+        from datetime import datetime
+
+        result = self.query()
+        original = result["citations"][0]["revision_id"]
+        self.p = self.admin
+        added = self.c.post(
+            "/api/knowledge-service/sources",
+            json={
+                **self.source_payload(),
+                "label": "后来登记",
+                "effective_from": "2021-01-01",
+            },
+        ).json()
+        async with SessionLocal() as db:
+            row = await db.get(SourceRevision, added["id"])
+            row.recorded_at = datetime(2030, 1, 1)
+            await db.commit()
+        self.p = self.reader
+        replay = self.c.get("/api/knowledge-service/runs/" + result["run_id"])
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.json()["citations"][0]["revision_id"], original)
+        self.assertIn(original, [r["id"] for r in replay.json()["sources"]])
+
+    def test_R08_feedback_page_stops_and_reuses_run_authorization(self):
+        from app.knowledge_service import sources
+
+        result = self.query()
+        for i in range(10):
+            self.c.post(
+                "/api/knowledge-service/feedback",
+                json=dict(
+                    run_id=result["run_id"],
+                    category="回答不完整",
+                    message="问题" + str(i),
+                    idempotency_key=uuid4().hex,
+                ),
+            ).raise_for_status()
+        with patch(
+            "app.knowledge_service.feedback.sources.selected", wraps=sources.selected
+        ) as visible:
+            page = self.c.get(
+                "/api/knowledge-service/feedback", params={"limit": 2}
+            ).json()
+        self.assertEqual(len(page["items"]), 2)
+        self.assertEqual(visible.await_count, 1)
+
+    async def test_R09_source_excerpt_centers_unicode_hit(self):
+        self.p = self.admin
+        text = "前言😀\n" * 200 + "维护规程😀" + "补充内容" * 200
+        _, revision = await self._document_revision(text=text, group="long-reference")
+        self.p = self.reader
+        excerpt = next(r for r in self.query()["sources"] if r["id"] == revision["id"])
+        self.assertIn("维护规程", excerpt["quote"])
+        self.assertGreater(excerpt["start"], 0)
+        self.assertEqual(text[excerpt["start"] : excerpt["end"]], excerpt["quote"])
+
+    async def test_R10_optional_vector_recall_rerank_authorized_candidates_only(self):
+        from app.knowledge_service import retrieval
+
+        self.assertTrue(hasattr(retrieval, "ranking"))
+        from app.ontology.models import RecordSource
+        import json
+
+        self.p = self.admin
+        recalled = self.obj(dict(title="设备保养", scope="保障", topic="维护"))
+        self.add_claim("五天", rid=recalled)
+        hidden = self.obj(dict(title="禁止发送的对象", scope="保障", topic="维护"))
+        self.add_claim("秘密周期", rid=hidden)
+        async with SessionLocal() as db:
+            doc = Document(
+                filename="hidden.txt", extracted_text="禁止发送", extract_status="ok"
+            )
+            db.add(doc)
+            await db.flush()
+            db.add(RecordSource(record_id=hidden, document_id=doc.id))
+            await db.commit()
+        self.p = self.reader
+        self.reader.perms["features"] = {"ai": True}
+
+        async def embed(texts, **kwargs):
+            self.assertNotIn("禁止发送", " ".join(texts))
+            return [[1.0, 0.0] if "设备保养" in t else [0.8, 0.6] for t in texts]
+
+        async def rerank(messages, **kwargs):
+            serialized = json.dumps(messages, ensure_ascii=False)
+            self.assertNotIn("禁止发送", serialized)
+            return dict(
+                content=json.dumps(
+                    {
+                        "items": [
+                            {"id": recalled, "score": 1.0},
+                            {"id": self.rid, "score": 0.2},
+                        ]
+                    }
+                ),
+                mock=False,
+                truncated=False,
+                finish_reason="stop",
+                model="controlled-ranker",
+                usage={"total_tokens": 40},
+                max_tokens=512,
+                retry_count=0,
+                retried=False,
+            )
+
+        cfg = dict(
+            embedding_enabled=True,
+            rerank_enabled=True,
+            embedding_model="controlled-vector",
+            model="controlled-ranker",
+        )
+        with patch(
+            "app.knowledge_service.ranking.configuration", return_value=cfg
+        ), patch(
+            "app.knowledge_service.ranking.embedding.embed_query",
+            AsyncMock(return_value=[1.0, 0.0]),
+        ), patch(
+            "app.knowledge_service.ranking.embedding.embed_texts", side_effect=embed
+        ), patch(
+            "app.knowledge_service.ranking.ai.chat_real_meta", side_effect=rerank
+        ):
+            result = self.query()
+        self.assertEqual(result["items"][0]["id"], recalled)
+        self.assertNotIn(hidden, [r["id"] for r in result["items"]])
+        self.assertEqual(result["budget"]["ranking"]["status"], "ranked")
+        self.assertLessEqual(result["budget"]["ranking"]["candidate_count"], 50)
+
+    def test_R11_template_preview_failure_is_retryable(self):
+        self.p = self.admin
+        payload = dict(key=self.key + "retry", name="可重试空间")
+        with patch(
+            "app.knowledge_service.template.KnowledgeSpace",
+            side_effect=RuntimeError("controlled registration failure"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.c.post("/api/knowledge-service/template", json=payload)
+        retry = self.c.post("/api/knowledge-service/template", json=payload)
+        self.assertEqual(retry.status_code, 200, retry.text)
+
+    async def test_R12_replay_diagnostics_safe_for_changed_source_permissions(self):
+        self.p = self.admin
+        original = self.did
+        self.did, _ = await self._document_revision(
+            text="财务制度😀\n财务值", group="unmatched", linked=False
+        )
+        other = self.obj(dict(title="财务规则", scope="保障", topic="维护"))
+        candidate = self.c.post(
+            "/api/ontologies/" + self.sid + "/claims",
+            json=dict(
+                object_id=other,
+                predicate_id=self.typ["fields"][1]["id"],
+                value="财务值",
+                evidence=[
+                    dict(document_id=self.did, quote="财务制度😀", start=0, end=5)
+                ],
+            ),
+        ).json()
+        self.c.post(
+            "/api/ontologies/claims/" + candidate["id"] + "/review",
+            json=dict(action="accept", expected_version=1),
+        ).raise_for_status()
+        self.did = original
+        self.p = self.reader
+        self.reader.perms["pages"].append("library")
+        run = self.query()
+        self.assertGreater(run["budget"]["scanned"], 1)
+        self.p = self._reviewer()
+        replay = self.c.get("/api/knowledge-service/runs/" + run["run_id"])
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertNotIn("scanned", replay.json()["budget"])
+        self.assertNotIn("generation", replay.json()["budget"])
+        self.p = self.reader
+        self.reader.perms["pages"].remove("library")
+        own_replay = self.c.get("/api/knowledge-service/runs/" + run["run_id"])
+        self.assertEqual(own_replay.status_code, 200, own_replay.text)
+        self.assertNotIn("scanned", own_replay.json()["budget"])
+
+    def test_R13_real_stable_field_rename_preserves_roles_alias_and_scope(self):
+        import copy
+
+        self.p = self.admin
+        self.obj(
+            dict(
+                preferred="维护规程",
+                aliases="保养手册",
+                definition="维护说明",
+                scope="保障",
+            ),
+            self.term,
+        )
+        schema = copy.deepcopy(
+            self.c.get("/api/ontologies/" + self.sid).json()["schema"]
+        )
+        changes = {
+            "scope": "audience",
+            "summary": "abstract",
+            "preferred": "label",
+            "aliases": "synonyms",
+            "definition": "meaning",
+        }
+        for typ in schema["types"]:
+            for field in typ["fields"]:
+                field["key"] = changes.get(field["key"], field["key"])
+        rev = self.c.post(
+            "/api/ontologies/" + self.sid + "/revisions", json={"schema": schema}
+        ).json()
+        plan = self.c.post(
+            f"/api/ontologies/{self.sid}/revisions/{rev['id']}/plan", json={}
+        ).json()
+        published = self.c.post("/api/ontologies/changes/" + plan["id"] + "/confirm")
+        self.assertEqual(published.status_code, 200, published.text)
+        self.p = self.reader
+        result = self.query(scope="保障")
+        self.assertEqual(result["status"], "supported")
+        item = next(i for i in result["items"] if i["id"] == self.rid)
+        self.assertEqual(item["summary"], "维护周期")
+        self.assertEqual(item["scope"], "保障")
+        self.assertEqual(item["data"]["audience"], "保障")
+        alias = self.c.post(
+            "/api/knowledge-service/query",
+            json=dict(ontology_id=self.sid, question="保养手册", scope="保障"),
+        ).json()
+        self.assertEqual(alias["status"], "supported")
+        self.assertEqual(alias["terms"][0]["preferred"], "维护规程")
+
+    async def test_R14_history_51st_row_marks_incomplete(self):
+        from app.ontology.models import ObjectHistory
+
+        async with SessionLocal() as db:
+            db.add_all(
+                [
+                    ObjectHistory(
+                        record_id=self.rid,
+                        version=i,
+                        revision_id=self.confirm.json()["revision_id"],
+                        data={"title": "历史维护规程"},
+                    )
+                    for i in range(2, 53)
+                ]
+            )
+            await db.commit()
+        item = self.c.get(f"/api/knowledge-service/items/{self.rid}").json()
+        self.assertEqual(len(item["history"]), 50)
+        self.assertTrue(item["incomplete"])
+
+    async def test_R15_revision_pagination_caps_public_results(self):
+        from app.knowledge_service.models import SourceRevision
+
+        async with SessionLocal() as db:
+            db.add_all(
+                [
+                    SourceRevision(
+                        ontology_id=self.sid,
+                        document_id=self.did,
+                        snapshot_id=self.rev["snapshot_id"],
+                        source_sha=self.rev["source_sha"],
+                        group_key="batch",
+                        label="修订" + str(i),
+                        scope="保障",
+                        topic="维护",
+                        effective_from="2020-01-01",
+                        actor="local",
+                    )
+                    for i in range(55)
+                ]
+            )
+            await db.commit()
+        page = self.c.get(
+            "/api/knowledge-service/sources",
+            params=dict(ontology_id=self.sid, limit=50, offset=0),
+        ).json()
+        self.assertEqual(len(page["items"]), 50)
+        self.assertTrue(page["incomplete"])
+        more = self.c.get(
+            "/api/knowledge-service/sources",
+            params=dict(ontology_id=self.sid, limit=50, offset=50),
+        ).json()
+        self.assertEqual(len(more["items"]), 6)
+
+    async def test_R16_item_fact_cap_and_truncation(self):
+        from app.ontology.models import Claim
+
+        async with SessionLocal() as db:
+            db.add_all(
+                [
+                    Claim(
+                        ontology_id=self.sid,
+                        revision_id=self.confirm.json()["revision_id"],
+                        type_id=self.typ["id"],
+                        object_id=self.rid,
+                        predicate_id=self.typ["fields"][1]["id"],
+                        value="三天",
+                        evidence_ids=self.claim["evidence_ids"],
+                        extractor="manual/1",
+                        status="accepted",
+                        version=2,
+                    )
+                    for _ in range(55)
+                ]
+            )
+            await db.commit()
+        item = self.c.get(f"/api/knowledge-service/items/{self.rid}").json()
+        self.assertLessEqual(len(item["facts"]), 50)
+        self.assertTrue(item["incomplete"])
+
+    def test_R17_scalar_identifiers_have_chinese_422(self):
+        c = TestClient(app, raise_server_exceptions=False)
+        for value in ({"bad": "id"}, ["bad"], True, 123):
+            r = c.post(
+                "/api/knowledge-service/feedback",
+                json=dict(
+                    run_id=value,
+                    category="回答不完整",
+                    message="核对",
+                    idempotency_key=uuid4().hex,
+                ),
+            )
+            self.assertEqual(r.status_code, 422, r.text)
+        self.p = self.admin
+        for value in ({"bad": "id"}, ["bad"], True, 123):
+            r = c.post(
+                "/api/knowledge-service/sources",
+                json={**self.source_payload(), "supersedes_id": value},
+            )
+            self.assertEqual(r.status_code, 422, r.text)
+
+    def test_R18_catalog_propagates_source_truncation(self):
+        with patch("app.knowledge_service.sources.SOURCE_BUDGET", 0):
+            catalog = self.c.get("/api/knowledge-service/catalog").json()
+        self.assertTrue(catalog["incomplete"])
+
+    def test_R19_ambiguity_keeps_scan_truncation(self):
+        self.p = self.admin
+        for name in ("维护规程", "培训规程", "保障规程"):
+            self.obj(dict(preferred=name, aliases="手册", scope="保障"), self.term)
+        self.p = self.reader
+        with patch("app.knowledge_service.retrieval.OBJECT_BUDGET", 2):
+            result = self.c.post(
+                "/api/knowledge-service/query",
+                json=dict(ontology_id=self.sid, question="手册"),
+            ).json()
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertTrue(result["incomplete"])
+
+    async def test_R20_hidden_predecessor_id_redacted_everywhere(self):
+        self.p = self.admin
+        _, replacement = await self._document_revision(
+            group="maintenance", supersedes=self.rev["id"]
+        )
+        async with SessionLocal() as db:
+            doc = await db.get(Document, self.did)
+            doc.deleted_at = __import__("datetime").datetime.now()
+            await db.commit()
+        self.p = self.reader
+        detail = self.c.get(
+            "/api/knowledge-service/sources/" + replacement["id"]
+        ).json()
+        self.assertIsNone(detail["supersedes_id"])
+        listing = self.c.get(
+            "/api/knowledge-service/sources", params={"ontology_id": self.sid}
+        ).json()
+        self.assertTrue(all(r["supersedes_id"] is None for r in listing["items"]))
+        self.assertTrue(
+            all(r["supersedes_id"] is None for r in self.query()["sources"])
+        )
+
+    def test_R21_conflict_sampling_has_bounded_memory(self):
+        from app.knowledge_service import retrieval
+
+        self.assertTrue(hasattr(retrieval, "conflict_sample"))
+        import tracemalloc
+
+        facts = [
+            dict(
+                id=str(i),
+                object_id=1,
+                predicate_id="p",
+                value=i,
+                target_id=None,
+                scope="保障",
+                scopes=["保障"],
+            )
+            for i in range(2000)
+        ]
+        tracemalloc.start()
+        pairs, found = retrieval.conflict_sample(facts)
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        self.assertTrue(found)
+        self.assertLessEqual(len(pairs), 50)
+        self.assertLess(peak, 8_000_000)
+
+    async def test_R22_alias_term_not_in_limited_items_still_revokes_run(self):
+        from app.ontology.models import RecordSource
+
+        self.p = self.admin
+        tid = self.obj(
+            dict(preferred="维护规程", aliases="保养手册", scope="保障"), self.term
+        )
+        async with SessionLocal() as db:
+            doc = Document(
+                filename="词表依据.txt", extracted_text="词表依据", extract_status="ok"
+            )
+            db.add(doc)
+            await db.flush()
+            db.add(RecordSource(record_id=tid, document_id=doc.id))
+            db.add(DocumentLink(record_id=tid, document_id=doc.id))
+            await db.commit()
+            did = doc.id
+        self.p = self.reader
+        run = self.c.post(
+            "/api/knowledge-service/query",
+            json=dict(ontology_id=self.sid, question="保养手册", limit=1),
+        ).json()
+        self.assertNotIn(tid, [i["id"] for i in run["items"]])
+        async with SessionLocal() as db:
+            doc = await db.get(Document, did)
+            doc.deleted_at = __import__("datetime").datetime.now()
+            await db.commit()
+        self.assertIn(
+            self.c.get("/api/knowledge-service/runs/" + run["run_id"]).status_code,
+            (403, 404),
+        )
+
+    async def test_R23_relation_not_in_limited_facts_still_revokes_feedback(self):
+        from app.knowledge_service.models import SourceRevision
+        from datetime import datetime
+
+        self.p = self.admin
+        self.schema_relation = self.c.get("/api/ontologies/" + self.sid).json()[
+            "schema"
+        ]["relations"][0]["id"]
+        original = self.did
+        edges = []
+        for i in range(3):
+            self.did, _ = await self._document_revision(
+                text="维护规程😀\n关系依据", group="edge" + str(i)
+            )
+            target = self.obj(
+                dict(title="相关规范" + str(i), scope="保障", topic="维护")
+            )
+            claim = self.add_claim(None, target=target)
+            edges.append((claim["id"], self.did))
+        self.did = original
+        async with SessionLocal() as db:
+            row = await db.get(SourceRevision, self.rev["id"])
+            row.recorded_at = datetime(2020, 1, 1)
+            await db.commit()
+        self.p = self.reader
+        run = self.query(depth=1, limit=1)
+        f = self.c.post(
+            "/api/knowledge-service/feedback",
+            json=dict(
+                run_id=run["run_id"],
+                category="回答不完整",
+                message="关系需要核对",
+                idempotency_key=uuid4().hex,
+            ),
+        ).json()
+        selected = {item["id"] for item in run["facts"]}
+        _, did = next(edge for edge in edges if edge[0] not in selected)
+        async with SessionLocal() as db:
+            doc = await db.get(Document, did)
+            doc.deleted_at = __import__("datetime").datetime.now()
+            await db.commit()
+        self.assertIn(
+            self.c.get("/api/knowledge-service/feedback/" + f["id"]).status_code,
+            (403, 404),
+        )
+
+    async def test_R24_item_only_feedback_rechecks_original_documentary_sources(self):
+        f = self.c.post(
+            "/api/knowledge-service/feedback",
+            json=dict(
+                record_id=self.rid,
+                record_version=1,
+                category="引用不正确",
+                message="条目原文问题",
+                idempotency_key=uuid4().hex,
+            ),
+        )
+        self.assertEqual(f.status_code, 200, f.text)
+        async with SessionLocal() as db:
+            doc = await db.get(Document, self.did)
+            doc.deleted_at = __import__("datetime").datetime.now()
+            await db.commit()
+        self.assertIn(
+            self.c.get("/api/knowledge-service/feedback/" + f.json()["id"]).status_code,
+            (403, 404),
+        )
+
+    def test_R25_foreign_rerank_id_cannot_enter_retrieval(self):
+        self.reader.perms["features"] = {"ai": True}
+        import json
+
+        meta = dict(
+            content=json.dumps({"items": [{"id": 999999, "score": 1.0}]}),
+            mock=False,
+            truncated=False,
+            finish_reason="stop",
+        )
+        cfg = dict(
+            embedding_enabled=True,
+            rerank_enabled=True,
+            embedding_model="controlled",
+            model="controlled",
+        )
+        with patch(
+            "app.knowledge_service.ranking.configuration", return_value=cfg
+        ), patch(
+            "app.knowledge_service.ranking.embedding.embed_query",
+            AsyncMock(return_value=[1.0, 0.0]),
+        ), patch(
+            "app.knowledge_service.ranking.embedding.embed_texts",
+            AsyncMock(return_value=[[1.0, 0.0]]),
+        ), patch(
+            "app.knowledge_service.ranking.ai.chat_real_meta",
+            AsyncMock(return_value=meta),
+        ):
+            result = self.query()
+        self.assertEqual(result["budget"]["ranking"]["status"], "error")
+        self.assertNotIn(999999, [item["id"] for item in result["items"]])
+
+    async def test_R26_vector_candidate_and_text_budget_is_hard(self):
+        from app.knowledge_service import ranking
+
+        self.reader.perms["features"] = {"ai": True}
+        candidates = [dict(id=i + 1, text="测试内容" * 500) for i in range(51)]
+
+        async def embed(texts, **kwargs):
+            self.assertEqual(len(texts), 50)
+            self.assertTrue(all(len(text) <= 512 for text in texts))
+            return [[1.0, 0.0] for _ in texts]
+
+        budget = {}
+        with patch(
+            "app.knowledge_service.ranking.configuration",
+            return_value=dict(embedding_enabled=True, rerank_enabled=False),
+        ), patch(
+            "app.knowledge_service.ranking.embedding.embed_query",
+            AsyncMock(return_value=[1.0, 0.0]),
+        ), patch(
+            "app.knowledge_service.ranking.embedding.embed_texts", side_effect=embed
+        ):
+            _, _, deps = await ranking.rank(
+                self.reader, "维护问题", candidates, set(), budget
+            )
+        self.assertEqual(len(deps), 50)
+        self.assertTrue(budget["ranking"]["truncated"])
+        self.assertLessEqual(budget["ranking"]["input_characters"], 32000)
+
+    async def test_R27_generation_input_budget_blocks_oversized_payload(self):
+        from app.knowledge_service import answers
+
+        self.reader.perms["features"] = {"ai": True}
+        result = self.query()
+        result["citations"] = [
+            dict(id="synthetic-" + str(i), quote="证据" * 4096, start=0, end=8192)
+            for i in range(5)
+        ]
+        request = dict(question="维护问题", generate=True)
+        model = AsyncMock()
+        with patch(
+            "app.knowledge_service.answers.model_config",
+            return_value=dict(
+                enabled=True,
+                api_key="test",
+                base_url="https://invalid",
+                model="controlled",
+            ),
+        ), patch("app.knowledge_service.answers.ai.chat_real_meta", model):
+            await answers.generate(self.reader, request, result)
+        self.assertEqual(model.await_count, 0)
+        self.assertEqual(result["generation"], "error")

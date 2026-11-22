@@ -32,6 +32,7 @@ router = APIRouter(
 async def catalog(db: DB, p: User):
     spaces = []
     can_manage_sources = False
+    truncated = False
     registrations = list(
         await db.scalars(
             select(KnowledgeSpace).order_by(KnowledgeSpace.ontology_id).limit(201)
@@ -47,6 +48,12 @@ async def catalog(db: DB, p: User):
                 continue
             raise
         revisions = await sources.visible(db, p, ont.id)
+        truncated = (
+            truncated
+            or revisions.incomplete
+            or len({r.scope for r in revisions if r.scope}) > 50
+            or len({r.topic for r in revisions if r.topic}) > 50
+        )
         write = p.has_feature("file_write") and all(
             p.can_model(t["key"], "write") for t in schema["types"]
         )
@@ -56,8 +63,11 @@ async def catalog(db: DB, p: User):
                 id=ont.id,
                 name=ont.name,
                 types=[dict(id=t["id"], key=t["key"], name=t["name"]) for t in visible],
-                scopes=sorted({r.scope for r in revisions if r.scope}),
-                topics=sorted({r.topic for r in revisions if r.topic}),
+                scopes=sorted({r.scope for r in revisions if r.scope})[:50],
+                topics=sorted({r.topic for r in revisions if r.topic})[:50],
+                incomplete=revisions.incomplete
+                or len({r.scope for r in revisions if r.scope}) > 50
+                or len({r.topic for r in revisions if r.topic}) > 50,
                 can_manage_sources=write,
             )
         )
@@ -90,13 +100,17 @@ async def catalog(db: DB, p: User):
                 )
             )
     return dict(
-        spaces=spaces,
+        spaces=spaces[:50],
         can_manage=policy.manager(p),
         can_review=policy.reviewer(p),
         can_manage_sources=can_manage_sources,
-        source_candidates=candidates,
-        source_candidates_incomplete=candidates_incomplete,
-        incomplete=len(registrations) > 200,
+        source_candidates=candidates[:50],
+        source_candidates_incomplete=candidates_incomplete or len(candidates) > 50,
+        incomplete=truncated
+        or len(registrations) > 200
+        or len(spaces) > 50
+        or candidates_incomplete
+        or len(candidates) > 50,
     )
 
 
@@ -121,12 +135,14 @@ async def create_source(payload: dict, db: DB, p: User):
 
 
 @router.get("/sources")
-async def list_sources(ontology_id: str, db: DB, p: User):
-    rows = await sources.visible(db, p, ontology_id)
-    return dict(
-        items=[schemas.row(r) for r in rows[:2000]],
-        incomplete=getattr(rows, "incomplete", False),
-    )
+async def list_sources(
+    ontology_id: str,
+    db: DB,
+    p: User,
+    limit: int = Query(50, ge=1, le=50),
+    offset: int = Query(0, ge=0, le=2000),
+):
+    return await sources.page(db, p, ontology_id, limit, offset)
 
 
 @router.get("/sources/{revision_id}")

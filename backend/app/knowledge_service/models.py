@@ -21,6 +21,7 @@ class KnowledgeSpace(Base):
     item_type_id = Column(String, nullable=False)
     term_type_id = Column(String, nullable=False)
     change_id = Column(String, nullable=False)
+    field_roles = Column(JSON, nullable=False, default=dict)
 
 
 class SourceRevision(Base):
@@ -36,7 +37,7 @@ class SourceRevision(Base):
     topic = Column(String, nullable=False, default="")
     effective_from = Column(String)
     effective_to = Column(String)
-    supersedes_id = Column(ForeignKey("knowledge_source_revision.id"))
+    supersedes_id = Column(ForeignKey("knowledge_source_revision.id"), index=True)
     actor = Column(String, nullable=False)
     recorded_at = Column(DateTime, server_default=func.now())
 
@@ -65,6 +66,7 @@ class Feedback(Base):
     run_id = Column(ForeignKey("knowledge_query_run.id"))
     record_id = Column(Integer)
     record_version = Column(Integer)
+    references = Column(JSON, nullable=False, default=dict)
     category = Column(String, nullable=False)
     message = Column(Text, nullable=False)
     idempotency_key = Column(String, nullable=False)

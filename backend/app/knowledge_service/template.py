@@ -80,13 +80,17 @@ async def preview(db, p, payload):
     db.add(ont)
     await db.flush()
     rev = await registry.save_draft(db, p, ont, definition(key)["schema"])
-    change = await changes.plan(db, p, ont, rev, {})
+    change = await changes.plan(db, p, ont, rev, {}, commit=False)
     db.add(
         KnowledgeSpace(
             ontology_id=ont.id,
             item_type_id=rev.schema["types"][0]["id"],
             term_type_id=rev.schema["types"][1]["id"],
             change_id=change.id,
+            field_roles={
+                t["id"]: {f["key"]: f["id"] for f in t["fields"]}
+                for t in rev.schema["types"]
+            },
         )
     )
     await db.commit()

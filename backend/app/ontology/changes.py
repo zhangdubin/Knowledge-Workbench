@@ -12,7 +12,7 @@ def actor(principal):
     return str(principal.id) if principal.id is not None else principal.username
 
 
-async def plan(db, principal, space, rev, migration):
+async def plan(db, principal, space, rev, migration, *, commit=True):
     require_schema(principal, await baseline(db, space), write=True)
     require_schema(principal, rev.schema, write=True)
     impact, _ = await assess(db, space, rev, migration)
@@ -30,7 +30,10 @@ async def plan(db, principal, space, rev, migration):
         expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1),
     )
     db.add(change)
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     return change
 
 

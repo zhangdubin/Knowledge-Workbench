@@ -28,6 +28,7 @@ async def generate(p, request, result):
     result["model_version"] = cfg.get("model")
     budget = dict(
         max_tokens_ceiling=1200,
+        input_char_limit=32000,
         max_retries=0,
         max_tokens=None,
         retry_count=0,
@@ -53,6 +54,11 @@ async def generate(p, request, result):
             ),
         ),
     ]
+    budget["input_characters"] = sum(len(m["content"]) for m in messages)
+    if budget["input_characters"] > budget["input_char_limit"]:
+        result.update(answer=None, generation="error")
+        result["reasons"].append("本次证据超过生成输入预算，请缩小筛选范围。")
+        return
     try:
         meta = await ai.chat_real_meta(
             messages, max_tokens=1200, max_tokens_ceiling=1200, max_retries=0

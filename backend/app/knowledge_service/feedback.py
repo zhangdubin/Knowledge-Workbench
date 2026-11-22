@@ -26,59 +26,126 @@ CATEGORIES = {
 }
 
 
-async def read_run(db, p, run_id):
-    run = await db.get(QueryRun, run_id)
-    if not run or (run.actor != actor(p) and not policy.reviewer(p)):
-        raise HTTPException(404, "查询运行不存在")
-    await policy.space(db, p, run.ontology_id)
-    revisions = await sources.visible(db, p, run.ontology_id)
-    # Revalidate the entire original selection; never return cached bodies.
-    refs = run.references
-    for rid in refs.get("revision_ids", []):
-        rev = await db.get(SourceRevision, rid)
-        if not rev:
-            raise HTTPException(404, "关联资料修订不可用")
-        await sources.readable(db, p, rev)
+def safe_budget(budget):
+    # Historical counts/usage may concern candidates outside a new actor's
+    # permission set. Replay exposes hard limits, never old observed counts.
+    safe = {
+        k: v
+        for k, v in budget.items()
+        if k
+        in ("scan_limit", "object_limit", "source_limit", "term_limit", "result_limit")
+    }
+    for name in ("generation", "ranking"):
+        if name in budget:
+            limits = {
+                k: v
+                for k, v in budget[name].items()
+                if k
+                in (
+                    "candidate_limit",
+                    "input_char_limit",
+                    "rerank_limit",
+                    "max_tokens_ceiling",
+                    "max_retries",
+                )
+            }
+            # Token usage is intentionally omitted from the public replay.
+            if name == "ranking" and limits:
+                safe[name] = limits
+    return safe
+
+
+async def revalidate(db, p, ontology_id, refs, request):
+    _, _, schema, _ = await policy.space(db, p, ontology_id)
+    if refs.get("version") != 2:
+        raise HTTPException(409, "旧运行缺少完整授权追溯，请重新查询")
+    policy.require_types(p, schema, refs.get("type_ids", []))
+    revisions = await sources.selected(db, p, ontology_id, refs.get("revision_ids", []))
     items = []
+    by_id = {}
     for rid in refs.get("record_ids", []):
-        obj, _ = await retrieval.object_scope(db, p, rid, run.ontology_id)
-        items.append(obj)
+        obj, _ = await retrieval.object_scope(db, p, rid, ontology_id)
+        by_id[rid] = obj
+        items.append(retrieval.public_object(obj))
     facts = []
     for cid in refs.get("claim_ids", []):
         claim = await db.get(Claim, cid)
-        if not claim or claim.ontology_id != run.ontology_id:
+        if not claim or claim.ontology_id != ontology_id:
             raise HTTPException(404, "关联知识事实不可用")
-        f = await retrieval.fact(db, p, claim, revisions, run.request["as_of"])
+        pinned = refs.get("claim_revisions", {}).get(cid)
+        if not isinstance(pinned, dict) or set(pinned) != set(claim.evidence_ids):
+            raise HTTPException(404, "原查询证据关联已不可用")
+        f = await retrieval.fact(
+            db, p, claim, revisions, request["as_of"], request=request, pinned=pinned
+        )
         if not f:
-            raise HTTPException(404, "关联知识依据已不适用")
+            raise HTTPException(404, "原查询知识依据已不适用")
+        if claim.target_id is not None:
+            for rid in (claim.object_id, claim.target_id):
+                obj = by_id.get(rid)
+                if not obj or (
+                    request.get("type_id") and obj["type_id"] != request["type_id"]
+                ):
+                    raise HTTPException(404, "原查询关系超出模型范围")
+                if not retrieval.matches(obj["_semantic"], request, allow_unknown=True):
+                    raise HTTPException(404, "原查询关系已超出适用范围")
         facts.append(f)
-    citations = {e["id"]: e for f in facts for e in f["evidence"]}
-    return dict(
-        run_id=run.id,
-        id=run.id,
-        version=1,
-        actor=run.actor,
-        ontology_id=run.ontology_id,
-        revision_id=run.revision_id,
-        request=run.request,
-        status=run.status,
-        generation=run.generation,
-        answer=None,
-        items=items,
-        facts=facts,
-        citations=list(citations.values()),
-        sources=[
-            schemas.row(r) for r in revisions if r.id in refs.get("revision_ids", [])
-        ],
-        prompt_version=run.prompt_version,
-        model_version=run.model_version,
-        elapsed_ms=run.elapsed_ms,
-        budget=run.budget,
-        created_at=run.created_at,
-    )
+    return items, facts, revisions
+
+
+async def read_run(db, p, run_id):
+    run_id = schemas.identifier(run_id, "查询运行")
+    key = (*sources.cache_key(p), run_id)
+    cache = db.info.setdefault("knowledge_run_cache", {})
+    if key in cache:
+        result = cache[key]
+        if isinstance(result, HTTPException):
+            raise result
+        return result
+    try:
+        run = await db.get(QueryRun, run_id)
+        if not run or (run.actor != actor(p) and not policy.reviewer(p)):
+            raise HTTPException(404, "查询运行不存在")
+        items, facts, revisions = await revalidate(
+            db, p, run.ontology_id, run.references, run.request
+        )
+        visible_facts, citations, truncated = retrieval.bounded_facts(facts, 50)
+        result = dict(
+            run_id=run.id,
+            id=run.id,
+            version=1,
+            actor=run.actor,
+            ontology_id=run.ontology_id,
+            revision_id=run.revision_id,
+            request=run.request,
+            status=run.status,
+            generation=run.generation,
+            answer=None,
+            items=items[:50],
+            facts=visible_facts,
+            citations=list(citations.values()),
+            sources=[await sources.public(db, p, r) for r in revisions[:50]],
+            prompt_version=run.prompt_version,
+            model_version=run.model_version,
+            elapsed_ms=run.elapsed_ms,
+            budget=safe_budget(run.budget),
+            created_at=run.created_at,
+            incomplete=truncated or len(items) > 50 or len(revisions) > 50,
+        )
+        cache[key] = result
+        return result
+    except HTTPException as error:
+        cache[key] = error
+        raise
 
 
 async def target(db, p, payload):
+    if "run_id" in payload:
+        schemas.identifier(payload["run_id"], "查询运行", optional=True)
+    if "record_id" in payload:
+        schemas.identifier(
+            payload["record_id"], "知识条目", optional=True, integer=True
+        )
     if not payload.get("run_id") and not payload.get("record_id"):
         raise HTTPException(422, "请关联查询运行或具体知识条目版本")
     run = None
@@ -101,6 +168,7 @@ async def target(db, p, payload):
 
 
 async def read(db, p, feedback_id):
+    feedback_id = schemas.identifier(feedback_id, "问题反馈")
     f = await db.get(Feedback, feedback_id)
     if not f or (f.actor != actor(p) and not policy.reviewer(p)):
         raise HTTPException(404, "问题反馈不存在")
@@ -109,7 +177,13 @@ async def read(db, p, feedback_id):
     if f.run_id:
         await read_run(db, p, f.run_id)
     if f.record_id:
-        await retrieval.object_scope(db, p, f.record_id)
+        obj, oid = await retrieval.object_scope(db, p, f.record_id)
+        if f.references:
+            await revalidate(
+                db, p, oid, f.references["dependencies"], f.references["request"]
+            )
+        elif not f.run_id:
+            raise HTTPException(409, "旧反馈缺少来源依赖，请重新提交")
     return f
 
 
@@ -143,11 +217,25 @@ async def create(db, p, payload):
         await read(db, p, old.id)
         return schemas.row(old)
     await target(db, p, payload)
+    item_references = {}
+    if payload.get("record_id"):
+        obj, oid = await retrieval.object_scope(db, p, payload["record_id"])
+        detail = await retrieval.detail(db, p, payload["record_id"])
+        rendered = {f["id"]: f for f in detail["facts"]}
+        from datetime import date
+
+        item_references = dict(
+            request=dict(as_of=date.today().isoformat()),
+            dependencies=retrieval.references(
+                {obj["type_id"]}, {obj["id"]}, set(rendered), rendered
+            ),
+        )
     f = Feedback(
         actor=actor(p),
         run_id=payload.get("run_id"),
         record_id=payload.get("record_id"),
         record_version=payload.get("record_version"),
+        references=item_references,
         category=category,
         message=message,
         idempotency_key=key,
@@ -207,7 +295,7 @@ async def resolve(db, p, feedback_id, payload):
             resource="knowledge_feedback",
             resource_id=f.id,
             status=200,
-            detail=dict(version=f.version, resolution=resolution),
+            detail=dict(version=f.version, status=f.status),
         )
     )
     await db.commit()
@@ -218,14 +306,31 @@ async def listing(db, p, limit, offset):
     statement = select(Feedback).order_by(Feedback.created_at.desc(), Feedback.id)
     if not policy.reviewer(p):
         statement = statement.where(Feedback.actor == actor(p))
-    rows = list(await db.scalars(statement.limit(2001)))
+    stream = await db.stream_scalars(statement.limit(2001))
     allowed = []
-    for f in rows[:2000]:
-        try:
-            await read(db, p, f.id)
-        except HTTPException as e:
-            if e.status_code in (403, 404):
-                continue
-            raise
-        allowed.append(schemas.row(f))
-    return dict(items=allowed[offset : offset + limit], incomplete=len(rows) > 2000)
+    scanned = 0
+    exhausted = False
+    try:
+        async for row in stream:
+            scanned += 1
+            if scanned > 2000:
+                exhausted = True
+                break
+            try:
+                await read(db, p, row.id)
+            except HTTPException as error:
+                if error.status_code in (403, 404, 409):
+                    continue
+                raise
+            allowed.append(schemas.row(row))
+            if len(allowed) >= offset + limit:
+                break
+    finally:
+        await stream.close()
+    # A full page offers the next offset without a hidden-row total/lookahead.
+    items = allowed[offset : offset + limit]
+    return dict(
+        items=items,
+        incomplete=exhausted,
+        next_offset=offset + limit if len(items) == limit else None,
+    )

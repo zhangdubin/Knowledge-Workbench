@@ -53,3 +53,15 @@ def query(payload):
 
 def row(row):
     return {c.name: getattr(row, c.name) for c in row.__table__.columns}
+
+
+def identifier(value, label, *, optional=False, integer=False):
+    if value is None and optional:
+        return None
+    if integer:
+        if type(value) is not int or value < 1:
+            raise HTTPException(422, f"{label}必须为有效的整数标识")
+        return value
+    if not isinstance(value, str) or not value.strip() or len(value) > 120:
+        raise HTTPException(422, f"{label}必须为有效的文本标识")
+    return value.strip()

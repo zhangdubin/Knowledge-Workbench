@@ -254,7 +254,6 @@ async def search(db, p, request):
     exhausted = exhausted or len(candidates) > SCAN_BUDGET
     rendered = {}
     for claim in candidates[:SCAN_BUDGET]:
-        result["budget"]["scanned"] += 1
         if claim.object_id not in records:
             continue
         try:
@@ -265,6 +264,9 @@ async def search(db, p, request):
             raise
         if not f:
             continue
+        # Public diagnostics count only visible, applicable facts. The SQL limit
+        # still caps all internal candidates, including denied-source rows.
+        result["budget"]["scanned"] += 1
         rendered[claim.id] = f
         if any(
             n in normalize(json.dumps(f["value"], ensure_ascii=False))

@@ -440,6 +440,28 @@ class KnowledgeServiceTest(unittest.IsolatedAsyncioTestCase):
             "insufficient",
         )
 
+        self.p = self.admin
+        preview = self.c.post(
+            "/api/knowledge-service/template",
+            json=dict(key=self.key + "empty", name="空知识空间"),
+        ).json()
+        self.c.post(
+            "/api/knowledge-service/template/" + preview["change_id"] + "/confirm",
+            json={},
+        ).raise_for_status()
+        for typ in preview["preview"]["schema"]["types"]:
+            self.reader.perms["models"][typ["key"]] = "read"
+        self.p = self.reader
+        response = self.c.post(
+            "/api/knowledge-service/query",
+            json=dict(ontology_id=preview["space_id"], question="维护规程"),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual(result["status"], "insufficient")
+        for name in ("items", "facts", "citations", "sources"):
+            self.assertEqual(result[name], [])
+
     def test_I02_no_evidence(self):
         self.p = self.admin
         self.obj(dict(title="没有依据", scope="保障"))
@@ -979,3 +1001,12 @@ class KnowledgeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.post.await_count, 1)
         self.assertFalse(meta["retried"])
         self.assertEqual(meta["finish_reason"], "mock_fallback")
+
+    async def test_S28_query_budget_does_not_count_hidden_claims(self):
+        async with SessionLocal() as db:
+            document = await db.get(Document, self.did)
+            document.deleted_at = __import__("datetime").datetime.now()
+            await db.commit()
+        result = self.query()
+        self.assertEqual(result["facts"], [])
+        self.assertEqual(result["budget"]["scanned"], 0)

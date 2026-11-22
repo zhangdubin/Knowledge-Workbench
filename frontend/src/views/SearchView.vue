@@ -10,19 +10,19 @@
         placeholder="输入关键字、回车搜索…"
         size="large"
         clearable
-        @keyup.enter="search"
-        @clear="clearSearch"
+        @keyup.enter="submitSearch"
+        @clear="submitSearch"
         class="hero-search"
       >
         <template #prefix><el-icon><Search /></el-icon></template>
         <template #append>
-          <el-button type="primary" @click="search">搜索</el-button>
+          <el-button type="primary" @click="submitSearch">搜索</el-button>
         </template>
       </el-input>
     </PageTitle>
 
     <!-- 搜索建议 -->
-    <div v-if="!kw && !totalCount && !loading" class="card suggest-card">
+    <div v-if="!submittedKeyword && !totalCount && !loading && !searchError" class="card suggest-card">
       <div class="card-title">
         <span class="card-title-text">
           <el-icon class="title-ico"><InfoFilled /></el-icon>你可以试试搜索
@@ -40,7 +40,7 @@
           class="suggest-chip"
           :data-kind="s.kind"
           type="button"
-          @click="kw = s.text; search()"
+          @click="kw = s.text; submitSearch()"
         >
           {{ s.text }}
         </button>
@@ -70,9 +70,9 @@
 
     <!-- 无结果 -->
     <EmptyState
-      v-else-if="kw && !totalCount"
+      v-else-if="submittedKeyword && !totalCount"
       icon="Search"
-      :title="`没有找到与「${kw}」相关的结果`"
+      :title="`没有找到与「${submittedKeyword}」相关的结果`"
       description="试试用更短的关键字，或检查拼写"
       variant="plain"
     >
@@ -84,7 +84,7 @@
             class="suggest-chip"
             :data-kind="s.kind"
             type="button"
-            @click="kw = s.text; search()"
+            @click="kw = s.text; submitSearch()"
           >
             {{ s.text }}
           </button>
@@ -98,7 +98,7 @@
         共 <strong>{{ totalCount }}</strong> 条结果 ·
         记录 <strong>{{ recordResults.length }}</strong> ·
         文件 <strong>{{ docResults.length }}</strong> ·
-        关键字 <strong>{{ kw }}</strong>
+        关键字 <strong>{{ submittedKeyword }}</strong>
         <span v-if="elapsedMs" class="result-elapsed">· 用时 {{ elapsedMs }} ms</span>
       </div>
 
@@ -196,7 +196,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 // 直接用 axios 实例（而不是 Api.search 包装）：
 // 只有拿到实例才能挂 AbortController，
 // 换关键词时把上一个请求取消掉。
@@ -204,13 +204,13 @@ import api from '../api'
 import { formatSize } from '../utils/format'
 import { entityIcon } from '../utils/icons'
 import { highlightHtml } from '../utils/md'
-import { buildSearchNotice, createSearchRequest } from '../utils/searchRequest'
+import { buildSearchNotice, createSearchRequest, searchLocation } from '../utils/searchRequest'
 import PageTitle from '../components/PageTitle.vue'
 import EmptyState from '../components/EmptyState.vue'
 
-const route = useRoute()
 const router = useRouter()
 const kw = ref('')
+const submittedKeyword = ref('')
 const recordResults = ref([])
 const docResults = ref([])
 const loading = ref(false)
@@ -300,7 +300,7 @@ function go(r) {
  * 真正的实现在 utils/md.js 的 highlightHtml（抽出去是为了能写单测）。
  */
 function highlight(text) {
-  return highlightHtml(text, kw.value)
+  return highlightHtml(text, submittedKeyword.value)
 }
 
 /**
@@ -334,8 +334,11 @@ function clearSearch() {
   resetResults()
 }
 
-async function search() {
-  const key = kw.value.trim()
+function submitSearch() {
+  router.push(searchLocation(router.currentRoute.value, kw.value, { replace: true }))
+}
+
+async function search(key) {
   if (!key) {
     clearSearch()
     return
@@ -393,10 +396,13 @@ function openDoc(d) {
   router.push({ path: '/library', query: { doc: String(d.id) } })
 }
 
-watch(() => route.query.kw, value => {
+watch(router.currentRoute, route => {
   if (route.name !== 'search') return
-  kw.value = typeof value === 'string' ? value.trim() : ''
-  search()
+  const value = route.query.kw
+  const keyword = typeof value === 'string' ? value.trim() : ''
+  kw.value = keyword
+  submittedKeyword.value = keyword
+  search(keyword)
 }, { immediate: true })
 
 onBeforeUnmount(() => request.cancel())

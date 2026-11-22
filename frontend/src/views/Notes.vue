@@ -44,7 +44,7 @@
               >
                 <el-icon><FolderOpened /></el-icon>分组
               </button>
-              <h2 class="notes-head-title">知识库</h2>
+              <h2 class="notes-head-title">知识笔记</h2>
               <span class="notes-head-count">{{ filterHint || `共 ${data.total || 0} 条笔记` }}</span>
             </div>
             <div class="notes-head-actions">
@@ -67,7 +67,7 @@
 
           <!-- 打印页眉：屏幕上不显示，纸上要看得清「打印的是什么、什么时候打的」 -->
           <div class="print-title-bar" data-print-only>
-            <span>知识库 · {{ targetGroupName || '全部笔记' }}</span>
+            <span>知识笔记 · {{ targetGroupName || '全部笔记' }}</span>
             <span class="print-title-bar-time" data-print-time></span>
           </div>
 

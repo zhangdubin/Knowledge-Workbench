@@ -72,6 +72,25 @@ export function createSearchRequest() {
   }
 }
 
+/** 页面提交和命令搜索共用可重放的关键词地址。 */
+export function searchLocation(route, text, { replace = false } = {}) {
+  const onSearchPage = route.name === 'search'
+  const keyword = text.trim() || undefined
+  const query = onSearchPage ? { ...route.query } : {}
+  if (keyword) query.kw = keyword
+  else delete query.kw
+
+  // 名称和 URL 都相同的搜索也需要通知搜索页，恢复用户尚未提交的编辑。
+  const repeat = onSearchPage && route.query.kw === keyword
+  return {
+    name: 'search',
+    query,
+    hash: onSearchPage ? route.hash : '',
+    force: repeat,
+    replace: replace || repeat,
+  }
+}
+
 /**
  * 把后端返回的「降级 / 截断」说明转成一句人话
  *

@@ -29,7 +29,7 @@ const routes = [
       { path: 'graph', name: 'graph', component: () => import('../views/GraphView.vue'), meta: { title: '关联图谱', perm: 'graph' } },
       { path: 'search', name: 'search', component: () => import('../views/SearchView.vue'), meta: { title: '全局搜索', perm: 'search' } },
       // 知识库（笔记）
-      { path: 'notes', name: 'notes', component: () => import('../views/Notes.vue'), meta: { title: '知识库', perm: 'notes' } },
+      { path: 'notes', name: 'notes', component: () => import('../views/Notes.vue'), meta: { title: '知识笔记', perm: 'notes' } },
       { path: 'notes/:id', name: 'note-detail', component: () => import('../views/NoteDetail.vue'), meta: { title: '笔记详情', perm: 'notes' } },
       { path: 'knowledge/graph', name: 'knowledge-graph', component: () => import('../views/KnowledgeGraph.vue'), meta: { title: '知识图谱', perm: 'knowledge_graph' } },
       // 养料 DNA：喂给模型的资料的体检报告与基因图谱（只读）
@@ -37,7 +37,7 @@ const routes = [
       // 养料库：DNA 基因层（吸收/蒸馏/离线/打包），权限跟着 DNA 走
       { path: 'dna-library', name: 'dna-library', component: () => import('../views/DnaLibraryView.vue'), meta: { title: '养料库', perm: 'dna' } },
       // 数据中心
-      { path: 'library', name: 'library', component: () => import('../views/Library.vue'), meta: { title: '数据中心', perm: 'library' } },
+      { path: 'library', name: 'library', component: () => import('../views/Library.vue'), meta: { title: '资料库', perm: 'library' } },
       // 软件开发：项目列表 / 项目工作台 / 开发设置
       // settings 必须排在 :id 前面 —— 否则 /dev/settings 会被当成项目 id
       { path: 'dev', name: 'dev', component: () => import('../views/dev/DevProjects.vue'), meta: { title: '软件开发', perm: 'dev' } },

@@ -66,6 +66,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { searchWorkspaceCommands } from '../../utils/workspaceNavigation'
+import { searchLocation } from '../../utils/searchRequest'
 
 const open = defineModel({ type: Boolean, required: true })
 const props = defineProps({
@@ -87,7 +88,7 @@ const options = computed(() => {
   if (term.value && props.canSearch) {
     entries.unshift({
       key: 'content-search',
-      to: { name: 'search', query: { kw: term.value } },
+      to: searchLocation(router.currentRoute.value, term.value),
       icon: 'Search',
       label: `搜索内容“${term.value}”`,
     })

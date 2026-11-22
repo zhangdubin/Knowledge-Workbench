@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <PageTitle
-      title="数据中心"
+      title="资料库"
       subtitle="文件原文外置存储 · 自动抽取正文并建立全文与向量检索索引"
       icon-key="Coin"
     >
@@ -26,7 +26,7 @@
 
     <!-- 打印页眉：屏幕上不显示，纸上要看得清「这是什么、什么时候打的」 -->
     <div class="print-title-bar" data-print-only>
-      <span>数据中心 · {{ activeTabName }}</span>
+      <span>资料库 · {{ activeTabName }}</span>
       <span class="print-title-bar-time" data-print-time></span>
     </div>
 

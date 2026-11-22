@@ -81,6 +81,23 @@ test('custom destinations are deduplicated and stay discoverable beyond three sh
   assert.ok(!allPaths(navigation).includes('/mine/'))
 })
 
+test('app shortcut identity preserves key case and deduplicates static casing and trailing slashes', async () => {
+  const { getWorkspaceNavigation, searchWorkspaceCommands } = await loadWorkspace()
+  const navigation = getWorkspaceNavigation({
+    canPage: permission => permission === 'apps',
+    canFeature: () => false,
+    customItems: [
+      { path: '/apps/CRM', label: 'CRM 团队' },
+      { path: '/apps/crm', label: 'CRM 业务' },
+      { path: '/APPS/CRM/', label: 'CRM 团队的重复项' },
+    ],
+  })
+  const expected = ['/apps/CRM', '/apps/crm']
+  assert.deepEqual(navigation.shortcuts.map(item => item.path), expected)
+  assert.deepEqual(searchWorkspaceCommands(navigation.groups, '/apps/crm').map(item => item.path), expected)
+  assert.equal(permForPath('/APPS/CRM/'), 'apps')
+})
+
 test('command search matches trimmed Chinese, case-insensitive paths and descriptions', async () => {
   const { getWorkspaceNavigation, searchWorkspaceCommands } = await loadWorkspace()
   const { groups } = getWorkspaceNavigation({ canPage: allowAll, canFeature: allowAll })

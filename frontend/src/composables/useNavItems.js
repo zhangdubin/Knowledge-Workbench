@@ -46,9 +46,23 @@ export function permForPath(path) {
   return match ? PATH_PERM[match] : ''
 }
 
+// Keep the route parameter's case while matching Vue Router's static segments.
+const PARAMETERIZED_PATH = /^(\/(?:apps|dashboards|dev|notes|records|types)\/)([^/]+)(.*)$/i
+const STATIC_SUBROUTES = new Set(['/dev/settings', '/types/new'])
+
 function navigationKey(path) {
   const url = resolveInternalPath(path)
-  return url ? workspacePathname(path) + url.search + url.hash : ''
+  if (!url) return ''
+
+  const pathname = url.pathname.replace(/\/+$/, '') || '/'
+  let identity = pathname.toLowerCase()
+  const route = pathname.match(PARAMETERIZED_PATH)
+  if (route && !STATIC_SUBROUTES.has(identity)) {
+    const [, prefix, parameter, suffix] = route
+    identity = prefix.toLowerCase() + parameter + suffix.toLowerCase()
+  }
+
+  return identity + url.search + url.hash
 }
 
 const items = ref([])

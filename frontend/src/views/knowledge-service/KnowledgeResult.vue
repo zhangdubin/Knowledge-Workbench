@@ -1,7 +1,8 @@
 <template>
   <div class="ks-stack">
     <section v-if="!replay" class="ks-state" :data-tone="tone" aria-label="检索状态">
-      <div class="ks-meta">适用时点 {{ result.as_of || '当日' }} <span v-if="result.scope">· {{ result.scope }}</span></div>
+      <p v-if="result.revalidated && result.question" class="ks-muted">原查询 · {{ result.question }}</p>
+      <div class="ks-meta">适用时点 {{ result.as_of || '未记录' }} <span v-if="result.scope">· {{ result.scope }}</span></div>
       <h3>{{ statusLabel(result.status) }}</h3>
       <ul v-if="result.reasons?.length" class="ks-reasons">
         <li v-for="reason in result.reasons" :key="reason">{{ reason }}</li>

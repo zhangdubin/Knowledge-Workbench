@@ -457,3 +457,91 @@ test('citation authorization settles before a comparison can replace its recheck
   await ws.compareSource('edition-2')
   assert.equal(ws.state.comparison.data.id, 'edition-2')
 })
+
+test('comparison clears both snapshots and the highlight if the original run loses access', async t => {
+  const compare = deferred()
+  const recheck = deferred()
+  const second = { id: 'edition-2', text: '乙文正文', group_revisions: [] }
+  const first = { ...edition, text: '甲文正文', group_revisions: [edition, second] }
+  const cited = { ...originalRun.citations[0], quote: '甲文', start: 0, end: 2 }
+  const query = { ...originalRun, citations: [cited] }
+  const replay = { ...query, answer: null }
+  let reads = 0
+  let checks = 0
+  const ws = workspace(t, path => {
+    if (path === '/sources/edition') { reads++; return first }
+    if (path === '/runs/original') return ++checks === 1 ? replay : recheck.wait
+    if (path === '/sources/edition-2') return compare.wait
+    if (path === '/query') return query
+  })
+  await settle()
+  ws.filters.question = '维护规程'
+  await ws.search()
+  await ws.openSource('edition', cited)
+  assert.equal(ws.state.source.data.text, '甲文正文')
+  assert.equal(ws.state.source.target.citation.quote, '甲文')
+  const comparison = ws.compareSource('edition-2')
+  const hiddenWhileLoading = [ws.state.source.data, ws.state.source.target?.citation, ws.state.comparison.data]
+  compare.resolve(second)
+  await settle()
+  const hiddenWhileChecking = [ws.state.source.data, ws.state.source.target?.citation, ws.state.comparison.data]
+  recheck.reject(rejectHttp(404))
+  await comparison
+  assert.equal(ws.state.source.data, null)
+  assert.equal(ws.state.comparison.data, null)
+  assert.equal(ws.state.source.target?.citation ?? null, null)
+  assert.equal(ws.state.result, null)
+  assert.deepEqual(hiddenWhileLoading, [null, null, null])
+  assert.deepEqual(hiddenWhileChecking, [null, null, null])
+  assert.equal(reads, 2)
+  assert.equal(checks, 2)
+})
+
+test('comparison from the source list rechecks the original snapshot when no run exists', async t => {
+  const base = deferred()
+  const second = { id: 'edition-2', text: '乙文正文', group_revisions: [] }
+  const first = { ...edition, text: '甲文正文', group_revisions: [edition, second] }
+  let reads = 0
+  let comparisons = 0
+  const ws = workspace(t, path => {
+    if (path === '/sources') return { items: [first, second] }
+    if (path === '/sources/edition') return ++reads === 1 ? first : base.wait
+    if (path === '/sources/edition-2') { comparisons++; return second }
+  })
+  await settle()
+  await ws.switchTab('sources')
+  await ws.openSource(first.id)
+  assert.equal(ws.state.source.data.text, '甲文正文')
+  const comparison = ws.compareSource(second.id)
+  await settle()
+  const hiddenWhileChecking = [ws.state.source.data, ws.state.comparison.data]
+  if (reads === 2) base.reject(rejectHttp(404))
+  await comparison
+  assert.equal(ws.state.source.data, null)
+  assert.equal(ws.state.comparison.data, null)
+  assert.deepEqual(hiddenWhileChecking, [null, null])
+  assert.equal(reads, 2)
+  assert.equal(comparisons, 1)
+})
+
+test('the restored query card uses the original question, date and scope from the replay request', async t => {
+  const question = '查培训规程第六条'
+  const replay = {
+    run_id: 'original', status: 'supported', generation: 'not_requested', answer: null,
+    request: { question, as_of: '2024-03-03', scope: '培训' },
+    items: [originalItem], citations: [], facts: [], sources: [],
+  }
+  const ws = workspace(t, path => ({
+    '/query': { ...originalRun, as_of: '2024-03-03', scope: '培训' },
+    '/items/8': currentItem, '/runs/original': replay,
+  })[path])
+  await settle()
+  ws.filters.question = question
+  ws.filters.as_of = '2024-03-03'
+  ws.filters.scope = '培训'
+  await ws.search()
+  await ws.openItem(8)
+  const restored = ws.state.result
+  assert.deepEqual([restored.question, restored.as_of, restored.scope],
+    [question, '2024-03-03', '培训'])
+})

@@ -66,12 +66,14 @@ export function useKnowledgeWorkspace(auth, initialScope) {
   }
 
   async function request(panel, target, load, fallback, {
-    recheck = false, requestId = panel.begin(target),
+    recheck = false, requestId = panel.begin(target), publish = true,
   } = {}) {
     const isCurrent = () => panel.requestId === requestId
     try {
       const data = await load(isCurrent)
-      return panel.accept(requestId, data) ? data : null
+      if (!isCurrent()) return null
+      if (publish) panel.accept(requestId, data)
+      return data
     } catch (error) {
       const message = knowledgeError(error, fallback)
       if (!panel.fail(requestId, message)) return null
@@ -96,7 +98,13 @@ export function useKnowledgeWorkspace(auth, initialScope) {
     const checkedRun = await request(state.query, runId, async isCurrent => {
       const run = openedRunId === runId ? detail : await api.run(runId, isCurrent)
       if (!run) throw new Error(fallback)
-      return { ...run, revalidated: true }
+      return {
+        ...run,
+        question: run.request?.question ?? run.question,
+        as_of: run.request?.as_of ?? run.as_of,
+        scope: run.request?.scope ?? run.scope,
+        revalidated: true,
+      }
     }, fallback, { recheck: true, requestId })
     if (!checkedRun && state.query.requestId === requestId) {
       queryRunId = null
@@ -184,10 +192,18 @@ export function useKnowledgeWorkspace(auth, initialScope) {
       state.sources.data?.items.some(item => item.id === revisionId)
     const selectedByDetail = sourceIsSelected(current, revisionId, citation?.id)
     if (!isBrowseSelection && !selectedByDetail && !sourceIsSelected(state.result, revisionId, citation?.id)) return
-    const needsReplayCitation = Boolean(queryRunId) && !(selectedByDetail && details.value === 'item')
+    let sourceRunId = null
+    if (selectedByDetail && details.value === 'run') sourceRunId = current.run_id
+    else if (!selectedByDetail && !isBrowseSelection) sourceRunId = queryRunId
+    const needsReplayCitation = Boolean(sourceRunId && sourceRunId === queryRunId)
     closeDetails()
     details.value = 'source'
-    const target = { revisionId, citation: needsReplayCitation ? null : citation, checking: Boolean(queryRunId) }
+    const target = {
+      revisionId,
+      runId: sourceRunId,
+      citation: needsReplayCitation ? null : citation,
+      checking: Boolean(queryRunId),
+    }
     const { detail, checkedRun } = await withQueryRecheck(() =>
       request(state.source, target, isCurrent => api.source(revisionId, isCurrent), '无法打开资料快照，请重试。'))
     if (toRaw(state.source.target) === target) {
@@ -207,8 +223,43 @@ export function useKnowledgeWorkspace(auth, initialScope) {
       state.comparison.clear()
       return
     }
-    await withQueryRecheck(() =>
-      request(state.comparison, revisionId, isCurrent => api.source(revisionId, isCurrent), '无法打开对照版本，请重试。'))
+
+    const activeRunId = queryRunId
+    const { runId, citation } = state.source.target
+    const baseTarget = { revisionId: source.id, runId, citation: null, checking: true }
+    const baseRequest = state.source.begin(baseTarget)
+    const compareRequest = state.comparison.begin(revisionId)
+    const fallback = '无法重新核对两个资料版本，请重新打开资料。'
+    const { detail: pair, checkedRun } = await withQueryRecheck(() =>
+      request(state.comparison, revisionId, async isComparisonCurrent => {
+        const isCurrent = () => isComparisonCurrent() && state.source.requestId === baseRequest
+        // Stage both texts locally. Neither becomes visible before the last authorization check.
+        const [base, selected] = await Promise.all([
+          api.source(source.id, isCurrent),
+          api.source(revisionId, isCurrent),
+        ])
+        if (!isCurrent()) return null
+        const otherRun = runId && runId !== activeRunId ? await api.run(runId, isCurrent) : null
+        return { base, selected, otherRun }
+      }, fallback, { requestId: compareRequest, publish: false }),
+    )
+
+    if (state.source.requestId !== baseRequest || state.comparison.requestId !== compareRequest) return
+    if (!pair || (activeRunId && !checkedRun)) {
+      const message = state.comparison.error || state.query.error || fallback
+      state.comparison.clear()
+      state.source.fail(baseRequest, message)
+      return
+    }
+
+    const run = pair.otherRun || checkedRun
+    const citations = [...(run?.citations || []), ...(run?.conflict_citations || [])]
+    state.source.target.citation = runId
+      ? citations.find(item => item.id === citation?.id && item.revision_id === source.id) || null
+      : citation
+    state.source.target.checking = false
+    state.source.accept(baseRequest, pair.base)
+    state.comparison.accept(compareRequest, pair.selected)
   }
 
   async function openRun(runId) {

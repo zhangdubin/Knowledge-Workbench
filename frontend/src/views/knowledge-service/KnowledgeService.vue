@@ -263,7 +263,6 @@
                     </template>
                   </dl>
                 </details>
-                <button class="ks-button ks-text" type="button" @click="itemFeedback({ ...state.item.data, version: version.version })">反馈此历史版本</button>
               </details>
             </section>
             <p v-if="state.item.data.incomplete" class="ks-muted">仅显示限额内的事实、关系及历史。</p>

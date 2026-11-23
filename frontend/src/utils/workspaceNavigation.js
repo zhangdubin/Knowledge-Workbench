@@ -55,7 +55,7 @@ export function getWorkspaceNavigation({ canPage, canFeature, customItems = [] }
   const groups = mergeNavGroups(visibleCatalog, visibleCustom, canPage)
   const builtin = visibleCatalog.flatMap(group => group.items)
   const graph = canPage('knowledge_graph') ? '/knowledge/graph' : '/graph'
-  const primary = ['/', '/library', '/notes', graph, '/apps']
+  const primary = ['/', '/knowledge-service', '/library', '/notes', '/apps', '/ontology', graph]
     .map(path => builtin.find(item => item.path === path))
     .filter(Boolean)
   const shortcuts = groups.flatMap(group => group.items).filter(item => item.custom).slice(0, 3)

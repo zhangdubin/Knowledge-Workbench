@@ -119,7 +119,7 @@ test('the reader can use the workspace without studio or library permissions', a
   const navigation = getWorkspaceNavigation({ canPage, canFeature })
   assert.equal(permForPath('/knowledge-service?scope=保障'), 'knowledge_service')
   assert.deepEqual(searchWorkspaceCommands(navigation.groups, '知识服务').map(item => item.path), ['/knowledge-service'])
-  assert.deepEqual(navigation.primary, [])
+  assert.deepEqual(navigation.primary.map(item => item.path), ['/knowledge-service'])
   assert.deepEqual(knowledgeCapabilities({ canPage, can: canFeature }, {
     can_manage: true, can_review: true,
   }, { can_manage_sources: true }), { template: false, review: false, sources: false })
@@ -134,13 +134,13 @@ test('the API can withhold a permission from a locally capable administrator', (
   }, { can_manage_sources: true }), { template: true, review: true, sources: true })
 })
 
-test('permission-hidden custom links stay hidden while the main navigation stays at five', async () => {
+test('permission-hidden custom links stay hidden while important destinations stay primary', async () => {
   const { getWorkspaceNavigation, searchWorkspaceCommands } = await import('../src/utils/workspaceNavigation.js')
   const customItems = [{ path: '/knowledge-service?scope=保障', label: '保障知识服务' }]
   const hidden = getWorkspaceNavigation({ canPage: perm => perm !== 'knowledge_service', canFeature: () => true, customItems })
   assert.deepEqual(searchWorkspaceCommands(hidden.groups, '知识服务'), [])
   const allowed = getWorkspaceNavigation({ canPage: () => true, canFeature: () => true })
-  assert.deepEqual(allowed.primary.map(item => item.path), ['/', '/library', '/notes', '/knowledge/graph', '/apps'])
+  assert.deepEqual(allowed.primary.map(item => item.path), ['/', '/knowledge-service', '/library', '/notes', '/apps', '/ontology', '/knowledge/graph'])
 })
 
 const { default: http } = await import('../src/api/index.js')

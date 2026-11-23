@@ -18,7 +18,7 @@ const allPaths = (navigation) => navigation.groups.flatMap(group => group.items.
 test('the catalog keeps every legacy destination and up to five primary destinations', async () => {
   const { getWorkspaceNavigation } = await loadWorkspace()
   const navigation = getWorkspaceNavigation({ canPage: allowAll, canFeature: allowAll })
-  assert.deepEqual(navigation.primary.map(item => item.path), ['/', '/library', '/notes', '/knowledge/graph', '/apps'])
+  assert.deepEqual(navigation.primary.map(item => item.path), ['/', '/knowledge-service', '/library', '/notes', '/apps', '/ontology', '/knowledge/graph'])
   assert.deepEqual(allPaths(navigation).sort(), [
     '/', '/ai-settings', '/apps', '/dashboards', '/dev', '/dna', '/dna-library', '/graph', '/guide',
     '/knowledge/graph', '/knowledge-service', '/library', '/notes', '/relations', '/search', '/system/audit',

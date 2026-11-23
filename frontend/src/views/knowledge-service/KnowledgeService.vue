@@ -26,6 +26,7 @@
     />
 
     <template v-if="space">
+      <OperationalFlow :busy="state.query.busy" :result="state.result" :error="state.query.error" />
       <nav class="ks-switcher ks-actions" aria-label="知识服务功能">
         <button type="button" class="ks-button" :disabled="managementBusy" :aria-pressed="tab === 'search'" @click="selectTab('search')">知识检索</button>
         <button type="button" class="ks-button" :disabled="managementBusy" :aria-pressed="tab === 'sources'" @click="selectTab('sources')">资料版本</button>
@@ -353,6 +354,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import PageTitle from '../../components/PageTitle.vue'
+import OperationalFlow from '../../components/OperationalFlow.vue'
 import { useAuthStore } from '../../stores/auth'
 import { dateTime, displayValue, effectivePeriod, feedbackCategories, feedbackStatus, statusLabel } from '../../utils/knowledgeService.js'
 import { useKnowledgeWorkspace } from './useKnowledgeWorkspace.js'

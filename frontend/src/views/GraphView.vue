@@ -94,18 +94,52 @@
       </div>
     </div>
 
-    <GraphCanvas
-      :nodes="graph.nodes"
-      :edges="graph.edges"
-      :loading="loading"
-      :truncated="!!graph.truncated"
-      height="calc(100vh - 340px)"
-      color-by="type"
-      title="关联图谱"
-      :empty-hint="emptyHint"
-      @select="openNode"
-      @recenter="recenterOn"
-    />
+    <section class="graph-workbench" aria-label="关联图谱工作台">
+      <aside class="graph-rail graph-rail-left">
+        <span class="graph-kicker">图谱视角</span>
+        <h3>{{ modeLabel }}</h3>
+        <p>先收敛对象范围，再在画布上追踪关系和来源。</p>
+        <dl class="graph-facts">
+          <div><dt>节点</dt><dd>{{ graph.nodes.length }}</dd></div>
+          <div><dt>连线</dt><dd>{{ graph.edges.length }}</dd></div>
+          <div><dt>关系类型</dt><dd>{{ viaCount }}</dd></div>
+        </dl>
+        <div class="graph-lens">
+          <span>当前图层</span>
+          <strong>对象 · 关系 · 来源</strong>
+          <small>点击节点打开对象检查器</small>
+        </div>
+      </aside>
+      <div class="graph-canvas-column">
+        <GraphCanvas
+          :nodes="graph.nodes"
+          :edges="graph.edges"
+          :loading="loading"
+          :truncated="!!graph.truncated"
+          height="calc(100vh - 340px)"
+          color-by="type"
+          title="关联图谱"
+          :empty-hint="emptyHint"
+          @select="openNode"
+          @recenter="recenterOn"
+        />
+      </div>
+      <aside class="graph-rail graph-rail-right">
+        <span class="graph-kicker">对象检查器</span>
+        <h3>{{ center?.label || '全局对象网络' }}</h3>
+        <p v-if="center">当前以该对象为中心，深度 {{ depth }} 跳。</p>
+        <p v-else>选择节点后查看属性、邻居和可追溯出处。</p>
+        <div class="graph-inspector-state" :data-active="center ? 'true' : 'false'">
+          <span class="graph-dot" />
+          {{ center ? '已锁定中心对象' : '等待选择对象' }}
+        </div>
+        <div class="graph-lens">
+          <span>推荐操作</span>
+          <strong>聚焦 · 查看详情 · 回到全局</strong>
+          <small>关系颜色代表来源语义，虚线表示双向链接。</small>
+        </div>
+      </aside>
+    </section>
 
     <!--
       打印用的图谱清单：
@@ -196,6 +230,8 @@ const loading = ref(false)
 const graph = ref({ nodes: [], edges: [], truncated: false })
 
 const kindCount = computed(() => new Set(graph.value.nodes.map(n => n.type_name)).size)
+const viaCount = computed(() => new Set(graph.value.edges.map(e => e.via || 'relation')).size)
+const modeLabel = computed(() => ({ global: '全局对象网络', type: '模型关系视图', center: '中心对象视图' }[mode.value] || '对象关系视图'))
 
 // ===== 打印 =====
 // 打印用的节点名索引：连线清单里要用「节点 id → 名字」
@@ -334,8 +370,27 @@ onMounted(async () => {
 .opt-type { font-size: var(--text-xs); color: var(--text-tertiary); flex-shrink: 0; }
 
 .tips { margin-top: var(--space-4); }
+.graph-workbench { display: grid; grid-template-columns: 190px minmax(0, 1fr) 220px; gap: var(--space-3); align-items: stretch; }
+.graph-canvas-column { min-width: 0; }
+.graph-rail { display: grid; align-content: start; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--shadow-xs); }
+.graph-rail h3 { margin: 0; color: var(--text-primary); font-size: var(--text-md); }
+.graph-rail p { margin: 0; color: var(--text-tertiary); font-size: var(--text-xs); line-height: 1.6; }
+.graph-kicker { color: var(--primary); font-size: var(--text-xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.graph-facts { display: grid; gap: 7px; margin: 0; }
+.graph-facts div { display: flex; justify-content: space-between; gap: 8px; padding-bottom: 7px; border-bottom: 1px solid var(--border); }
+.graph-facts dt { color: var(--text-tertiary); font-size: var(--text-xs); }
+.graph-facts dd { margin: 0; color: var(--text-primary); font-size: var(--text-sm); font-weight: 700; }
+.graph-lens { display: grid; gap: 4px; padding: 10px; border-radius: var(--radius-sm); background: var(--bg-subtle); }
+.graph-lens span, .graph-lens small { color: var(--text-tertiary); font-size: 11px; }
+.graph-lens strong { color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.5; }
+.graph-inspector-state { display: flex; align-items: center; gap: 7px; color: var(--text-tertiary); font-size: var(--text-xs); }
+.graph-inspector-state[data-active="true"] { color: var(--success); }
+.graph-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-disabled); }
+.graph-inspector-state[data-active="true"] .graph-dot { background: var(--success); box-shadow: 0 0 0 4px var(--success-bg); }
 .tip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px 20px; }
 .tip { display: flex; gap: 10px; font-size: var(--text-sm); line-height: 1.6; }
 .tip-k { flex-shrink: 0; width: 74px; font-weight: 600; color: var(--text-primary); }
 .tip-v { color: var(--text-tertiary); }
+@media (max-width: 1100px) { .graph-workbench { grid-template-columns: 160px minmax(0, 1fr); } .graph-rail-right { grid-column: 1 / -1; grid-template-columns: auto 1fr auto; align-items: center; } .graph-rail-right p, .graph-rail-right .graph-lens { margin-left: auto; } }
+@media (max-width: 720px) { .graph-workbench { grid-template-columns: minmax(0, 1fr); } .graph-rail-right, .graph-rail-left { grid-column: auto; grid-template-columns: 1fr 1fr; } .graph-rail h3, .graph-rail p, .graph-rail .graph-lens, .graph-rail .graph-facts { grid-column: 1 / -1; } }
 </style>

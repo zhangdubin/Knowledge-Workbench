@@ -18,9 +18,11 @@ const routes = [
       // 可视化驾驶舱
       { path: 'dashboards', name: 'dashboards', component: () => import('../views/Dashboards.vue'), meta: { title: '可视化驾驶舱', perm: 'dashboards' } },
       { path: 'dashboards/:id', name: 'dashboard-view', component: () => import('../views/DashboardView.vue'), meta: { title: '驾驶舱', perm: 'dashboards' } },
+      { path: 'knowledge-service', name: 'knowledge-service', component: () => import('../views/knowledge-service/KnowledgeService.vue'), meta: { title: '知识服务', perm: 'knowledge_service' } },
       { path: 'apps', name: 'apps', component: () => import('../views/Apps.vue'), meta: { title: '应用中心', perm: 'apps' } },
       // 应用独立页：点应用进这里，可以基于数据模型直接增删改查记录
       { path: 'apps/:appKey', name: 'app-workspace', component: () => import('../views/AppWorkspace.vue'), meta: { title: '应用', perm: 'apps' } },
+      { path: 'ontology', component: () => import('../views/ontology/OntologyWorkspace.vue'), meta: { title: '本体工作室', perm: 'types' } },
       { path: 'types', name: 'entity-types', component: () => import('../views/EntityTypes.vue'), meta: { title: '数据模型', perm: 'types' } },
       { path: 'types/:id/edit', name: 'type-edit', component: () => import('../views/TypeEditor.vue'), meta: { title: '编辑模型', perm: 'types' } },
       { path: 'types/new', name: 'type-new', component: () => import('../views/TypeEditor.vue'), meta: { title: '新建模型', perm: 'types' } },
@@ -29,7 +31,7 @@ const routes = [
       { path: 'graph', name: 'graph', component: () => import('../views/GraphView.vue'), meta: { title: '关联图谱', perm: 'graph' } },
       { path: 'search', name: 'search', component: () => import('../views/SearchView.vue'), meta: { title: '全局搜索', perm: 'search' } },
       // 知识库（笔记）
-      { path: 'notes', name: 'notes', component: () => import('../views/Notes.vue'), meta: { title: '知识库', perm: 'notes' } },
+      { path: 'notes', name: 'notes', component: () => import('../views/Notes.vue'), meta: { title: '知识笔记', perm: 'notes' } },
       { path: 'notes/:id', name: 'note-detail', component: () => import('../views/NoteDetail.vue'), meta: { title: '笔记详情', perm: 'notes' } },
       { path: 'knowledge/graph', name: 'knowledge-graph', component: () => import('../views/KnowledgeGraph.vue'), meta: { title: '知识图谱', perm: 'knowledge_graph' } },
       // 养料 DNA：喂给模型的资料的体检报告与基因图谱（只读）
@@ -37,7 +39,7 @@ const routes = [
       // 养料库：DNA 基因层（吸收/蒸馏/离线/打包），权限跟着 DNA 走
       { path: 'dna-library', name: 'dna-library', component: () => import('../views/DnaLibraryView.vue'), meta: { title: '养料库', perm: 'dna' } },
       // 数据中心
-      { path: 'library', name: 'library', component: () => import('../views/Library.vue'), meta: { title: '数据中心', perm: 'library' } },
+      { path: 'library', name: 'library', component: () => import('../views/Library.vue'), meta: { title: '资料库', perm: 'library' } },
       // 软件开发：项目列表 / 项目工作台 / 开发设置
       // settings 必须排在 :id 前面 —— 否则 /dev/settings 会被当成项目 id
       { path: 'dev', name: 'dev', component: () => import('../views/dev/DevProjects.vue'), meta: { title: '软件开发', perm: 'dev' } },

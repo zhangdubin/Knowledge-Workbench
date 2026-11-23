@@ -28,7 +28,9 @@ async def _type_key(db: AsyncSession, type_id: int) -> str:
     return et.key
 
 
-async def _record_type_key(db: AsyncSession, record_id: int) -> str:
+async def _record_type_key(db: AsyncSession, record_id: int, principal: Principal) -> str:
+    from ..ontology.provenance import ensure_record_source
+    await ensure_record_source(db, principal, record_id)
     rec = await db.get(EntityRecord, record_id)
     if not rec:
         raise HTTPException(404, "记录不存在")
@@ -74,7 +76,7 @@ async def list_records(
 @router.get("/{record_id}")
 async def get_record(record_id: int, db: AsyncSession = Depends(get_db),
                      principal: Principal = Depends(current_principal)):
-    ensure_model(principal, await _record_type_key(db, record_id), "read")
+    ensure_model(principal, await _record_type_key(db, record_id, principal), "read")
     rec = await svc.get_record(db, record_id)
     if not rec:
         raise HTTPException(404, "记录不存在")
@@ -108,7 +110,7 @@ async def update_record(
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(current_principal),
 ):
-    type_key = await _record_type_key(db, record_id)
+    type_key = await _record_type_key(db, record_id, principal)
     ensure_model(principal, type_key, "write")
 
     data = dict(payload.data or {})
@@ -127,7 +129,7 @@ async def update_record(
             data["content"] = touched
 
     try:
-        rec = await svc.update_record(db, record_id, data)
+        rec = await svc.update_record(db, record_id, data, expected_version=payload.expected_version)
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
     if not rec:
@@ -136,10 +138,10 @@ async def update_record(
 
 
 @router.delete("/{record_id}")
-async def delete_record(record_id: int, db: AsyncSession = Depends(get_db),
+async def delete_record(record_id: int, expected_version: int | None = None, db: AsyncSession = Depends(get_db),
                         principal: Principal = Depends(current_principal)):
-    ensure_model(principal, await _record_type_key(db, record_id), "write")
-    if not await svc.delete_record(db, record_id):
+    ensure_model(principal, await _record_type_key(db, record_id, principal), "write")
+    if not await svc.delete_record(db, record_id, expected_version=expected_version):
         raise HTTPException(404, "记录不存在")
     return {"ok": True}
 

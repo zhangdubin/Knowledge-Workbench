@@ -1,27 +1,37 @@
 <template>
   <el-drawer
     v-model="visible"
-    title="AI 助理 · 对话即操作"
+    title="AI 助手"
     size="560px"
     direction="rtl"
     :append-to-body="true"
     class="agent-drawer"
-    @open="onOpen"
   >
     <div class="agent-wrap">
-      <el-alert v-if="configLoaded && !configEnabled" type="warning" :closable="false" class="cfg-alert"
-        title="AI 未启用，对话式查询需要先配置 AI 服务">
-        <el-link type="primary" @click="$router.push('/ai-settings')">前往 AI 设置</el-link>
+      <el-alert v-if="configState === 'unavailable'" type="warning" :closable="false" class="cfg-alert"
+        title="AI 服务未启用或配置不完整">
+        <el-button v-if="auth.canPage('ai')" text type="primary" @click="goSettings">前往 AI 设置</el-button>
+        <el-button text type="primary" @click="checkConfig">重新检查</el-button>
+      </el-alert>
+
+      <el-alert v-else-if="configState === 'error'" type="warning" :closable="false"
+        title="无法读取 AI 服务配置">
+        <el-button text type="primary" @click="checkConfig">重试</el-button>
       </el-alert>
 
       <div ref="listEl" class="agent-list">
-        <div v-if="!messages.length" class="agent-empty">
+        <div v-if="!messages.length && !queuedQuestions.length" class="agent-empty">
           <div class="empty-icon">🤖</div>
           <p>问我任何关于系统数据的问题，我会调用工具查真实数据再回答。<br>
              也可以让我替你记账、改记录——动手前会先把改动列给你确认。</p>
           <div class="chips">
-            <el-tag v-for="c in suggestions" :key="c" class="chip" effect="plain"
-              @click="input = c; send()">{{ c }}</el-tag>
+            <el-button
+              v-for="c in suggestions"
+              :key="c"
+              size="small"
+              :disabled="configState !== 'ready' || busy"
+              @click="sendQuestion(c)"
+            >{{ c }}</el-button>
           </div>
         </div>
 
@@ -30,13 +40,21 @@
             <!-- 工具调用轨迹：AI 为这个回答实际做了什么 -->
             <div v-if="m.tools?.length" class="tools">
               <div v-for="(t, j) in m.tools" :key="j" class="tool-card" :class="{ 'is-write': t.write }">
-                <div class="tool-head" @click="t._open = !t._open">
+                <button type="button" class="tool-head" :aria-expanded="t._open" @click="t._open = !t._open">
                   <span class="tool-icon">{{ t.write ? '✍️' : '🔧' }}</span>
                   <b>{{ toolLabel(t.name) }}</b>
                   <span class="tool-args">{{ briefArgs(t.name, t.args) }}</span>
                   <el-tag v-if="t.pending" size="small" type="warning" effect="plain">待确认</el-tag>
                   <el-tag v-else-if="t.confirmed" size="small" type="success" effect="plain">已执行</el-tag>
                   <el-icon class="tool-caret" :class="{ open: t._open }"><ArrowDown /></el-icon>
+                </button>
+                <EvidenceCard v-for="e in citations(t)" :key="e.id" :evidence="e"/>
+                <div v-if="t.name==='propose_ingestion' && t.result?.change_id" class="pending">
+                  <p>资料加工计划 {{t.result.change_id}}</p>
+                  <el-button v-if="!t.plan" :disabled="busy" @click="previewIngestion(t)">预览加工计划</el-button>
+                  <template v-else><pre class="tool-body is-full">{{pretty(t.plan.payload.candidates)}}</pre>
+                    <el-button :disabled="busy||t.done" @click="confirmIngestion(t)">{{t.done?'已写入候选':'确认写入候选'}}</el-button>
+                  </template>
                 </div>
                 <div v-if="t._open" class="tool-body-wrap">
                   <pre class="tool-body" :class="{ 'is-full': t._full }">{{ t._full ? toolResultText(t.result) : t._preview.text }}</pre>
@@ -90,7 +108,7 @@
                 <template v-if="m.state === 'idle'">
                   <el-button size="small" @click="cancelPending(m)">取消</el-button>
                   <el-button size="small" :type="m.pending.risk === 'delete' ? 'danger' : 'primary'"
-                    @click="confirmPending(m)">
+                    :disabled="busy" @click="confirmPending(m)">
                     <el-icon><Check /></el-icon>确认执行
                   </el-button>
                 </template>
@@ -123,7 +141,7 @@
               <el-icon><WarningFilled /></el-icon>
               <span class="trunc-text">{{ noticeOf(m).text }}</span>
               <el-button size="small" type="primary" plain :loading="m._continuing"
-                @click="continueAnswer(m, i)">{{ noticeOf(m).action }}</el-button>
+                :disabled="busy" @click="continueAnswer(m, i)">{{ noticeOf(m).action }}</el-button>
             </div>
             <div v-if="m.truncated" class="trunc-hint">{{ noticeOf(m).hint }}</div>
           </div>
@@ -139,6 +157,12 @@
         </div>
       </div>
 
+      <div v-if="queuedQuestions.length" class="queued-questions" role="status">
+        <span>{{ configState === 'ready' ? '等待发送' : '问题已保留，等待 AI 服务可用' }}</span>
+        <ul>
+          <li v-for="(question, index) in queuedQuestions" :key="index">{{ question }}</li>
+        </ul>
+      </div>
       <div class="agent-input">
         <el-input
           v-model="input"
@@ -146,9 +170,10 @@
           :rows="2"
           resize="none"
           placeholder="例如：帮我在费用管理里记一笔，今天差旅 380 元"
-          @keydown.enter.exact.prevent="send"
+          aria-label="向 AI 助手提问"
+          @keydown="onComposerKey"
         />
-        <el-button type="primary" :loading="thinking" :disabled="!input.trim()" @click="send">
+        <el-button type="primary" :loading="thinking" :disabled="configState !== 'ready' || busy || !input.trim()" @click="send">
           <el-icon><Promotion /></el-icon>发送
         </el-button>
       </div>
@@ -160,10 +185,14 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref } from 'vue'
+import EvidenceCard from '../views/ontology/EvidenceCard.vue'
+import { studio } from '../api/ontology'
+import { pretty, errorText } from '../utils/ontology'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Api } from '../api'
+import { useAuthStore } from '../stores/auth'
 import MarkdownText from './MarkdownText.vue'
 import {
   toolResultText,
@@ -175,9 +204,13 @@ import {
   truncationNotice,
 } from '../utils/chatTruncation'
 
-const props = defineProps({ modelValue: Boolean })
-const emit = defineEmits(['update:modelValue'])
+const props = defineProps({
+  modelValue: Boolean,
+  initialQuestion: { type: Object, default: null },
+})
+const emit = defineEmits(['update:modelValue', 'consume-question'])
 const router = useRouter()
+const auth = useAuthStore()
 
 const visible = computed({
   get: () => props.modelValue,
@@ -190,8 +223,9 @@ const input = ref('')
 const thinking = ref(false)
 const thinkingText = ref('正在查询系统数据…')
 const listEl = ref(null)
-const configLoaded = ref(false)
-const configEnabled = ref(false)
+const configState = ref('idle')
+const queuedQuestions = ref([])
+const busy = computed(() => thinking.value || messages.value.some(message => message._continuing))
 
 const suggestions = [
   '系统里现在有哪些数据模型？',
@@ -201,6 +235,10 @@ const suggestions = [
 ]
 
 const TOOL_LABELS = {
+  list_ontologies: '发现本体',
+  query_ontology: '查询事实与证据',
+  get_ontology_evidence: '定位原文证据',
+  propose_ingestion: '提议资料加工',
   list_models: '列出数据模型',
   get_model_schema: '查看模型字段',
   search_records: '搜索业务记录',
@@ -213,6 +251,21 @@ const TOOL_LABELS = {
 
 const RISK_LABELS = { create: '新建', update: '修改', delete: '删除' }
 
+function citations(tool) {
+  if (tool.name==='get_ontology_evidence' && tool.result?.snapshot_id) return [tool.result]
+  return tool.name==='query_ontology' ? tool.result?.evidence || [] : []
+}
+async function previewIngestion(tool) {
+  try { tool.plan = await studio.list('changes/'+tool.result.change_id) }
+  catch (e) { ElMessage.error(errorText(e)) }
+}
+async function confirmIngestion(tool) {
+  if (busy.value || tool.done) return
+  thinking.value=true
+  try { await studio.confirm(tool.plan.id); tool.done=true; ElMessage.success('候选已写入，可在本体工作室核验') }
+  catch (e) { ElMessage.error(errorText(e)) }
+  finally { thinking.value=false }
+}
 function toolLabel(name) { return TOOL_LABELS[name] || name }
 function riskLabel(risk) { return RISK_LABELS[risk] || risk }
 
@@ -266,15 +319,38 @@ function goRecords(typeId) {
   router.push(`/records/${typeId}`)
 }
 
-async function onOpen() {
-  if (!configLoaded.value) {
-    try {
-      const c = await Api.getAIConfig()
-      configEnabled.value = !!c.enabled
-    } catch { /* 忽略，发送时后端会给提示 */ }
-    configLoaded.value = true
+function goSettings() {
+  visible.value = false
+  router.push('/ai-settings')
+}
+
+let configCheck = 0
+
+async function checkConfig() {
+  const check = ++configCheck
+  configState.value = 'loading'
+  try {
+    const config = await Api.getAIConfig()
+    if (check !== configCheck) return
+    configState.value = config.enabled && config.api_key && config.base_url ? 'ready' : 'unavailable'
+  } catch {
+    if (check === configCheck) configState.value = 'error'
   }
 }
+
+// 每次打开都先标记为检查中，再允许等待中的问题发送。
+watch(visible, open => { if (open) checkConfig() }, { flush: 'sync', immediate: true })
+
+watch(() => props.initialQuestion, question => {
+  if (!question?.text) return
+  queuedQuestions.value.push(question.text)
+  emit('consume-question')
+}, { immediate: true })
+
+watch([visible, busy, configState, () => queuedQuestions.value.length], () => {
+  if (!visible.value || busy.value || configState.value !== 'ready' || !queuedQuestions.value.length) return
+  sendQuestion(queuedQuestions.value.shift())
+})
 
 async function scrollBottom() {
   await nextTick()
@@ -317,10 +393,21 @@ function pushAssistant(r, q, hist) {
   messages.value.push(msg)
 }
 
-async function send() {
-  const q = input.value.trim()
-  if (!q || thinking.value) return
+function onComposerKey(event) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  send()
+}
+
+function send() {
+  const question = input.value.trim()
+  if (!question || busy.value || configState.value !== 'ready') return
   input.value = ''
+  sendQuestion(question)
+}
+
+async function sendQuestion(q) {
+  const configAtSend = configCheck
   const hist = historyOf()
   messages.value.push({ role: 'user', content: q })
   thinking.value = true
@@ -329,6 +416,9 @@ async function send() {
 
   try {
     const r = await Api.aiAgent(q, hist)
+    if (r.error === 'not_configured' && configAtSend === configCheck) {
+      configState.value = 'unavailable'
+    }
     pushAssistant(r, q, hist)
   } catch (e) {
     const detail = e?.response?.data?.detail || e?.message || '调用失败'
@@ -348,7 +438,7 @@ async function send() {
  * 用户看到的就是「刚才那段又来一次」。
  */
 async function continueAnswer(m, i) {
-  if (!m || m._continuing) return
+  if (!m || busy.value) return
   m._continuing = true
   try {
     const req = buildContinueRequest({
@@ -377,13 +467,13 @@ async function continueAnswer(m, i) {
 
 /** 确认执行：后端会重新校验参数，不信任前端回传 */
 async function confirmPending(m) {
-  if (m.state !== 'idle') return          // 防双击：状态一变就不再受理
+  if (m.state !== 'idle' || busy.value) return
   m.state = 'running'
   thinking.value = true
   thinkingText.value = '正在执行操作…'
   scrollBottom()
   try {
-    const r = await Api.aiAgentConfirm({ question: m.q, history: m.hist, pending: m.pending })
+    const r = await Api.aiAgentConfirm({ pending: m.pending })
     const first = (r.tool_calls || [])[0]
     const ok = first?.result?.ok !== false
     m.state = ok ? 'done' : 'failed'
@@ -434,7 +524,7 @@ function cancelPending(m) {
 }
 .empty-icon { font-size: 40px; margin-bottom: 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
-.chip { cursor: pointer; }
+.chips :deep(.el-button) { margin-left: 0; }
 
 .msg { display: flex; }
 .msg.user { justify-content: flex-end; }
@@ -610,6 +700,16 @@ function cancelPending(m) {
   font-size: 13px;
 }
 
+.queued-questions {
+  flex: 0 0 auto;
+  max-height: 7rem;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+}
+.queued-questions ul { margin: var(--space-1) 0; padding-left: var(--space-5); overflow-wrap: anywhere; }
 .agent-input {
   display: flex;
   gap: 8px;

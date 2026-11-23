@@ -1,22 +1,7 @@
-/**
- * 左侧导航：内置项 + 用户自定义项
- *
- * 内置导航写死在 Layout.vue 的 NAV 常量里；自定义项存在后端（nav_item 表），
- * 换台电脑也在。所有人看到的是同一份自定义导航 —— 这跟「每个人各存一份」
- * 的做法不同，后者换个环境就丢了。
- *
- * 合并规则：
- *   1. 自定义项按 group_name 归到对应的分组；没有对应分组就并到「自定义」组
- *   2. 自定义组排在内置组之后（用户自己加的东西不要插到系统导航中间）
- *   3. 同一个路径只保留一个（自定义项优先 —— 用户是特意把它摆出来的）
- *   4. 自定义项没有 perm 概念（它只是入口，进去之后的权限由目标页自己判），
- *      但路径落在哪个受控页面上时，仍然按那个页面的 perm 过滤 ——
- *      否则普通用户能在侧栏里看到一个点进去就 403 的入口
- */
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { Api } from '../api'
 
-/** 内置导航里每个路径对应的页面权限位 —— 自定义项指向这些页面时要跟着过滤 */
+// Route prefixes match complete segments, including the routes used only by deep links.
 const PATH_PERM = {
   '/': 'dashboard',
   '/dashboards': 'dashboards',
@@ -24,33 +9,62 @@ const PATH_PERM = {
   '/library': 'library',
   '/dev': 'dev',
   '/apps': 'apps',
+  '/knowledge-service': 'knowledge_service',
   '/types': 'types',
+  '/ontology': 'types',
+  '/records': 'records',
   '/relations': 'relations',
   '/graph': 'graph',
   '/knowledge/graph': 'knowledge_graph',
+  '/dna': 'dna',
+  '/dna-library': 'dna',
   '/search': 'search',
   '/guide': 'guide',
   '/ai-settings': 'ai',
-  '/system/users': 'system',
-  '/system/roles': 'system',
-  '/system/audit': 'system',
-  '/system/recycle': 'system',
-  '/system/storage': 'system',
-  '/system/settings': 'system',
+  '/system': 'system',
 }
 
-/** 自定义项指向某个页面时，要不要按那个页面的权限过滤 */
+function resolveInternalPath(path) {
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) return null
+  try {
+    return new URL(path, 'https://workspace.invalid')
+  } catch {
+    return null
+  }
+}
+
+export function workspacePathname(path) {
+  const url = resolveInternalPath(path)
+  return url ? url.pathname.toLowerCase().replace(/\/+$/, '') || '/' : ''
+}
+
+export function matchesPathSegment(pathname, base) {
+  return pathname === base || (base !== '/' && pathname.startsWith(base + '/'))
+}
+
 export function permForPath(path) {
-  const p = String(path || '')
-  if (PATH_PERM[p]) return PATH_PERM[p]
-  // /apps/xxx、/notes/xxx 这类子路径，归到它所属的父页面
-  if (p.startsWith('/apps')) return 'apps'
-  if (p.startsWith('/notes')) return 'notes'
-  if (p.startsWith('/library')) return 'library'
-  if (p.startsWith('/dev')) return 'dev'
-  if (p.startsWith('/types')) return 'types'
-  if (p.startsWith('/system')) return 'system'
-  return ''
+  const pathname = workspacePathname(path)
+  const match = Object.keys(PATH_PERM).find(base => matchesPathSegment(pathname, base))
+  return match ? PATH_PERM[match] : ''
+}
+
+// Keep the route parameter's case while matching Vue Router's static segments.
+const PARAMETERIZED_PATH = /^(\/(?:apps|dashboards|dev|notes|records|types)\/)([^/]+)(.*)$/i
+const STATIC_SUBROUTES = new Set(['/dev/settings', '/types/new'])
+
+function navigationKey(path) {
+  const url = resolveInternalPath(path)
+  if (!url) return ''
+
+  const pathname = url.pathname.replace(/\/+$/, '') || '/'
+  let identity = pathname.toLowerCase()
+  const route = pathname.match(PARAMETERIZED_PATH)
+  if (route && !STATIC_SUBROUTES.has(identity)) {
+    const [, prefix, parameter, suffix] = route
+    identity = prefix.toLowerCase() + parameter + suffix.toLowerCase()
+  }
+
+  return identity + url.search + url.hash
 }
 
 const items = ref([])
@@ -89,11 +103,16 @@ export function mergeNavGroups(navGroups, customItems, canPage) {
     title: g.title,
     items: g.items.slice(),
   }))
-  const taken = new Set(groups.flatMap((g) => g.items.map((i) => i.path)))
+  const taken = new Set(groups.flatMap((g) => g.items.map((i) => navigationKey(i.path))))
 
   // 自定义项按分组名归类
   const byGroup = new Map()
   for (const raw of customItems || []) {
+    const key = navigationKey(raw.path)
+    if (!key || taken.has(key)) continue
+    const perm = permForPath(raw.path)
+    if (perm && canPage && !canPage(perm)) continue
+
     const item = {
       path: raw.path,
       label: raw.label,
@@ -101,13 +120,9 @@ export function mergeNavGroups(navGroups, customItems, canPage) {
       custom: true,
       id: raw.id,
       description: raw.description || '',
+      perm,
     }
-    // 同一个路径已经有过（内置的）就跳过 —— 别把系统导航顶掉
-    if (taken.has(item.path)) continue
-    const perm = permForPath(item.path)
-    // 指向受控页面时，没权限就不显示这个入口
-    if (perm && canPage && !canPage(perm)) continue
-    taken.add(item.path)
+    taken.add(key)
     const gname = raw.group_name || '自定义'
     if (!byGroup.has(gname)) byGroup.set(gname, [])
     byGroup.get(gname).push(item)

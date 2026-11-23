@@ -24,7 +24,8 @@
  *
  * @returns {{ begin: (key: string) => {seq:number, controller:AbortController, duplicated:boolean},
  *             isCurrent: (seq:number) => boolean,
- *             end: (seq:number) => void }}
+ *             end: (seq:number) => void,
+ *             cancel: () => void }}
  */
 export function createSearchRequest() {
   let seq = 0
@@ -59,6 +60,34 @@ export function createSearchRequest() {
     end(mySeq) {
       if (inflight && inflight.seq === mySeq) inflight = null
     },
+
+    /** 清空关键词或离开页面时，即使取消没赶上也作废旧结果 */
+    cancel() {
+      seq++
+      if (!inflight) return
+      const { controller } = inflight
+      inflight = null
+      controller.abort()
+    },
+  }
+}
+
+/** 页面提交和命令搜索共用可重放的关键词地址。 */
+export function searchLocation(route, text, { replace = false } = {}) {
+  const onSearchPage = route.name === 'search'
+  const keyword = text.trim() || undefined
+  const query = onSearchPage ? { ...route.query } : {}
+  if (keyword) query.kw = keyword
+  else delete query.kw
+
+  // 名称和 URL 都相同的搜索也需要通知搜索页，恢复用户尚未提交的编辑。
+  const repeat = onSearchPage && route.query.kw === keyword
+  return {
+    name: 'search',
+    query,
+    hash: onSearchPage ? route.hash : '',
+    force: repeat,
+    replace: replace || repeat,
   }
 }
 

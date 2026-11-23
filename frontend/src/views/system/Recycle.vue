@@ -133,7 +133,7 @@ async function purgeType(row) {
 
 async function restoreRecord(row) {
   try {
-    const r = await Api.restoreRecycleRecord(row.id)
+    const r = await Api.restoreRecycleRecord(row.id, row.version)
     ElMessage.success(r.model_restored ? '记录已恢复（所属模型一并恢复）' : '记录已恢复')
     load()
   } catch (e) {

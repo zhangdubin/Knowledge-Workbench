@@ -44,7 +44,7 @@
               >
                 <el-icon><FolderOpened /></el-icon>分组
               </button>
-              <h2 class="notes-head-title">知识库</h2>
+              <h2 class="notes-head-title">知识笔记</h2>
               <span class="notes-head-count">{{ filterHint || `共 ${data.total || 0} 条笔记` }}</span>
             </div>
             <div class="notes-head-actions">
@@ -67,7 +67,7 @@
 
           <!-- 打印页眉：屏幕上不显示，纸上要看得清「打印的是什么、什么时候打的」 -->
           <div class="print-title-bar" data-print-only>
-            <span>知识库 · {{ targetGroupName || '全部笔记' }}</span>
+            <span>知识笔记 · {{ targetGroupName || '全部笔记' }}</span>
             <span class="print-title-bar-time" data-print-time></span>
           </div>
 
@@ -347,9 +347,11 @@ import NoteGroupSidebar from '../components/note/NoteGroupSidebar.vue'
 import NoteGroupSelect from '../components/note/NoteGroupSelect.vue'
 import NoteGroupBadge from '../components/note/NoteGroupBadge.vue'
 import { useNoteGroups } from '../components/note/useNoteGroups'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
 const route = useRoute()
+const auth = useAuthStore()
 const noteTypeId = ref(null)
 const data = ref({ items: [], total: 0 })
 const keyword = ref('')
@@ -875,6 +877,7 @@ onMounted(async () => {
   groupId.value = parseGroupParam(route.query.group)
   const et = await Api.getEntityTypeByKey('note')
   noteTypeId.value = et.id
+  if (route.query.action === 'create' && auth.canModel('note', 'write')) openCreate()
   // 分组接口可能还没上线：不可用时安静降级（隐藏侧栏），不弹错误。
   // force=true：每次进页面都重新拉一次 —— 计数会随「笔记挪进/挪出分组」变，
   // 缓存住旧数会让侧栏显示「组里 0 篇」而列表里明明有。

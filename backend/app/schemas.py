@@ -58,6 +58,7 @@ class EntityTypeListOut(BaseModel):
 
 # ===== Record =====
 class RecordIn(BaseModel):
+    expected_version: int | None = None
     data: dict[str, Any] = Field(default_factory=dict)
 
 

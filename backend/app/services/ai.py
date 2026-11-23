@@ -110,6 +110,8 @@ async def chat_real_meta(
     *,
     stream: bool = False,
     max_tokens: int | None = None,
+    max_tokens_ceiling: int | None = None,
+    max_retries: int | None = None,
 ) -> dict:
     """调用真实 API，并返回「正文 + 结构化截断信息」
 
@@ -144,6 +146,18 @@ async def chat_real_meta(
     base_tokens = int(max_tokens or cfg_svc.get_max_tokens(cfg))
     ceiling = cfg_svc.get_max_tokens_ceiling(cfg)
     retry_on = cfg_svc.auto_retry_enabled(cfg)
+    retry_limit = MAX_LENGTH_RETRIES
+    # Optional per-call budgets leave every existing caller's defaults intact.
+    if max_tokens_ceiling is not None:
+        if type(max_tokens_ceiling) is not int or max_tokens_ceiling < 1:
+            raise ValueError("生成 token 上限必须为正整数")
+        ceiling = min(ceiling, max_tokens_ceiling)
+        base_tokens = min(base_tokens, ceiling)
+    if max_retries is not None:
+        if type(max_retries) is not int or not 0 <= max_retries <= MAX_LENGTH_RETRIES:
+            raise ValueError("生成重试次数超出允许范围")
+        retry_limit = max_retries
+    meta.update(token_ceiling=ceiling, retry_limit=retry_limit, retry_count=0)
 
     payload = {
         "model": cfg.get("model") or "gpt-3.5-turbo",
@@ -191,10 +205,11 @@ async def chat_real_meta(
                 #      剥掉思考块之后什么都不剩（实测问「中标供应商」时命中过）。
                 # 之前只处理了第 2 种，第 1 种（更常见）被当成完整答案直接返回了。
                 need_more = (truncated or empty) and retry_on
-                if (need_more and attempt < MAX_LENGTH_RETRIES
+                if (need_more and attempt < retry_limit
                         and payload["max_tokens"] < ceiling):
                     payload["max_tokens"] = min(payload["max_tokens"] * 2, ceiling)
                     attempt += 1
+                    meta["retry_count"] = attempt
                     meta["retried"] = True
                     meta["max_tokens"] = payload["max_tokens"]
                     logger.warning(

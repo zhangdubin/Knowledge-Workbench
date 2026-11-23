@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <PageTitle
-      title="数据中心"
+      title="资料库"
       subtitle="文件原文外置存储 · 自动抽取正文并建立全文与向量检索索引"
       icon-key="Coin"
     >
@@ -26,44 +26,42 @@
 
     <!-- 打印页眉：屏幕上不显示，纸上要看得清「这是什么、什么时候打的」 -->
     <div class="print-title-bar" data-print-only>
-      <span>数据中心 · {{ activeTabName }}</span>
+      <span>资料库 · {{ activeTabName }}</span>
       <span class="print-title-bar-time" data-print-time></span>
     </div>
 
     <!-- 上传区 -->
     <div class="upload-card">
-      <div
+      <button
+        ref="uploadZone"
+        type="button"
         class="dropzone"
         :class="{ active: dragging }"
-        role="button"
-        tabindex="0"
-        aria-label="拖拽文件到此处上传，或按回车选择本地文件"
+        aria-label="选择本地文件上传"
         @dragover.prevent="dragging = true"
         @dragleave.prevent="dragging = false"
         @drop.prevent="onDrop"
-        @click="onDropzoneClick"
-        @keydown.enter.prevent="fileInput?.click()"
-        @keydown.space.prevent="fileInput?.click()"
+        @click="fileInput?.click()"
       >
-        <div class="dz-icon-wrap">
+        <span class="dz-icon-wrap">
           <el-icon><UploadFilled /></el-icon>
-        </div>
-        <div class="dz-main">
-          <div class="dz-title">拖拽文件到此处上传</div>
-          <div class="dz-hint">
+        </span>
+        <span class="dz-main">
+          <span class="dz-title">拖拽文件到此处上传</span>
+          <span class="dz-hint">
             或
-            <button class="link-btn" @click="fileInput?.click()">浏览本地文件</button>
+            <span class="dz-link">浏览本地文件</span>
             · 支持任意类型 · 文件原文外置存储 · 上传后自动抽取正文并建立检索索引
-          </div>
-        </div>
-        <input
-          ref="fileInput"
-          type="file"
-          multiple
-          style="display:none"
-          @change="onPick"
-        />
-      </div>
+          </span>
+        </span>
+      </button>
+      <input
+        ref="fileInput"
+        type="file"
+        multiple
+        hidden
+        @change="onPick"
+      />
 
       <div v-if="uploading.length" class="upload-list">
         <div v-for="u in uploading" :key="u.uid" class="upload-item">
@@ -915,6 +913,7 @@ const route = useRoute()
 
 const dragging = ref(false)
 const fileInput = ref(null)
+const uploadZone = ref(null)
 const uploading = ref([])
 
 const files = ref([])
@@ -1500,19 +1499,6 @@ async function onDrop(e) {
   await uploadFiles(e.dataTransfer.files)
 }
 
-/**
- * 拖拽区整块可点。
- *
- * 之前的样式里 .dropzone 的光标就是手型（cursor: pointer），但整块并没有点击处理，
- * 用户点上去没有任何反应 —— 光标在骗人。拖拽上传是鼠标用户的场景，
- * 而点一下就弹出文件选择框是所有人都能用的路径。
- */
-function onDropzoneClick(e) {
-  // 内层「浏览本地文件」按钮自己会触发，这里别重复触发，否则会弹出两个文件框
-  if (e.target.closest('.link-btn')) return
-  fileInput.value?.click()
-}
-
 async function uploadFiles(fileList) {
   const list = Array.from(fileList || [])
   if (!list.length) return
@@ -1568,6 +1554,7 @@ function removeUpload(u) {
 }
 
 onMounted(async () => {
+  if (route.query.action === 'upload' && auth.can('file_write')) uploadZone.value?.focus()
   await loadFiles()
   loadRecent()
 
@@ -1596,6 +1583,10 @@ onMounted(async () => {
 }
 .dropzone {
   display: flex;
+  width: 100%;
+  text-align: start;
+  font: inherit;
+  color: var(--text-primary);
   align-items: center;
   gap: var(--space-4);
   border: 2px dashed var(--border);
@@ -1624,20 +1615,15 @@ onMounted(async () => {
   font-size: 22px;
 }
 .dz-main { flex: 1; min-width: 0; }
-.dz-title { font-weight: 600; font-size: var(--text-md); margin-bottom: 4px; }
+.dz-title { display: block; font-weight: 600; font-size: var(--text-md); margin-bottom: 4px; }
 .dz-hint { font-size: var(--text-sm); color: var(--text-tertiary); line-height: 1.6; }
-.link-btn {
-  background: none;
-  border: none;
-  padding: 0;
+.dz-link {
   color: var(--primary);
-  font: inherit;
   font-weight: 600;
-  cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.link-btn:hover { color: var(--primary-dark); }
+.dropzone:hover .dz-link { color: var(--primary-dark); }
 
 .upload-list {
   margin-top: var(--space-3);

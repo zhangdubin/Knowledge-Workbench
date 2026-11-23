@@ -106,16 +106,10 @@ class AgentIn(BaseModel):
 
 
 class AgentConfirmIn(BaseModel):
-    """用户点「确认执行」时回传的待办写操作
-
-    参数由前端原样回传，但后端执行前会重新做一遍权限与字段校验，
-    不信任客户端内容。
-    """
-    question: str = ""
+    """Confirm the persistent proposal identified by change_id."""
+    question: str = "确认执行"
     history: list[dict] | None = None
-    tool: str
-    args: dict = {}
-    digest: list[str] | None = None
+    change_id: str
     # 续写（与 AgentIn 同义）：确认执行后如果回答又被截断，可以接着写
     continuation: str = ""
 
@@ -132,9 +126,11 @@ async def agent(
     （status=awaiting_confirmation），用户确认后走 /agent/confirm。
     工具一律按当前登录主体的模型级权限过滤。
     """
-    return await agent_svc.run_agent(db, payload.question, principal,
+    from ..ontology.capabilities import register_run
+    result = await agent_svc.run_agent(db, payload.question, principal,
                                    payload.history,
                                    continuation=payload.continuation or "")
+    return await register_run(db, principal, result)
 
 
 @router.post("/agent/confirm", dependencies=_AI)
@@ -144,15 +140,23 @@ async def agent_confirm(
     principal: Principal = Depends(current_principal),
 ) -> dict:
     """执行用户已确认的 AI 写操作，并把结果交给模型收尾"""
-    return await agent_svc.run_agent(
-        db, payload.question, principal, payload.history,
-        continuation=payload.continuation or "",
-        confirmed={
-            "tool": payload.tool,
-            "args": payload.args or {},
-            "digest": (payload.digest or [])[:20],
-        },
-    )
+    from ..ontology.capabilities import register_run
+    try:
+        result = await agent_svc.run_agent(
+            db, payload.question or "确认执行", principal, payload.history,
+            continuation=payload.continuation or "",
+            confirmed={"change_id": payload.change_id},
+        )
+    except Exception as error:
+        await db.rollback()
+        if principal.user is not None:
+            from sqlalchemy import inspect
+            if inspect(principal.user, raiseerr=False) is not None:
+                await db.refresh(principal.user)
+        await register_run(db,principal,{"status":"failed","error":str(getattr(error,"status_code",500))},
+                           change_id=payload.change_id)
+        raise
+    return await register_run(db, principal, result, change_id=payload.change_id)
 
 
 

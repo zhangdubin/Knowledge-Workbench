@@ -14,7 +14,7 @@ from ..database import get_db
 from ..models import EntityType
 from ..services import entity_type as et_svc
 from ..services import record as rec_svc
-from ..services.auth import require_feature
+from ..services.auth import Principal, current_principal, require_feature
 
 router = APIRouter(prefix="/api/recycle", tags=["recycle"])
 
@@ -22,9 +22,10 @@ _MANAGE = [Depends(require_feature("model_manage"))]
 
 
 @router.get("", dependencies=_MANAGE)
-async def list_recycle(db: AsyncSession = Depends(get_db)) -> dict:
+async def list_recycle(db: AsyncSession = Depends(get_db), principal: Principal = Depends(current_principal)) -> dict:
     types = await et_svc.list_deleted_types(db)
-    records = await rec_svc.list_deleted_records(db)
+    types = [t for t in types if principal.can_model(t["key"], "read")]
+    records = await rec_svc.list_deleted_records(db, principal)
     return {
         "types": types,
         "records": records,
@@ -63,16 +64,16 @@ async def purge_type(
 
 
 @router.post("/records/{record_id}/restore", dependencies=_MANAGE)
-async def restore_record(record_id: int, db: AsyncSession = Depends(get_db)) -> dict:
-    result = await rec_svc.restore_record(db, record_id)
+async def restore_record(record_id: int, expected_version: int | None = None, db: AsyncSession = Depends(get_db), principal: Principal = Depends(current_principal)) -> dict:
+    result = await rec_svc.restore_record(db, record_id, principal, expected_version=expected_version)
     if result is None:
         raise HTTPException(404, "回收站中没有这条记录")
     return {"ok": True, "model_restored": result["model_restored"]}
 
 
 @router.delete("/records/{record_id}", dependencies=_MANAGE)
-async def purge_record(record_id: int, db: AsyncSession = Depends(get_db)) -> dict:
-    ok = await rec_svc.purge_record(db, record_id)
+async def purge_record(record_id: int, db: AsyncSession = Depends(get_db), principal: Principal = Depends(current_principal)) -> dict:
+    ok = await rec_svc.purge_record(db, record_id, principal)
     if not ok:
         raise HTTPException(404, "回收站中没有这条记录")
     return {"ok": True}

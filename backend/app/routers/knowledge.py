@@ -103,9 +103,7 @@ async def note_from_record(payload: dict = Body(...), db: AsyncSession = Depends
     record_id = payload.get("record_id")
     if not record_id:
         raise HTTPException(400, "record_id 必填")
-    # 源记录必须读得到：否则等于把受限记录的整份内容抄进笔记
-    await _need_source_record(db, principal, int(record_id))
     try:
-        return await svc.note_from_record(db, int(record_id))
+        return await svc.note_from_record(db, principal, int(record_id))
     except ValueError as e:
         raise HTTPException(400, str(e))

@@ -9,6 +9,10 @@ from ..models import EntityType, FieldDefinition
 from ..schemas import EntityTypeIn
 
 
+from ..ontology.migrations import lock_writer
+from ..ontology.policy import protect_projection
+
+
 async def list_entity_types(db: AsyncSession, app: str | None = None) -> list[dict]:
     """列出所有实体类型，附带字段数 + 记录数（不含回收站中的）"""
     from ..models import EntityRecord
@@ -104,6 +108,8 @@ async def create_entity_type(db: AsyncSession, payload: EntityTypeIn) -> EntityT
 async def update_entity_type(
     db: AsyncSession, type_id: int, payload: EntityTypeIn
 ) -> EntityType | None:
+    await lock_writer(db)
+    await protect_projection(db, "type", type_id)
     et = await get_entity_type(db, type_id)
     if not et:
         return None
@@ -132,6 +138,8 @@ async def update_entity_type(
 
 async def delete_entity_type(db: AsyncSession, type_id: int) -> bool:
     """软删除：进回收站。字段/记录/关联全部保留，可随时恢复。"""
+    await lock_writer(db)
+    await protect_projection(db, "type", type_id)
     et = await db.get(EntityType, type_id)
     if not et or et.deleted_at:
         return False
@@ -175,6 +183,8 @@ async def list_deleted_types(db: AsyncSession) -> list[dict]:
 
 async def restore_entity_type(db: AsyncSession, type_id: int) -> dict | None:
     """从回收站恢复模型。Key 若被新模型占用则要求先处理。"""
+    await lock_writer(db)
+    await protect_projection(db, "type", type_id)
     et = await db.get(EntityType, type_id)
     if not et or not et.deleted_at:
         return None
@@ -188,6 +198,8 @@ async def restore_entity_type(db: AsyncSession, type_id: int) -> dict | None:
 
 async def purge_entity_type(db: AsyncSession, type_id: int) -> bool:
     """彻底删除（物理级联：字段/记录/视图一起走，不可恢复）"""
+    await lock_writer(db)
+    await protect_projection(db, "type", type_id)
     et = await db.get(EntityType, type_id)
     if not et or not et.deleted_at:
         return False

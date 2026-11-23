@@ -1,0 +1,76 @@
+{
+  "version": "1.12.0",
+  "deployed_at": "2026-11-22T19:22:36.668054+08:00",
+  "implementation_commit": "d7e4b0c50b1a1bfdfaf3b61e2815ce9e5f778ca4",
+  "branch": "codex/dynamic-ontology",
+  "worktree": "/Users/trisome/.codex/worktrees/dynamic-ontology/kb-workbench",
+  "entry_url": "http://localhost:8082/#/knowledge-service",
+  "images": [
+    {
+      "name": "kb-backend",
+      "image_id": "sha256:6ec69af7957f356824d7a838e52c001e9d61cca90f9f7bbb4c83dc5529e97351",
+      "health": "healthy"
+    },
+    {
+      "name": "kb-frontend",
+      "image_id": "sha256:c241ff4ce18972bc2dc532a6699fe6253f1f92e364b42605d7ebb4f5c7605828",
+      "health": "healthy"
+    }
+  ],
+  "deployment_mode": "docker compose up -d --no-build --pull never --force-recreate backend frontend",
+  "verification": {
+    "ok": true,
+    "business_tables_preserved": 26,
+    "entity_records": 218,
+    "dna_genes": 60,
+    "source_files_preserved": 6,
+    "mounts_preserved": true,
+    "frontend_assets_match": true,
+    "authenticated_smoke": {
+      "/api/entity-types": 200,
+      "/api/ontologies/": 200,
+      "/api/knowledge-service/catalog": 200,
+      "/api/records/type/1": 200
+    },
+    "knowledge_service_api_paths": 13,
+    "packaged_backend_tests": 186,
+    "frontend_knowledge_tests": 32,
+    "frontend_full_suite_last_tap_group": 44,
+    "packaged_http_acceptance": 51,
+    "restart_replay": 8,
+    "browser": "ordinary reader, historical version feedback, reviewer resolution, withdrawal clearing, explicit template confirmation, home prefill, Unicode quote, keyboard, desktop and 390px light/dark",
+    "console_errors": 0
+  },
+  "pre_upgrade_backup": {
+    "primary": "/Volumes/Samsung/poc/知识库/project-backups/kb-workbench-pre-knowledge-service-20261122-191731",
+    "replica": "/Volumes/Trisome/kb-backups/project-snapshots/kb-workbench-pre-knowledge-service-20261122-191731",
+    "sha256_verified_entries_per_copy": 16,
+    "previous_images": [
+      {
+        "container": "kb-backend",
+        "image_id": "sha256:3d86cbcd3251c90081c39228dd5c3d2def1e474f9af3a7aa84386980b8442377",
+        "retained_tag": "kb-workbench-backend:pre-knowledge-service-20261122-191731"
+      },
+      {
+        "container": "kb-frontend",
+        "image_id": "sha256:3d24ac58250219e24b5f9d2c98803c9a3452ec40ae6078f4512dfc8dacbb1b3a",
+        "retained_tag": "kb-workbench-frontend:pre-knowledge-service-20261122-191731"
+      }
+    ],
+    "snapshot_counts": {
+      "document": 7,
+      "entity_record": 218,
+      "document_chunk": 78,
+      "audit_log": 3836,
+      "fs_documents": 7
+    }
+  },
+  "evidence_primary": "/Volumes/Samsung/poc/知识库/project-research/ontoflow-20261122/knowledge-service-1.12-verification",
+  "evidence_replica": "/Volumes/Trisome/kb-backups/project-snapshots/knowledge-service-1.12-verification",
+  "limits": [
+    "Synthetic data and controlled model responses; no real provider or expert corpus evaluation.",
+    "Original Responses session transport error not reproduced or claimed fixed.",
+    "No production synthetic accounts or sample imports; template installation and grants remain explicit.",
+    "No main merge or push."
+  ]
+}

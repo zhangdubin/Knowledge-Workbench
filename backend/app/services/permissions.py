@@ -14,6 +14,7 @@ PAGES = [
     "notes",           # 知识库
     "apps",            # 应用中心
     "types",           # 数据模型
+    "knowledge_service", # 中文知识服务
     "records",         # 记录
     "relations",       # 关联定义
     "graph",           # 关联图谱
@@ -33,6 +34,7 @@ PAGE_LABELS = {
     "notes": "知识库",
     "apps": "应用中心",
     "types": "数据模型",
+    "knowledge_service": "知识服务",
     "records": "业务记录",
     "relations": "关联定义",
     "graph": "关联图谱",
@@ -52,6 +54,7 @@ PAGE_LABELS = {
 # 搞不清该改哪一个，所以操作级只保留「模型结构/文件/关联」这类
 # 不属于任何单个模型的权限。
 FEATURES = [
+    "knowledge_review", # 处理职责范围内的知识反馈
     "model_manage",     # 新建/修改/删除数据模型
     "relation_manage",  # 维护关联定义与关联关系
     "file_write",       # 上传/改文件元数据
@@ -66,6 +69,7 @@ FEATURES = [
 ]
 
 FEATURE_LABELS = {
+    "knowledge_review": "处理知识反馈",
     "model_manage": "维护数据模型",
     "relation_manage": "维护关联关系",
     "file_write": "上传 / 修改文件",

@@ -417,6 +417,8 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Api } from '../api'
+import { useRouter } from 'vue-router'
+const router = useRouter()
 import {
   FIELD_TYPE_GROUPS, FIELD_PRESETS,
   fieldTypeDesc, isChoiceType, isReferenceType, choicesOf,
@@ -705,7 +707,10 @@ async function save() {
     emit('saved', saved)
     if (!isInline.value) visible.value = false
   } catch (e) {
-    // 拦截器已提示
+    if (e.response?.status === 409 && String(e.response.data?.detail).includes('本体工作室')) {
+      if (!isInline.value) visible.value = false
+      await router.push('/ontology')
+    }
   } finally {
     saving.value = false
   }

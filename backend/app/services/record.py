@@ -6,6 +6,11 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import EntityType, FieldDefinition, EntityRecord, NoteGroup
+from ..ontology.migrations import lock_writer
+from ..ontology.objects import check_version, track
+from ..ontology.models import ObjectBinding
+from ..ontology.validation import validate_record
+from .auth import Principal, ensure_model
 from . import access
 
 
@@ -51,9 +56,10 @@ def build_search_text(fields: list[FieldDefinition], data: dict[str, Any]) -> st
 
 
 async def create_record(
-    db: AsyncSession, type_id: int, data: dict
+    db: AsyncSession, type_id: int, data: dict, *, commit: bool = True
 ) -> EntityRecord | None:
-    et = await db.get(EntityType, type_id)
+    await lock_writer(db)
+    et = await db.get(EntityType, type_id, populate_existing=True)
     if not et or et.deleted_at:
         return None
     data = dict(data or {})
@@ -67,23 +73,33 @@ async def create_record(
     f_q = select(FieldDefinition).where(FieldDefinition.entity_type_id == type_id)
     fields = (await db.execute(f_q)).scalars().all()
 
+    if et.key != "note":
+        await validate_record(db, fields, data)
+
     rec = EntityRecord(
         entity_type_id=type_id,
         data=data,
         search_text=build_search_text(fields, data),
     )
     db.add(rec)
-    await db.commit()
+    await db.flush()
+    await track(db, rec)
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     await db.refresh(rec)
     return rec
 
 
 async def update_record(
-    db: AsyncSession, record_id: int, data: dict
+    db: AsyncSession, record_id: int, data: dict, *, expected_version: int | None = None, commit: bool = True
 ) -> EntityRecord | None:
-    rec = await db.get(EntityRecord, record_id)
+    await lock_writer(db)
+    rec = await db.get(EntityRecord, record_id, populate_existing=True)
     if not rec or rec.deleted_at:
         return None
+    await check_version(db, rec, expected_version)
     new_data = dict(data or {})
     if "group_id" in new_data:
         if new_data["group_id"] is None:
@@ -97,33 +113,59 @@ async def update_record(
         old_gid = (rec.data or {}).get("group_id")
         if old_gid is not None:
             new_data["group_id"] = old_gid
-    rec.data = new_data
     # 重建 search_text
     f_q = select(FieldDefinition).where(FieldDefinition.entity_type_id == rec.entity_type_id)
     fields = (await db.execute(f_q)).scalars().all()
+    et = await db.get(EntityType, rec.entity_type_id)
+    if et.key != "note":
+        known = {field.key for field in fields} | {"group_id"}
+        for key in rec.data.keys() - known:
+            new_data.setdefault(key, rec.data[key])
+        await validate_record(db, fields, new_data, rec.data)
+    rec.data = new_data
     rec.search_text = build_search_text(fields, new_data)
-    await db.commit()
+    await track(db, rec)
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     await db.refresh(rec)
     return rec
 
 
-async def delete_record(db: AsyncSession, record_id: int) -> bool:
+async def delete_record(db: AsyncSession, record_id: int, *, expected_version: int | None = None, commit: bool = True) -> bool:
     """软删除：进回收站，可恢复"""
-    rec = await db.get(EntityRecord, record_id)
+    await lock_writer(db)
+    rec = await db.get(EntityRecord, record_id,populate_existing=True)
     if not rec or rec.deleted_at:
         return False
+    await check_version(db, rec, expected_version)
     rec.deleted_at = datetime.now(timezone.utc)
-    await db.commit()
+    await track(db, rec)
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     return True
 
 
 # ============ 回收站 ============
 
+async def _managed_versions(db, records):
+    ids = [record.id for record in records]
+    return dict((await db.execute(
+        select(ObjectBinding.record_id, ObjectBinding.version).where(ObjectBinding.record_id.in_(ids))
+    )).all())
+
+
 async def list_deleted_records(
-    db: AsyncSession, type_id: int | None = None, limit: int = 200
+    db: AsyncSession, principal: Principal, type_id: int | None = None, limit: int = 200
 ) -> list[dict]:
     """回收站里的记录（跨模型；限制条数避免超大库拖垮列表）"""
-    q = select(EntityRecord).where(EntityRecord.deleted_at.is_not(None))
+    q = select(EntityRecord).join(EntityType).where(EntityRecord.deleted_at.is_not(None))
+    if not principal.is_super:
+        allowed = [key for key in await db.scalars(select(EntityType.key)) if principal.can_model(key, "read")]
+        q = q.where(EntityType.key.in_(allowed))
     if type_id:
         q = q.where(EntityRecord.entity_type_id == type_id)
     q = q.order_by(EntityRecord.deleted_at.desc()).limit(limit)
@@ -137,10 +179,12 @@ async def list_deleted_records(
             )
         ).scalars().all()
     }
+    versions = await _managed_versions(db, records)
     out = []
     for r in records:
         et = ets.get(r.entity_type_id)
         out.append({
+            **({"version": versions[r.id]} if r.id in versions else {}),
             "id": r.id,
             "entity_type_id": r.entity_type_id,
             "entity_type_key": et.key if et else "",
@@ -153,13 +197,17 @@ async def list_deleted_records(
     return out
 
 
-async def restore_record(db: AsyncSession, record_id: int) -> dict | None:
+async def restore_record(db: AsyncSession, record_id: int, principal: Principal, *, expected_version=None) -> dict | None:
     """从回收站恢复记录；模型本身已入回收站时一并恢复模型"""
-    rec = await db.get(EntityRecord, record_id)
+    await lock_writer(db)
+    rec = await db.get(EntityRecord, record_id,populate_existing=True)
     if not rec or not rec.deleted_at:
         return None
-    rec.deleted_at = None
     et = await db.get(EntityType, rec.entity_type_id)
+    ensure_model(principal, et.key, "write")
+    await check_version(db,rec,expected_version)
+    rec.deleted_at = None
+    await track(db,rec)
     model_restored = False
     if et and et.deleted_at:
         et.deleted_at = None
@@ -170,11 +218,17 @@ async def restore_record(db: AsyncSession, record_id: int) -> dict | None:
     return {"record_id": rec.id, "model_restored": model_restored}
 
 
-async def purge_record(db: AsyncSession, record_id: int) -> bool:
+async def purge_record(db: AsyncSession, record_id: int, principal: Principal) -> bool:
     """彻底删除单条记录（物理删除，不可恢复）"""
-    rec = await db.get(EntityRecord, record_id)
+    await lock_writer(db)
+    rec = await db.get(EntityRecord, record_id,populate_existing=True)
     if not rec or not rec.deleted_at:
         return False
+    et = await db.get(EntityType, rec.entity_type_id)
+    ensure_model(principal, et.key, "write")
+    if await db.get(ObjectBinding,rec.id):
+        from fastapi import HTTPException
+        raise HTTPException(409,"本体对象保留删除历史，可从回收站恢复")
     await db.delete(rec)
     await db.commit()
     return True
@@ -197,10 +251,16 @@ def coerce_field_value(field: "FieldDefinition", raw: str):
         try:
             f = float(v)
             return int(f) if f == int(f) else f
-        except ValueError:
+        except (ValueError, OverflowError):
             return raw          # 保留原值，让校验层报「不是数字」
     if field.type == "boolean":
-        return v.lower() in ("1", "true", "是", "y", "yes")
+        if v.lower() in ("1", "true", "是", "y", "yes"):
+            return True
+        if v.lower() in ("0","false","否","n","no"):
+            return False
+        return raw
+    if field.type == "reference" and v.isdecimal():
+        return int(v)
     if field.type == "multiselect":
         return [s.strip() for s in v.split(",") if s.strip()] if v else []
     return v
@@ -257,72 +317,54 @@ async def import_records(
     """CSV / JSON 批量导入
 
     CSV 列头必须用字段 key（导出文件天然满足）。
-    逐行校验：未知列忽略并在 warnings 里点名；必填缺失/类型不合法记入 errors，
+    逐行校验，未知业务字段、必填缺失或类型错误记入 errors，
     合法行照常入库——一次导入能救多少救多少，错误行号留给用户改。
     """
     import csv, io, json as _json
 
-    et = await db.get(EntityType, type_id)
+    await lock_writer(db)
+    et = await db.get(EntityType, type_id, populate_existing=True)
     if not et or et.deleted_at:
         return {"error": "数据模型不存在或已在回收站"}
     fields = await _fields_of(db, type_id)
     by_key = {f.key: f for f in fields}
-
-    rows: list[dict] = []
-    warnings: list[str] = []
     if fmt == "json":
         try:
-            arr = _json.loads(content)
-            if isinstance(arr, dict):
-                arr = arr.get("items") or arr.get("records") or []
-            rows = [r if isinstance(r, dict) else {} for r in arr]
-        except _json.JSONDecodeError as e:
-            return {"error": f"JSON 解析失败：{e}"}
+            rows = _json.loads(content)
+        except ValueError as error:
+            return {"error": f"JSON 解析失败：{error}"}
+        if isinstance(rows, dict):
+            rows = rows.get("items", rows.get("records"))
+        if not isinstance(rows, list):
+            return {"error": "JSON 记录必须是数组"}
     else:
-        # UTF-8 BOM（Excel 导出的常见形态）顺手剥掉
-        if content.startswith("\ufeff"):
-            content = content[1:]
         try:
-            reader = csv.DictReader(io.StringIO(content))
-            header = reader.fieldnames or []
-            unknown = [h for h in header if h and h.strip() not in by_key]
-            if unknown:
-                warnings.append(f"忽略未识别的列：{ '、'.join(unknown) }")
-            for i, row in enumerate(reader, start=2):   # 第 1 行是列头
-                rows.append({(k or "").strip(): v for k, v in row.items()})
-                rows[-1]["__row__"] = i
-        except csv.Error as e:
-            return {"error": f"CSV 解析失败：{e}"}
+            reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")), strict=True)
+            rows = list(reader)
+        except csv.Error as error:
+            return {"error": f"CSV 第 {reader.reader.line_num} 行解析失败：{error}"}
 
-    created, errors = 0, []
-    for row in rows:
-        line_no = row.pop("__row__", None)
-        data: dict = {}
-        row_errors: list[str] = []
-        for f in fields:
-            raw = row.get(f.key)
-            if raw is None or (isinstance(raw, str) and raw.strip() == ""):
-                if f.required:
-                    row_errors.append(f"必填字段「{f.name}」缺失")
-                continue
-            if isinstance(raw, str):
-                val = coerce_field_value(f, raw)
-                if f.type == "number" and isinstance(val, str):
-                    row_errors.append(f"字段「{f.name}」应为数字，得到「{raw}」")
-                    continue
-                data[f.key] = val
-            else:
-                data[f.key] = raw          # JSON 导入直接给结构化值
-        if row_errors:
-            where = f"第 {line_no} 行" if line_no else "某行"
-            errors.append({"row": line_no, "reason": "；".join(row_errors)})
-            continue
-        rec = EntityRecord(entity_type_id=type_id, data=data,
-                           search_text=build_search_text(fields, data))
-        db.add(rec)
-        created += 1
-    if created:
-        await db.commit()
+    created, errors, warnings = 0, [], []
+    for line, row in enumerate(rows, 1 if fmt == "json" else 2):
+        try:
+            if not isinstance(row, dict):
+                raise ValueError("记录必须是对象")
+            data = dict(row)
+            if fmt != "json":
+                data = {(k or "").strip(): coerce_field_value(by_key[k], v)
+                        if k in by_key and isinstance(v,str) else v for k,v in row.items()}
+            await ensure_group_exists(db, data)
+            if et.key != "note":
+                await validate_record(db, fields, data)
+            rec = EntityRecord(entity_type_id=type_id, data=data,
+                               search_text=build_search_text(fields, data))
+            db.add(rec)
+            await db.flush()
+            await track(db, rec)
+            created += 1
+        except ValueError as error:
+            errors.append({"row": line, "reason": str(error)})
+    await db.commit()
 
     return {
         "created": created,
@@ -337,7 +379,9 @@ async def get_record(db: AsyncSession, record_id: int) -> dict | None:
     if not rec or rec.deleted_at:
         return None
     et = await db.get(EntityType, rec.entity_type_id)
+    binding = await db.get(ObjectBinding,rec.id)
     return {
+        **({"version":binding.version,"revision_id":binding.revision_id} if binding else {}),
         "id": rec.id,
         "entity_type_id": rec.entity_type_id,
         "entity_type_key": et.key if et else "",
@@ -442,9 +486,11 @@ async def list_records(
     records = result.scalars().all()
 
     et = await db.get(EntityType, type_id)
+    versions = await _managed_versions(db, records)
     items = []
     for r in records:
         items.append({
+            **({"version": versions[r.id]} if r.id in versions else {}),
             "id": r.id,
             "entity_type_id": r.entity_type_id,
             "entity_type_key": et.key if et else "",
